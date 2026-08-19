@@ -20,8 +20,8 @@ the next one starts from, so you can stop after any of them.
 | AW #2 only | Setup → FW #2 pre-built, then AW #2 | 2 hours | Audiences who only care about O11y |
 
 For anything short of the complete series, **pre-build the environment to the starting
-state** using the fast-forward scripts below. Nobody enjoys watching Maven download the
-internet.
+state** — see [Fast-forwarding](#fast-forwarding-to-a-later-module). Nobody enjoys watching
+Maven download the internet.
 
 ---
 
@@ -81,16 +81,36 @@ sudo -i -u splunk
 
 ### Fast-forwarding to a later module
 
-To start a group at FW #2 or later, run the preceding modules unattended:
+To start a group at FW #2 or later, walk the preceding modules once on a single instance,
+confirm the state, then **snapshot it as an AMI** and build the rest of the fleet from that.
+That's far more reliable than automating a replay, and it means every participant starts
+from a state you have personally verified.
 
 ```bash
+# On the template instance, as the splunk user
 export WS_USER=<participant>
-./scripts/verify-fw1.sh || echo "FW1 state not present"
+source ~/.workshop-env
+
+./scripts/verify-setup.sh     # host ready
+./scripts/verify-fw1.sh       # FW1 complete  -> snapshot here to start at FW2
+./scripts/verify-fw2.sh       # FW2 complete  -> snapshot here to start at AW1
 ```
 
-The [original task scripts](https://github.com/gdcosta/k8s-otel-workshop) automate each
-module end to end. Run them as the `splunk` user, then use the `verify-*.sh` scripts to
-confirm the starting state rather than assuming it.
+!!! tip "Snapshot at a verified checkpoint, not a hopeful one"
+    Take the AMI only after the relevant `verify-*.sh` exits 0. A snapshot of a
+    half-configured host reproduces the half-configuration perfectly, for everyone.
+
+!!! warning "Two things to reset in a cloned instance"
+    Each clone gets a new hostname and IP, so on first boot:
+
+    ```bash
+    source ~/.workshop-env       # LOCAL_IP and PUB_DNS re-derive from instance metadata
+    sed -i "s/^export WS_USER=.*/export WS_USER=<participant>/" ~/.workshop-env
+    ```
+
+    If you snapshotted after AW #2's Log Observer Connect setup, the TLS certificate carries
+    the **template's** hostname and will not match the clone. Regenerate it per instance,
+    or snapshot before that step.
 
 ---
 
