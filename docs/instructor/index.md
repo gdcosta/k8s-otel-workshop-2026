@@ -63,7 +63,7 @@ Outbound: all.
 ### Building instances
 
 ```bash
-git clone https://github.com/gdcosta/k8s-otel-workshop.git ~/k8s-otel-workshop
+git clone https://github.com/gdcosta/k8s-otel-workshop-2026.git ~/k8s-otel-workshop
 cd ~/k8s-otel-workshop
 ./scripts/bootstrap.sh
 ```

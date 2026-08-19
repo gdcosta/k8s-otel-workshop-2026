@@ -299,7 +299,7 @@ mkdir -p ~/k8s_workshop/petclinic/k8s_deploy
 cd ~/k8s_workshop/petclinic/k8s_deploy
 
 curl -fsSL -o petclinic.yml.tmpl \
-  https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop/main/labs/manifests/petclinic.yml
+  https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/manifests/petclinic.yml
 
 WS_USER=$WS_USER envsubst < petclinic.yml.tmpl > ${WS_USER}-petclinic-k8s-manifest.yml
 cat ${WS_USER}-petclinic-k8s-manifest.yml

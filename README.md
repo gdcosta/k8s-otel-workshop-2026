@@ -4,7 +4,7 @@ A four-part, hands-on workshop: containerise a Java application, deploy it to
 Kubernetes, and observe it with OpenTelemetry into Splunk Enterprise and Splunk
 Observability Cloud.
 
-**📖 Read it as a website:** <https://gdcosta.github.io/k8s-otel-workshop/>
+**📖 Read it as a website:** <https://gdcosta.github.io/k8s-otel-workshop-2026/>
 (or browse the Markdown in [`docs/`](docs/) — it renders fine on GitHub too)
 
 ## The modules

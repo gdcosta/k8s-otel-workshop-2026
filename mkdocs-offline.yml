@@ -1,8 +1,8 @@
 site_name: Splunk Kubernetes & OpenTelemetry Workshop
 site_description: Build, containerise, deploy and observe a Java application on Kubernetes with Splunk and OpenTelemetry.
 site_url: ""
-repo_url: https://github.com/gdcosta/k8s-otel-workshop
-repo_name: gdcosta/k8s-otel-workshop
+repo_url: https://github.com/gdcosta/k8s-otel-workshop-2026
+repo_name: gdcosta/k8s-otel-workshop-2026
 edit_uri: edit/main/docs/
 
 theme:

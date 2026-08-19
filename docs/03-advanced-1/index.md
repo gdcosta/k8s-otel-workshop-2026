@@ -902,7 +902,7 @@ steps. They're the exact files this module was tested with.
 !!! tip "Diff instead of re-reading"
     ```bash
     curl -fsSL -o /tmp/reference.yaml \
-      https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop/main/labs/collector/values-final.yaml
+      https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/collector/values-final.yaml
     diff <(sed 's/[[:space:]]*$//' ~/k8s_workshop/k8s_otel/values-workshop.yaml) \
          <(sed 's/[[:space:]]*$//' /tmp/reference.yaml)
     ```

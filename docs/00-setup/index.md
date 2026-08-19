@@ -57,13 +57,13 @@ in AW #2 — Splunk Observability Cloud.
 ## Automated setup
 
 ```bash
-git clone https://github.com/gdcosta/k8s-otel-workshop.git ~/k8s-otel-workshop
+git clone https://github.com/gdcosta/k8s-otel-workshop-2026.git ~/k8s-otel-workshop
 cd ~/k8s-otel-workshop
 ./scripts/bootstrap.sh
 ```
 
 It's idempotent — safe to re-run if something fails partway. It reads every version from
-[`versions.env`](https://github.com/gdcosta/k8s-otel-workshop/blob/main/versions.env), so
+[`versions.env`](https://github.com/gdcosta/k8s-otel-workshop-2026/blob/main/versions.env), so
 that file is the single place to change a pin.
 
 When it finishes, jump to [Verify the host](#verify-the-host).

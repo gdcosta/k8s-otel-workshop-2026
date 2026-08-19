@@ -823,7 +823,7 @@ sudo ~/playwright-venv/bin/playwright install-deps chromium   # needs root
 
 ```bash
 cd ~/k8s_workshop
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop/main/labs/rum/petclinic_browser_test.py
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/rum/petclinic_browser_test.py
 ~/playwright-venv/bin/python petclinic_browser_test.py \
   --url http://minikube:30000 --iterations 6
 ```
@@ -1154,7 +1154,7 @@ steps. They're the exact files this module was tested with.
 !!! tip "Diff instead of re-reading"
     ```bash
     curl -fsSL -o /tmp/reference.yaml \
-      https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop/main/labs/collector/values-final.yaml
+      https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/collector/values-final.yaml
     diff <(sed 's/[[:space:]]*$//' ~/k8s_workshop/k8s_otel/values-workshop.yaml) \
          <(sed 's/[[:space:]]*$//' /tmp/reference.yaml)
     ```

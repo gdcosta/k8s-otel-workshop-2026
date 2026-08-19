@@ -356,8 +356,8 @@ rm apache-jmeter-5.6.3.tgz
 ### Get the test plan
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop/main/labs/jmeter/petclinic_test_plan.jmx
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop/main/labs/jmeter/petclinic_owner_pets.csv
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/jmeter/petclinic_test_plan.jmx
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/jmeter/petclinic_owner_pets.csv
 ls -l
 ```
 
@@ -1184,7 +1184,7 @@ steps. They're the exact files this module was tested with.
 !!! tip "Diff instead of re-reading"
     ```bash
     curl -fsSL -o /tmp/reference.yaml \
-      https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop/main/labs/collector/values-final.yaml
+      https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/collector/values-final.yaml
     diff <(sed 's/[[:space:]]*$//' ~/k8s_workshop/k8s_otel/values-workshop.yaml) \
          <(sed 's/[[:space:]]*$//' /tmp/reference.yaml)
     ```
