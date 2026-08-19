@@ -1,0 +1,16 @@
+# gitleaks configuration for the workshop repo.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documentation placeholders and deliberately fake values"
+regexes = [
+  '''<YOUR_[A-Z_]+>''',                                   # doc placeholders
+  '''\$\{[A-Z_]+\}''',                                    # envsubst placeholders
+  '''00000000-0000-0000-0000-000000000000''',             # canary dummy token
+  '''xxxxxxxx-xxxx-xxxx-xxxx-[0-9a-f]{12}''',             # redacted examples
+  '''CHANGE_ME''',
+]
+paths = [
+  '''docs/assets/img/.*''',        # screenshots are reviewed by eye, not regex
+]

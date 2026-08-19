@@ -1,0 +1,59 @@
+site_name: Splunk Kubernetes & OpenTelemetry Workshop
+site_description: Build, containerise, deploy and observe a Java application on Kubernetes with Splunk and OpenTelemetry.
+site_url: https://gdcosta.github.io/k8s-otel-workshop/
+repo_url: https://github.com/gdcosta/k8s-otel-workshop
+repo_name: gdcosta/k8s-otel-workshop
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - content.code.copy        # the copy button that makes the {r} hack obsolete
+    - content.code.annotate
+    - content.action.edit
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - toc.follow
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: teal
+      toggle: { icon: material/weather-night, name: Switch to dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: teal
+      toggle: { icon: material/weather-sunny, name: Switch to light mode }
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details            # ??? collapsible blocks
+  - pymdownx.superfences
+  - pymdownx.tabbed: { alternate_style: true }
+  - pymdownx.highlight: { anchor_linenums: true }
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - attr_list
+  - md_in_html
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.tasklist: { custom_checkbox: true }
+
+nav:
+  - Home: index.md
+  - Concepts:
+      - Containers & Kubernetes: concepts/containers-and-k8s.md
+      - Why observability: concepts/observability.md
+      - The OTel Collector & Helm: concepts/otel-collector.md
+  - 'Host setup': 00-setup/index.md
+  - 'FW #1 — Containers & Kubernetes': 01-foundational-1/index.md
+  - 'FW #2 — Log collection': 02-foundational-2/index.md
+  - 'AW #1 — Metrics & traces': 03-advanced-1/index.md
+  - 'AW #2 — Observability Cloud': 04-advanced-2/index.md
+  - Troubleshooting: troubleshooting.md
+  - 'Instructor guide': instructor/index.md

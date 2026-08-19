@@ -1,0 +1,23 @@
+# Build output
+site/
+site-offline/
+docs-standalone/
+.build-tmp/
+.venv/
+
+# Secrets — never commit
+*.pem
+*.key
+*-token
+*token.txt
+*password*.txt
+.env
+values-*.local.yaml
+splunk-admin-password.txt
+
+# Rendered lab files (they contain real tokens/IPs after envsubst)
+labs/**/my-*.yaml
+labs/**/*.rendered.yaml
+
+# OS
+.DS_Store

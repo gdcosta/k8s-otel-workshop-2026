@@ -1,0 +1,95 @@
+# PetClinic Deployment + NodePort Service — final workshop state.
+# TESTED 2026-08-19. Render with: WS_USER=<you> envsubst < petclinic-final.yml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${WS_USER}-petclinic-srv
+spec:
+  type: NodePort
+  selector:
+    app: ${WS_USER}-petclinic-otel-app
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+    nodePort: 30000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${WS_USER}-petclinic-otel-deployment
+  labels:
+    app: ${WS_USER}-petclinic-otel-app
+spec:
+  selector:
+    matchLabels:
+      app: ${WS_USER}-petclinic-otel-app
+  template:
+    metadata:
+      labels:
+        app: ${WS_USER}-petclinic-otel-app
+      annotations:
+        docker_image_author: "gerry"
+        splunk.com/index: "k8s_ws_petclinic_logs"
+    spec:
+      containers:
+      - name: ${WS_USER}-petclinic-otel-container01
+        image: gerry/petclinic-otel:v1
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8080
+        env:
+        # --- AW1: where to send telemetry -------------------------------------
+        # The collector agent is a DaemonSet, so the right target is whichever
+        # node this pod landed on. A pod cannot resolve the `minikube` hosts
+        # entry — that exists only on the host.
+        - name: SPLUNK_OTEL_AGENT
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: "http://$(SPLUNK_OTEL_AGENT):4317"
+
+        # --- AW2: AlwaysOn Profiling ------------------------------------------
+        - name: SPLUNK_PROFILER_ENABLED
+          value: "true"
+        - name: SPLUNK_PROFILER_MEMORY_ENABLED
+          value: "true"
+        # Defaults to http/protobuf on :4318, but our endpoint above is gRPC on
+        # :4317. Mismatched, the profiler starts and sends nothing, with no error.
+        - name: SPLUNK_PROFILER_OTLP_PROTOCOL
+          value: "grpc"
+
+        # --- AW2: trace context in the log line --------------------------------
+        # The agent already puts trace_id/span_id in the MDC; Spring Boot's
+        # default pattern just never prints them. Without this there is no
+        # trace_id on the logs and APM <-> Logs correlation cannot work.
+        - name: LOGGING_PATTERN_LEVEL
+          value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
+
+        # --- FW2: access logging -----------------------------------------------
+        # PetClinic logs nothing for successful requests — only startup and
+        # exceptions. One line per request is what makes the log exercises work.
+        # directory=/dev + prefix=stdout + empty suffix resolves to /dev/stdout.
+        - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
+          value: "true"
+        - name: SERVER_TOMCAT_ACCESSLOG_DIRECTORY
+          value: "/dev"
+        - name: SERVER_TOMCAT_ACCESSLOG_PREFIX
+          value: "stdout"
+        - name: SERVER_TOMCAT_ACCESSLOG_SUFFIX
+          value: ""
+        - name: SERVER_TOMCAT_ACCESSLOG_FILE_DATE_FORMAT
+          value: ""
+        - name: SERVER_TOMCAT_ACCESSLOG_BUFFERED
+          value: "false"
+        # Single quotes: the pattern contains double quotes.
+        - name: SERVER_TOMCAT_ACCESSLOG_PATTERN
+          value: '%h %l %u %t "%r" %s %b %D'
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 30

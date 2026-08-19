@@ -1,0 +1,1348 @@
+# Image inventory. Every image carries a status until resolved.
+#   diagram    — concept art. Durable; carry over unless the concept changed.
+#   screenshot — product UI. Needs re-capture against current versions.
+#   icon       — small inline glyph. Usually reusable as-is.
+# status: review | stale | obsolete | verified
+
+
+00-setup:
+  image1.png:
+    kind: diagram
+    status: review
+    bytes: 62628
+    section: "How are these workshops structured?"
+  image2.png:
+    kind: diagram
+    status: review
+    bytes: 32845
+    section: "Monolithic vs. Microservices Application Development:"
+  image3.png:
+    kind: screenshot
+    status: stale
+    bytes: 157559
+    section: "Before you do anything else…."
+  image4.png:
+    kind: screenshot
+    status: stale
+    bytes: 75716
+    section: "Before you do anything else…."
+  image5.png:
+    kind: screenshot
+    status: stale
+    bytes: 76186
+    section: "Before you do anything else…."
+  image6.png:
+    kind: screenshot
+    status: stale
+    bytes: 31399
+    section: "Before you do anything else…."
+  image7.png:
+    kind: icon
+    status: review
+    bytes: 4459
+    section: "Before you do anything else…."
+  image8.png:
+    kind: screenshot
+    status: stale
+    bytes: 19717
+    section: "Before you do anything else…."
+  image9.png:
+    kind: screenshot
+    status: stale
+    bytes: 174132
+    section: "Before you do anything else…."
+  image10.png:
+    kind: screenshot
+    status: stale
+    bytes: 646596
+    section: "Before you do anything else…."
+  image11.png:
+    kind: icon
+    status: review
+    bytes: 9567
+    section: "Before you do anything else…."
+  image13.png:
+    kind: screenshot
+    status: stale
+    bytes: 231037
+    section: "The Link Analysis App for Splunk"
+  image14.png:
+    kind: screenshot
+    status: stale
+    bytes: 26689
+    section: "The Link Analysis App for Splunk"
+  image15.png:
+    kind: screenshot
+    status: stale
+    bytes: 132839
+    section: "The Event Timeline Visualization App"
+
+01-fw1:
+  image1.png:
+    kind: diagram
+    status: review
+    bytes: 98474
+    section: "Workshop Architecture:"
+  image2.png:
+    kind: diagram
+    status: review
+    bytes: 62628
+    section: "How are these workshops structured?"
+  image3.png:
+    kind: diagram
+    status: review
+    bytes: 32845
+    section: "Monolithic vs. Microservices Application Development:"
+  image4.png:
+    kind: screenshot
+    status: stale
+    bytes: 646596
+    section: "Before you do anything else…."
+  image5.png:
+    kind: icon
+    status: review
+    bytes: 9567
+    section: "Before you do anything else…."
+  image7.png:
+    kind: screenshot
+    status: stale
+    bytes: 20972
+    section: "Turn on API Audit log collection"
+  image8.png:
+    kind: screenshot
+    status: stale
+    bytes: 78049
+    section: "Turn on API Audit log collection"
+  image9.png:
+    kind: screenshot
+    status: stale
+    bytes: 113287
+    section: "Test run your newly built PetClinic application"
+  image12.png:
+    kind: screenshot
+    status: stale
+    bytes: 243176
+    section: "Deploy your PetClinic app in Kubernetes"
+  image13.png:
+    kind: screenshot
+    status: stale
+    bytes: 117892
+    section: "Test connectivity using an external web browser to your PetClini"
+
+02-fw2:
+  image1.png:
+    kind: diagram
+    status: review
+    bytes: 144430
+    section: "Workshop Architecture:"
+  image2.png:
+    kind: diagram
+    status: review
+    bytes: 62628
+    section: "How are these workshops structured?"
+  image3.png:
+    kind: screenshot
+    status: stale
+    bytes: 91344
+    section: "Review of Foundational Workshop #1"
+  image4.png:
+    kind: diagram
+    status: review
+    bytes: 32845
+    section: "Monolithic vs. Microservices Application Development:"
+  image5.png:
+    kind: diagram
+    status: review
+    bytes: 29375
+    section: "Enter OpenTelementry and the Otel Collector"
+  image6.png:
+    kind: diagram
+    status: review
+    bytes: 32233
+    section: "Enter OpenTelementry and the Otel Collector"
+  image7.png:
+    kind: diagram
+    status: review
+    bytes: 7305
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image8.png:
+    kind: diagram
+    status: review
+    bytes: 3998
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image9.png:
+    kind: diagram
+    status: review
+    bytes: 7533
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image10.png:
+    kind: diagram
+    status: review
+    bytes: 95835
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image11.png:
+    kind: diagram
+    status: obsolete
+    bytes: 24707
+    section: "Migration from SC4K to Splunk OpenTelemetry Collector for Kubern"
+  image12.png:
+    kind: diagram
+    status: review
+    bytes: 48589
+    section: "Supported Kubernetes Distributions"
+  image13.png:
+    kind: screenshot
+    status: stale
+    bytes: 646596
+    section: "Before you do anything else…."
+  image14.png:
+    kind: icon
+    status: review
+    bytes: 9567
+    section: "Before you do anything else…."
+  image16.png:
+    kind: screenshot
+    status: stale
+    bytes: 638514
+    section: "Test Connectivity to your new Splunk Enterprise Environment"
+  image17.png:
+    kind: screenshot
+    status: stale
+    bytes: 123685
+    section: "Test Connectivity to your new Splunk Enterprise Environment"
+  image18.png:
+    kind: screenshot
+    status: stale
+    bytes: 98855
+    section: "Test Connectivity to your new Splunk Enterprise Environment"
+  image19.png:
+    kind: screenshot
+    status: stale
+    bytes: 37689
+    section: "Create a new App in Splunk Enterprise / Cloud"
+  image20.png:
+    kind: screenshot
+    status: stale
+    bytes: 61147
+    section: "Create a new App in Splunk Enterprise / Cloud"
+  image21.png:
+    kind: screenshot
+    status: stale
+    bytes: 46291
+    section: "Create a new App in Splunk Enterprise / Cloud"
+  image22.png:
+    kind: screenshot
+    status: stale
+    bytes: 87446
+    section: "Create Event Indexes"
+  image23.png:
+    kind: screenshot
+    status: stale
+    bytes: 38148
+    section: "Create Event Indexes"
+  image24.png:
+    kind: screenshot
+    status: stale
+    bytes: 135404
+    section: "Create Event Indexes"
+  image25.png:
+    kind: screenshot
+    status: stale
+    bytes: 54630
+    section: "Create Event Indexes"
+  image26.png:
+    kind: icon
+    status: review
+    bytes: 6977
+    section: "Create Event Indexes"
+  image27.png:
+    kind: icon
+    status: review
+    bytes: 9243
+    section: "Create a new Splunk HTTP Event Collector (HEC)"
+  image28.png:
+    kind: screenshot
+    status: stale
+    bytes: 24007
+    section: "Create a new Splunk HTTP Event Collector (HEC)"
+  image29.png:
+    kind: screenshot
+    status: stale
+    bytes: 70735
+    section: "Create a new Splunk HTTP Event Collector (HEC)"
+  image30.png:
+    kind: screenshot
+    status: stale
+    bytes: 22933
+    section: "Create a new Splunk HTTP Event Collector (HEC)"
+  image31.png:
+    kind: screenshot
+    status: stale
+    bytes: 74326
+    section: "Test your Splunk Endpoint"
+  image33.png:
+    kind: screenshot
+    status: stale
+    bytes: 116211
+    section: "Install and Run the Otel Collector"
+  image34.png:
+    kind: screenshot
+    status: stale
+    bytes: 113394
+    section: "View the Kubernetes Audit Log"
+  image35.png:
+    kind: screenshot
+    status: stale
+    bytes: 87844
+    section: "View the Kubernetes Audit Log"
+  image36.png:
+    kind: screenshot
+    status: stale
+    bytes: 150289
+    section: "View logs generated by the PetClinic application"
+  image37.png:
+    kind: screenshot
+    status: stale
+    bytes: 117892
+    section: "Generate an error in the PetClinic app and view the error log in"
+  image38.png:
+    kind: icon
+    status: review
+    bytes: 10298
+    section: "Generate an error in the PetClinic app and view the error log in"
+  image39.png:
+    kind: screenshot
+    status: stale
+    bytes: 139851
+    section: "Generate an error in the PetClinic app and view the error log in"
+  image42.png:
+    kind: screenshot
+    status: stale
+    bytes: 65113
+    section: "Option #2: Use a text editor to create/modify our file."
+  image43.png:
+    kind: screenshot
+    status: stale
+    bytes: 139929
+    section: "Run a load test of the PetClinic app"
+  image44.png:
+    kind: screenshot
+    status: stale
+    bytes: 78867
+    section: "View the new annotation in Splunk Enterprise / Cloud"
+  image45.png:
+    kind: screenshot
+    status: stale
+    bytes: 89369
+    section: "View the new annotation in Splunk Enterprise / Cloud"
+  image46.png:
+    kind: icon
+    status: review
+    bytes: 13114
+    section: "Use Annotations to redirect PetClinic App logs to its own index"
+  image47.png:
+    kind: screenshot
+    status: stale
+    bytes: 139236
+    section: "Use Annotations to redirect PetClinic App logs to its own index"
+  image48.png:
+    kind: screenshot
+    status: stale
+    bytes: 154900
+    section: "Option #2: Use a text editor to create/modify our file."
+  image50.png:
+    kind: screenshot
+    status: stale
+    bytes: 156929
+    section: "A configuration explanation:"
+  image51.png:
+    kind: screenshot
+    status: stale
+    bytes: 112968
+    section: "View the new event transformation in Splunk Enterprise / Cloud"
+  image52.png:
+    kind: screenshot
+    status: stale
+    bytes: 121936
+    section: "View the new event transformation in Splunk Enterprise / Cloud"
+
+03-aw1:
+  image1.png:
+    kind: diagram
+    status: review
+    bytes: 151410
+    section: "Workshop Architecture:"
+  image2.png:
+    kind: diagram
+    status: review
+    bytes: 62628
+    section: "How are these workshops structured?"
+  image3.png:
+    kind: screenshot
+    status: stale
+    bytes: 118866
+    section: "Review of Foundational Workshop #2"
+  image4.png:
+    kind: diagram
+    status: review
+    bytes: 32845
+    section: "Monolithic vs. Microservices Application Development:"
+  image5.png:
+    kind: diagram
+    status: review
+    bytes: 29375
+    section: "Enter OpenTelementry and the Otel Collector"
+  image6.png:
+    kind: diagram
+    status: review
+    bytes: 32233
+    section: "Enter OpenTelementry and the Otel Collector"
+  image7.png:
+    kind: diagram
+    status: review
+    bytes: 7305
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image8.png:
+    kind: diagram
+    status: review
+    bytes: 3998
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image9.png:
+    kind: diagram
+    status: review
+    bytes: 7533
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image10.png:
+    kind: diagram
+    status: review
+    bytes: 95835
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image11.png:
+    kind: diagram
+    status: obsolete
+    bytes: 24707
+    section: "Migration from SC4K to Splunk OpenTelemetry Collector for Kubern"
+  image12.png:
+    kind: diagram
+    status: review
+    bytes: 48589
+    section: "Supported Kubernetes Distributions"
+  image13.png:
+    kind: screenshot
+    status: stale
+    bytes: 646596
+    section: "Before you do anything else…."
+  image14.png:
+    kind: icon
+    status: review
+    bytes: 9567
+    section: "Before you do anything else…."
+  image15.png:
+    kind: screenshot
+    status: stale
+    bytes: 135398
+    section: "Create Trace Event Index"
+  image16.png:
+    kind: screenshot
+    status: stale
+    bytes: 54713
+    section: "Create Trace Event Index"
+  image17.png:
+    kind: screenshot
+    status: stale
+    bytes: 70538
+    section: "Create Metric Indexes"
+  image18.png:
+    kind: screenshot
+    status: stale
+    bytes: 48710
+    section: "Create Metric Indexes"
+  image19.png:
+    kind: screenshot
+    status: stale
+    bytes: 98481
+    section: "Create Metric Indexes"
+  image20.png:
+    kind: screenshot
+    status: stale
+    bytes: 78214
+    section: "Create Metric Indexes"
+  image21.png:
+    kind: screenshot
+    status: stale
+    bytes: 15350
+    section: "Create Metric Indexes"
+  image23.png:
+    kind: screenshot
+    status: stale
+    bytes: 25804
+    section: "Add new indexes into the “Allowed Indexes” for the HTTP Event Co"
+  image24.png:
+    kind: screenshot
+    status: stale
+    bytes: 50282
+    section: "Add new indexes into the “Allowed Indexes” for the HTTP Event Co"
+  image25.png:
+    kind: screenshot
+    status: stale
+    bytes: 20972
+    section: "AW#1 - Configure Metrics Collection using the Otel Collector"
+  image26.png:
+    kind: screenshot
+    status: stale
+    bytes: 60744
+    section: "AW#1 - Configure Metrics Collection using the Otel Collector"
+  image29.png:
+    kind: screenshot
+    status: stale
+    bytes: 84329
+    section: "Metrics: Collect Kubernetes and Otel Agent Metrics"
+  image30.png:
+    kind: screenshot
+    status: stale
+    bytes: 70533
+    section: "Metrics: Collect JVM Metrics via Auto Instrumentation Library"
+  image31.png:
+    kind: screenshot
+    status: stale
+    bytes: 126510
+    section: "Metrics: Ensure PetClinic Application metrics route to their own"
+  image32.png:
+    kind: screenshot
+    status: stale
+    bytes: 126839
+    section: "Metrics: Ensure PetClinic Application metrics route to their own"
+  image33.png:
+    kind: screenshot
+    status: stale
+    bytes: 50363
+    section: "Splunk Web GUI Install - Install your new Splunk App"
+  image34.png:
+    kind: icon
+    status: review
+    bytes: 8583
+    section: "Splunk Web GUI Install - Install your new Splunk App"
+  image35.png:
+    kind: screenshot
+    status: stale
+    bytes: 42593
+    section: "Splunk Web GUI Install - Install your new Splunk App"
+  image36.png:
+    kind: icon
+    status: review
+    bytes: 12652
+    section: "Splunk Web GUI Install - Install your new Splunk App"
+  image37.png:
+    kind: screenshot
+    status: stale
+    bytes: 37036
+    section: "Splunk Web GUI Install - Install your new Splunk App"
+  image38.png:
+    kind: screenshot
+    status: stale
+    bytes: 75764
+    section: "Validate app metric data has be redirected"
+  image39.png:
+    kind: screenshot
+    status: stale
+    bytes: 78748
+    section: "Validate app metric data has be redirected"
+  image40.png:
+    kind: screenshot
+    status: stale
+    bytes: 59606
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image41.png:
+    kind: screenshot
+    status: stale
+    bytes: 66619
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image42.png:
+    kind: screenshot
+    status: stale
+    bytes: 45232
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image43.png:
+    kind: screenshot
+    status: stale
+    bytes: 75831
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image44.png:
+    kind: screenshot
+    status: stale
+    bytes: 109599
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image45.png:
+    kind: screenshot
+    status: stale
+    bytes: 798100
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image46.png:
+    kind: screenshot
+    status: stale
+    bytes: 124095
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image47.png:
+    kind: screenshot
+    status: stale
+    bytes: 118657
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image48.png:
+    kind: screenshot
+    status: stale
+    bytes: 37799
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image49.png:
+    kind: screenshot
+    status: stale
+    bytes: 27002
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image50.png:
+    kind: icon
+    status: review
+    bytes: 12287
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image51.png:
+    kind: icon
+    status: review
+    bytes: 13996
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image52.png:
+    kind: screenshot
+    status: stale
+    bytes: 77334
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image53.png:
+    kind: screenshot
+    status: stale
+    bytes: 102964
+    section: "Metrics: Visualize Metrics using the Analytics Workspace"
+  image54.png:
+    kind: screenshot
+    status: stale
+    bytes: 111185
+    section: "AW#1 - Configure Application Trace Collection using the Otel Col"
+  image55.png:
+    kind: screenshot
+    status: stale
+    bytes: 117892
+    section: "Traces: Update the PetClinic app deployment"
+  image56.png:
+    kind: screenshot
+    status: stale
+    bytes: 44002
+    section: "Traces: Update the PetClinic app deployment"
+  image57.png:
+    kind: screenshot
+    status: stale
+    bytes: 132790
+    section: "Traces: Ensure PetClinic Application traces route to their own i"
+  image58.png:
+    kind: screenshot
+    status: stale
+    bytes: 134919
+    section: "Traces: Ensure PetClinic Application traces route to their own i"
+  image59.png:
+    kind: screenshot
+    status: stale
+    bytes: 179477
+    section: "Validate app trace data has be redirected"
+  image60.png:
+    kind: screenshot
+    status: stale
+    bytes: 65297
+    section: "Traces: Download a custom trace dashboard"
+  image61.png:
+    kind: screenshot
+    status: stale
+    bytes: 65969
+    section: "Traces: Download a custom trace dashboard"
+  image62.png:
+    kind: screenshot
+    status: stale
+    bytes: 81354
+    section: "Traces: Download a custom trace dashboard"
+  image63.png:
+    kind: screenshot
+    status: stale
+    bytes: 29254
+    section: "Traces: Download a custom trace dashboard"
+  image64.png:
+    kind: screenshot
+    status: stale
+    bytes: 33136
+    section: "Traces: Download a custom trace dashboard"
+  image65.png:
+    kind: screenshot
+    status: stale
+    bytes: 144086
+    section: "Traces: Download a custom trace dashboard"
+  image66.png:
+    kind: screenshot
+    status: stale
+    bytes: 52388
+    section: "Traces: Download a custom trace dashboard"
+  image67.png:
+    kind: screenshot
+    status: stale
+    bytes: 80337
+    section: "Traces: Download a custom trace dashboard"
+  image68.png:
+    kind: screenshot
+    status: stale
+    bytes: 94461
+    section: "Traces: Download a custom trace dashboard"
+  image69.png:
+    kind: screenshot
+    status: stale
+    bytes: 73471
+    section: "Traces: Download a custom trace dashboard"
+  image70.png:
+    kind: screenshot
+    status: stale
+    bytes: 542137
+    section: "APPENDIX E: Auto Instrumentation using the Splunk Otel Collector"
+
+04-aw2:
+  image1.png:
+    kind: diagram
+    status: review
+    bytes: 147242
+    section: "Workshop Architecture:"
+  image2.png:
+    kind: diagram
+    status: review
+    bytes: 62628
+    section: "How are these workshops structured?"
+  image3.png:
+    kind: screenshot
+    status: stale
+    bytes: 118866
+    section: "Review of Foundational Workshop #2"
+  image4.png:
+    kind: diagram
+    status: review
+    bytes: 32845
+    section: "Monolithic vs. Microservices Application Development:"
+  image5.png:
+    kind: diagram
+    status: review
+    bytes: 29375
+    section: "Enter OpenTelementry and the Otel Collector"
+  image6.png:
+    kind: diagram
+    status: review
+    bytes: 32233
+    section: "Enter OpenTelementry and the Otel Collector"
+  image7.png:
+    kind: diagram
+    status: review
+    bytes: 7305
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image8.png:
+    kind: diagram
+    status: review
+    bytes: 3998
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image9.png:
+    kind: diagram
+    status: review
+    bytes: 7533
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image10.png:
+    kind: diagram
+    status: review
+    bytes: 95835
+    section: "The anatomy of the OpenTelemetry Collector Configuration"
+  image11.png:
+    kind: diagram
+    status: obsolete
+    bytes: 24707
+    section: "Migration from SC4K to Splunk OpenTelemetry Collector for Kubern"
+  image12.png:
+    kind: diagram
+    status: review
+    bytes: 48589
+    section: "Supported Kubernetes Distributions"
+  image13.png:
+    kind: diagram
+    status: review
+    bytes: 60361
+    section: "What is the difference between the Splunk Data Platform & Splunk"
+  image14.png:
+    kind: diagram
+    status: review
+    bytes: 53001
+    section: "What is the difference between the Splunk Data Platform & Splunk"
+  image15.png:
+    kind: screenshot
+    status: stale
+    bytes: 646596
+    section: "Before you do anything else…."
+  image16.png:
+    kind: icon
+    status: review
+    bytes: 9567
+    section: "Before you do anything else…."
+  image17.png:
+    kind: screenshot
+    status: stale
+    bytes: 327084
+    section: "Create 14 day Free Trial - Splunk Observability Cloud"
+  image18.png:
+    kind: screenshot
+    status: stale
+    bytes: 63636
+    section: "Create 14 day Free Trial - Splunk Observability Cloud"
+  image19.png:
+    kind: screenshot
+    status: stale
+    bytes: 82379
+    section: "Create 14 day Free Trial - Splunk Observability Cloud"
+  image20.png:
+    kind: screenshot
+    status: stale
+    bytes: 237059
+    section: "Create access token"
+  image21.png:
+    kind: screenshot
+    status: stale
+    bytes: 217918
+    section: "Create access token"
+  image22.png:
+    kind: screenshot
+    status: stale
+    bytes: 226952
+    section: "Create access token"
+  image23.png:
+    kind: screenshot
+    status: stale
+    bytes: 24753
+    section: "Create access token"
+  image24.png:
+    kind: screenshot
+    status: stale
+    bytes: 21030
+    section: "Create access token"
+  image25.png:
+    kind: screenshot
+    status: stale
+    bytes: 46087
+    section: "Create access token"
+  image26.png:
+    kind: screenshot
+    status: stale
+    bytes: 47561
+    section: "Create access token"
+  image27.png:
+    kind: screenshot
+    status: stale
+    bytes: 156494
+    section: "Discover current realm"
+  image28.png:
+    kind: screenshot
+    status: stale
+    bytes: 63772
+    section: "Discover current realm"
+  image29.png:
+    kind: screenshot
+    status: stale
+    bytes: 275892
+    section: "Discover current realm"
+  image33.png:
+    kind: screenshot
+    status: stale
+    bytes: 128838
+    section: "View Infrastructure Data in Splunk Observability Cloud"
+  image34.png:
+    kind: screenshot
+    status: stale
+    bytes: 84850
+    section: "View Infrastructure Data in Splunk Observability Cloud"
+  image35.png:
+    kind: screenshot
+    status: stale
+    bytes: 20972
+    section: "Configure Application Trace & Metric Collection"
+  image36.png:
+    kind: screenshot
+    status: stale
+    bytes: 60744
+    section: "Configure Application Trace & Metric Collection"
+  image37.png:
+    kind: screenshot
+    status: stale
+    bytes: 111185
+    section: "Configure Application Trace & Metric Collection"
+  image38.png:
+    kind: screenshot
+    status: stale
+    bytes: 41827
+    section: "View Application Trace & Metric data in Splunk Observability Clo"
+  image39.png:
+    kind: screenshot
+    status: stale
+    bytes: 290226
+    section: "View Application Trace & Metric data in Splunk Observability Clo"
+  image40.png:
+    kind: icon
+    status: review
+    bytes: 5732
+    section: "View Application Trace & Metric data in Splunk Observability Clo"
+  image41.png:
+    kind: screenshot
+    status: stale
+    bytes: 139642
+    section: "View Application Trace & Metric data in Splunk Observability Clo"
+  image42.png:
+    kind: screenshot
+    status: stale
+    bytes: 43526
+    section: "View Application Trace & Metric data in Splunk Observability Clo"
+  image43.png:
+    kind: screenshot
+    status: stale
+    bytes: 203308
+    section: "View Application Trace & Metric data in Splunk Observability Clo"
+  image44.png:
+    kind: icon
+    status: review
+    bytes: 1706
+    section: "View Application Trace & Metric data in Splunk Observability Clo"
+  image45.png:
+    kind: screenshot
+    status: stale
+    bytes: 186745
+    section: "View Application Trace & Metric data in Splunk Observability Clo"
+  image46.png:
+    kind: screenshot
+    status: stale
+    bytes: 109826
+    section: "View Application Trace & Metric data in Splunk Observability Clo"
+  image47.png:
+    kind: screenshot
+    status: stale
+    bytes: 300572
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image48.png:
+    kind: screenshot
+    status: stale
+    bytes: 73734
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image49.png:
+    kind: screenshot
+    status: stale
+    bytes: 37111
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image50.png:
+    kind: screenshot
+    status: stale
+    bytes: 107756
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image51.png:
+    kind: screenshot
+    status: stale
+    bytes: 130354
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image52.png:
+    kind: icon
+    status: review
+    bytes: 2933
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image53.png:
+    kind: screenshot
+    status: stale
+    bytes: 73469
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image54.png:
+    kind: screenshot
+    status: stale
+    bytes: 277253
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image55.png:
+    kind: screenshot
+    status: stale
+    bytes: 40747
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image56.png:
+    kind: screenshot
+    status: stale
+    bytes: 24022
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image57.png:
+    kind: screenshot
+    status: stale
+    bytes: 248143
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image58.png:
+    kind: screenshot
+    status: stale
+    bytes: 33198
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image59.png:
+    kind: screenshot
+    status: stale
+    bytes: 26061
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image60.png:
+    kind: screenshot
+    status: stale
+    bytes: 24631
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image61.png:
+    kind: screenshot
+    status: stale
+    bytes: 99093
+    section: "Configure Log Observer Connect in Observability Cloud"
+  image62.png:
+    kind: screenshot
+    status: stale
+    bytes: 148260
+    section: "View the new event transformation in Splunk Enterprise / Cloud"
+  image63.png:
+    kind: screenshot
+    status: stale
+    bytes: 207370
+    section: "Correlate APM with Infrastructure metrics"
+  image64.png:
+    kind: screenshot
+    status: stale
+    bytes: 18650
+    section: "Correlate APM with Infrastructure metrics"
+  image65.png:
+    kind: screenshot
+    status: stale
+    bytes: 55342
+    section: "Correlate APM with Infrastructure metrics"
+  image66.png:
+    kind: icon
+    status: review
+    bytes: 12333
+    section: "Correlate APM with Infrastructure metrics"
+  image67.png:
+    kind: screenshot
+    status: stale
+    bytes: 17810
+    section: "Correlate APM with Infrastructure metrics"
+  image68.png:
+    kind: screenshot
+    status: stale
+    bytes: 145265
+    section: "Correlate APM with Logs in Splunk Enterprise"
+  image69.png:
+    kind: screenshot
+    status: stale
+    bytes: 144848
+    section: "Correlate APM with Logs in Splunk Enterprise"
+  image70.png:
+    kind: screenshot
+    status: stale
+    bytes: 133705
+    section: "Correlate APM with Logs in Splunk Enterprise"
+  image71.png:
+    kind: screenshot
+    status: stale
+    bytes: 17087
+    section: "Correlate APM with Logs in Splunk Enterprise"
+  image72.png:
+    kind: screenshot
+    status: stale
+    bytes: 140945
+    section: "Correlate APM with Logs in Splunk Enterprise"
+  image73.png:
+    kind: screenshot
+    status: stale
+    bytes: 252942
+    section: "View AlwaysOn Profiling data in Splunk Observability Cloud"
+  image74.png:
+    kind: screenshot
+    status: stale
+    bytes: 56341
+    section: "View AlwaysOn Profiling data in Splunk Observability Cloud"
+  image75.png:
+    kind: screenshot
+    status: stale
+    bytes: 203655
+    section: "View AlwaysOn Profiling data in Splunk Observability Cloud"
+  image76.png:
+    kind: screenshot
+    status: stale
+    bytes: 158871
+    section: "Create a new token specifically for RUM"
+  image77.png:
+    kind: screenshot
+    status: stale
+    bytes: 20790
+    section: "Create a new token specifically for RUM"
+  image78.png:
+    kind: screenshot
+    status: stale
+    bytes: 387509
+    section: "Create a new token specifically for RUM"
+  image79.png:
+    kind: screenshot
+    status: stale
+    bytes: 384290
+    section: "Create a new token specifically for RUM"
+  image80.png:
+    kind: screenshot
+    status: stale
+    bytes: 393699
+    section: "Create a new token specifically for RUM"
+  image82.png:
+    kind: screenshot
+    status: stale
+    bytes: 568235
+    section: "View RUM statistics in Splunk Observability Cloud"
+  image83.png:
+    kind: screenshot
+    status: stale
+    bytes: 363614
+    section: "View RUM statistics in Splunk Observability Cloud"
+  image84.png:
+    kind: screenshot
+    status: stale
+    bytes: 156857
+    section: "View RUM statistics in Splunk Observability Cloud"
+  image85.png:
+    kind: screenshot
+    status: stale
+    bytes: 64047
+    section: "View RUM statistics in Splunk Observability Cloud"
+  image86.png:
+    kind: screenshot
+    status: stale
+    bytes: 264251
+    section: "View RUM statistics in Splunk Observability Cloud"
+  image87.png:
+    kind: screenshot
+    status: stale
+    bytes: 43868
+    section: "View RUM statistics in Splunk Observability Cloud"
+  image88.png:
+    kind: screenshot
+    status: stale
+    bytes: 419038
+    section: "View RUM statistics in Splunk Observability Cloud"
+  image89.png:
+    kind: screenshot
+    status: stale
+    bytes: 64894
+    section: "View RUM statistics in Splunk Observability Cloud"
+  image90.png:
+    kind: screenshot
+    status: stale
+    bytes: 75630
+    section: "View RUM statistics in Splunk Observability Cloud"
+  image91.png:
+    kind: screenshot
+    status: stale
+    bytes: 142124
+    section: "View RUM statistics in Splunk Observability Cloud"
+  image92.png:
+    kind: screenshot
+    status: stale
+    bytes: 128982
+    section: "View RUM statistics in Splunk Observability Cloud"
+
+instructor:
+  image1.png:
+    kind: screenshot
+    status: stale
+    bytes: 171605
+    section: "Connect into your AWS account"
+  image2.png:
+    kind: screenshot
+    status: stale
+    bytes: 15318
+    section: "Connect into your AWS account"
+  image3.png:
+    kind: screenshot
+    status: stale
+    bytes: 26598
+    section: "Connect into your AWS account"
+  image4.png:
+    kind: screenshot
+    status: stale
+    bytes: 59012
+    section: "Connect into your AWS account"
+  image5.png:
+    kind: screenshot
+    status: stale
+    bytes: 71175
+    section: "Connect into your AWS account"
+  image6.png:
+    kind: screenshot
+    status: stale
+    bytes: 131424
+    section: "Connect into your AWS account"
+  image7.png:
+    kind: screenshot
+    status: stale
+    bytes: 59930
+    section: "Request access to the AMI Image"
+  image8.png:
+    kind: screenshot
+    status: stale
+    bytes: 24003
+    section: "Request access to the AMI Image"
+  image9.png:
+    kind: screenshot
+    status: stale
+    bytes: 32197
+    section: "Request access to the AMI Image"
+  image11.png:
+    kind: screenshot
+    status: stale
+    bytes: 471858
+    section: "Request access to the AMI Image"
+  image12.png:
+    kind: screenshot
+    status: stale
+    bytes: 266471
+    section: "Create a AWS Security Group"
+  image13.png:
+    kind: screenshot
+    status: stale
+    bytes: 234749
+    section: "Create an Ubuntu Authentication Key Pair"
+  image14.png:
+    kind: screenshot
+    status: stale
+    bytes: 75390
+    section: "Create an Ubuntu Authentication Key Pair"
+  image15.png:
+    kind: diagram
+    status: review
+    bytes: 36931
+    section: "LEARNING MOMENT"
+  image16.png:
+    kind: screenshot
+    status: stale
+    bytes: 593098
+    section: "Build your instance(s) using an AMI image"
+  image17.png:
+    kind: icon
+    status: review
+    bytes: 8497
+    section: "Build your instance(s) using an AMI image"
+  image18.png:
+    kind: screenshot
+    status: stale
+    bytes: 48672
+    section: "Build your instance(s) using an AMI image"
+  image19.png:
+    kind: screenshot
+    status: stale
+    bytes: 23154
+    section: "Build your instance(s) using an AMI image"
+  image20.png:
+    kind: screenshot
+    status: stale
+    bytes: 15038
+    section: "Build your instance(s) using an AMI image"
+  image21.png:
+    kind: screenshot
+    status: stale
+    bytes: 541540
+    section: "Build your instance(s) using an AMI image"
+  image22.png:
+    kind: screenshot
+    status: stale
+    bytes: 26397
+    section: "Build your instance(s) using an AMI image"
+  image23.png:
+    kind: screenshot
+    status: stale
+    bytes: 48774
+    section: "Build your instance(s) using an AMI image"
+  image24.png:
+    kind: screenshot
+    status: stale
+    bytes: 42404
+    section: "Build your instance(s) using an AMI image"
+  image25.png:
+    kind: screenshot
+    status: stale
+    bytes: 76860
+    section: "Use Template to add Workshop Participants"
+  image26.png:
+    kind: screenshot
+    status: stale
+    bytes: 83121
+    section: "Use Template to add Workshop Participants"
+  image27.png:
+    kind: icon
+    status: review
+    bytes: 11782
+    section: "Use Template to add Workshop Participants"
+  image28.png:
+    kind: screenshot
+    status: stale
+    bytes: 77607
+    section: "Use Template to add Workshop Participants"
+  image29.png:
+    kind: screenshot
+    status: stale
+    bytes: 74844
+    section: "Test PDF creation and emailing of participants"
+  image30.png:
+    kind: screenshot
+    status: stale
+    bytes: 43970
+    section: "Test PDF creation and emailing of participants"
+  image31.png:
+    kind: screenshot
+    status: stale
+    bytes: 15445
+    section: "Test PDF creation and emailing of participants"
+  image32.png:
+    kind: screenshot
+    status: stale
+    bytes: 27267
+    section: "Test PDF creation and emailing of participants"
+  image33.png:
+    kind: screenshot
+    status: stale
+    bytes: 120430
+    section: "Test PDF creation and emailing of participants"
+  image34.png:
+    kind: icon
+    status: review
+    bytes: 14280
+    section: "Test PDF creation and emailing of participants"
+  image35.png:
+    kind: screenshot
+    status: stale
+    bytes: 99729
+    section: "Test PDF creation and emailing of participants"
+  image36.png:
+    kind: screenshot
+    status: stale
+    bytes: 21012
+    section: "Test PDF creation and emailing of participants"
+  image37.png:
+    kind: screenshot
+    status: stale
+    bytes: 44994
+    section: "Test PDF creation and emailing of participants"
+  image38.png:
+    kind: screenshot
+    status: stale
+    bytes: 133247
+    section: "Test PDF creation and emailing of participants"
+  image39.png:
+    kind: screenshot
+    status: stale
+    bytes: 199894
+    section: "Test PDF creation and emailing of participants"
+  image40.png:
+    kind: screenshot
+    status: stale
+    bytes: 41795
+    section: "Run the workshop!"
+  image41.png:
+    kind: screenshot
+    status: stale
+    bytes: 688826
+    section: "Run the workshop!"

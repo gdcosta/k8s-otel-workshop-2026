@@ -1,0 +1,431 @@
+# Host setup
+
+**Duration:** ~45 minutes, most of it downloads · **Run once**, before Foundational
+Workshop #1
+
+This builds the machine everything else runs on: container runtime, a Kubernetes
+toolchain, and a local Splunk Enterprise instance.
+
+!!! tip "There is a script for all of this"
+    If you just want a working host, skip to [Automated setup](#automated-setup) and run
+    `bootstrap.sh`. Work through the manual steps if you want to understand what the host
+    actually needs — the workshop assumes no prior Kubernetes experience, and the pieces
+    installed here get referenced throughout.
+
+---
+
+## Before you start
+
+### Instance requirements
+
+| | |
+|---|---|
+| **OS** | Ubuntu 24.04 LTS |
+| **Architecture** | **x86-64 / amd64** |
+| **Size** | 4 vCPU, 16 GB RAM (AWS `t3.xlarge` or equivalent) |
+| **Disk** | 100 GB |
+| **Access** | SSH key pair — no password authentication |
+
+!!! danger "ARM will not work"
+    Splunk Enterprise has **no Linux ARM64 build**. Splunk's own documentation states
+    *"The ARM architecture is not supported for use with Splunk Enterprise at this time"* —
+    ARM64 exists only for the Universal Forwarder.
+
+    Everything else in this workshop runs on ARM quite happily, but Splunk Enterprise runs
+    natively on this host and is central to FW #2 and AW #1. Use x86-64.
+
+!!! warning "You will download about 3 GB"
+    Splunk Enterprise alone is **1.6 GB**, and minikube pulls a ~520 MB base image. Don't
+    start this on a constrained or metered connection.
+
+### Network access
+
+Inbound, from your own IP:
+
+| Port | Purpose |
+|---|---|
+| 22 | SSH |
+| 8000 | Splunk Web |
+| 8080 | PetClinic (via port-forward) |
+| 8089 | *Advanced Workshop #2 only* — Log Observer Connect |
+
+Outbound: all. The host pulls from GitHub, Docker Hub, the Ubuntu archives, Splunk, and —
+in AW #2 — Splunk Observability Cloud.
+
+---
+
+## Automated setup
+
+```bash
+git clone https://github.com/gdcosta/k8s-otel-workshop.git ~/k8s-otel-workshop
+cd ~/k8s-otel-workshop
+./scripts/bootstrap.sh
+```
+
+It's idempotent — safe to re-run if something fails partway. It reads every version from
+[`versions.env`](https://github.com/gdcosta/k8s-otel-workshop/blob/main/versions.env), so
+that file is the single place to change a pin.
+
+When it finishes, jump to [Verify the host](#verify-the-host).
+
+---
+
+## Manual setup
+
+Everything in this section runs as the **`ubuntu`** user — the administrative account.
+The workshop itself runs as a separate `splunk` user created below.
+
+### 1. Update the system
+
+```bash
+sudo apt-get update
+sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y
+```
+
+### 2. Install base packages
+
+```bash
+sudo apt-get install -y \
+  curl wget net-tools unzip jq git \
+  ca-certificates gnupg apt-transport-https \
+  python3-venv \
+  ne
+```
+
+`python3-venv` is needed by Advanced Workshop #2 — Ubuntu 24.04 ships Python without it,
+and `python3 -m venv` fails with `ensurepip is not available` until it's installed.
+
+`ne` ("nice editor") is a friendlier alternative to `vi` if you'd rather not use `vi`
+during the labs.
+
+### 3. Install Java
+
+```bash
+sudo apt-get install -y openjdk-21-jdk
+java -version
+```
+
+!!! note "PetClinic targets Java 17, and builds fine on 21"
+    The project's `pom.xml` declares `<java.version>17</java.version>`, but it compiles and
+    runs cleanly under JDK 21. In FW #1 you'll set `JAVA_HOME` explicitly rather than rely
+    on whatever the system default happens to be — installing multiple JDKs silently
+    changes that default, which is exactly the kind of drift that makes a build
+    irreproducible.
+
+### 4. Install Docker
+
+```bash
+sudo apt-get install -y docker.io
+sudo systemctl enable --now docker
+docker --version
+sudo docker info -f '{{.Driver}}'
+```
+
+<details>
+<summary>Expected output</summary>
+
+```
+Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2
+overlayfs
+```
+
+The storage driver matters. Docker needs the `overlay` kernel module; on a hardened image
+where that module is blocked, Docker cannot start. See
+[Troubleshooting](../troubleshooting.md#hardened-images).
+</details>
+
+!!! note "IP forwarding sorts itself out"
+    Ubuntu ships with `net.ipv4.ip_forward=0`, which would break container networking. The
+    Docker daemon sets it to `1` when it starts, so no manual `sysctl` change is needed on
+    a stock image. On a hardened host that re-applies sysctl settings on boot, check this
+    after a reboot.
+
+### 5. Create the `splunk` user
+
+The workshop runs as a dedicated user. Kubernetes state, the application build, and
+Splunk Enterprise all live under this account.
+
+```bash
+sudo useradd -s /bin/bash -d /home/splunk -m splunk
+sudo groupadd -f docker
+sudo usermod -aG docker splunk
+sudo usermod -aG docker ubuntu
+id splunk
+```
+
+!!! danger "`-aG`, never `-g`"
+    `usermod -g docker splunk` **replaces** the user's primary group, leaving `splunk`
+    without a personal group and producing surprising file ownership later. `-aG`
+    *appends* — the user keeps its own group and gains Docker access:
+
+    ```
+    uid=1002(splunk) gid=1005(splunk) groups=1005(splunk),114(docker)
+    ```
+
+Give `splunk` the same SSH key you're using, so you can open a second terminal directly as
+that user:
+
+```bash
+sudo mkdir -p /home/splunk/.ssh
+sudo cp ~/.ssh/authorized_keys /home/splunk/.ssh/authorized_keys
+sudo chown -R splunk:splunk /home/splunk/.ssh
+sudo chmod 700 /home/splunk/.ssh
+sudo chmod 600 /home/splunk/.ssh/authorized_keys
+```
+
+!!! info "No password is set, deliberately"
+    Earlier versions of this workshop set a shared password on `splunk` and re-enabled
+    `PasswordAuthentication` in `sshd_config`. That put a publicly-reachable host on the
+    internet with a known credential, and it fails outright on hardened images whose
+    password policy rejects short passwords.
+
+    Key-based access replaces it. You reach the account two ways:
+
+    ```bash
+    ssh -i <your-key.pem> splunk@<HOST>   # directly, from your laptop
+    sudo -i -u splunk                     # from the ubuntu account
+    ```
+
+### 6. Add the minikube hostname
+
+```bash
+echo -e "192.168.49.2\tminikube" | sudo tee -a /etc/hosts
+getent hosts minikube
+```
+
+!!! warning "Do this now, as `ubuntu` — it is the trap in this workshop"
+    Later steps reach the application at `http://minikube:30000`, so this entry has to
+    exist. It needs root, and **the `splunk` user cannot use `sudo`** — it's not in a
+    NOPASSWD group, and password authentication is disabled.
+
+    The failure is silent. A command like `... | sudo tee -a /etc/hosts >/dev/null` sends
+    sudo's error to `/dev/null`, returns exit code 0, and writes nothing. You then get
+    connection failures in FW #1 that point nowhere near the real cause.
+
+    The address is fixed because FW #1 starts minikube with `--subnet=192.168.49.0/24`.
+
+### 7. Install kubectl
+
+```bash
+KUBECTL_VERSION=v1.36.3
+curl -fsSLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+sudo install -m 0755 kubectl /usr/local/bin/kubectl
+rm kubectl
+kubectl version --client -o json | jq -r .clientVersion.gitVersion
+```
+
+!!! danger "Pin it — don't resolve `stable.txt`"
+    The common install snippet fetches `stable.txt` and installs whatever it names. Two
+    people running the workshop a week apart then get different clients, and a workshop
+    that can't be reproduced can't be supported. Pin the version.
+
+### 8. Install minikube
+
+```bash
+MINIKUBE_VERSION=v1.38.1
+curl -fsSLO "https://github.com/kubernetes/minikube/releases/download/${MINIKUBE_VERSION}/minikube-linux-amd64"
+sudo install -m 0755 minikube-linux-amd64 /usr/local/bin/minikube
+rm minikube-linux-amd64
+minikube version
+```
+
+### 9. Install Helm
+
+```bash
+HELM_VERSION=v4.2.4
+curl -fsSLO "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
+tar -xzf "helm-${HELM_VERSION}-linux-amd64.tar.gz"
+sudo install -m 0755 linux-amd64/helm /usr/local/bin/helm
+rm -rf linux-amd64 "helm-${HELM_VERSION}-linux-amd64.tar.gz"
+helm version --short
+```
+
+!!! warning "Not the apt repository"
+    Most Helm install guides add the `baltocdn.com` apt repository. **That host currently
+    fails TLS certificate validation** against an up-to-date CA bundle:
+
+    ```
+    TLS alert, unknown CA (560)
+    SSL certificate problem: unable to get local issuer certificate
+    ```
+
+    The pinned tarball from `get.helm.sh` is the official distribution, avoids the apt-key
+    and keyring dance entirely, and pins the version explicitly — which is what a
+    reproducible workshop wants anyway.
+
+Helm 4 is used deliberately: the Splunk OTel Collector chart requires *"Helm 3.9+ or
+Helm 4.x"* and is tested against both.
+
+### 10. Install Splunk Enterprise
+
+```bash
+SPLUNK_VERSION=10.4.2
+SPLUNK_HASH=33c3bf42cd73
+cd ~/
+wget -O splunk.tgz \
+  "https://download.splunk.com/products/splunk/releases/${SPLUNK_VERSION}/linux/splunk-${SPLUNK_VERSION}-${SPLUNK_HASH}-linux-amd64.tgz"
+sudo tar -xzf splunk.tgz -C /opt
+sudo chown -R splunk:splunk /opt/splunk
+rm splunk.tgz
+```
+
+Seed the admin account. **Generate a password rather than reusing one:**
+
+```bash
+ADMIN_PW=$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)
+echo "Splunk admin password: $ADMIN_PW"     # write this down now
+
+sudo -u splunk tee /opt/splunk/etc/system/local/user-seed.conf >/dev/null <<EOF
+[user_info]
+USERNAME = admin
+PASSWORD = ${ADMIN_PW}
+EOF
+
+sudo -u splunk /opt/splunk/bin/splunk start --accept-license --answer-yes --no-prompt
+sudo -u splunk /opt/splunk/bin/splunk version
+```
+
+Splunk Web is now on `http://$PUB_DNS:8000` — echo it if you need the value:
+
+```bash
+echo "http://$PUB_DNS:8000"
+```
+
+!!! note "Splunk 10.4 is a major jump from earlier versions of this workshop"
+    Previous revisions pinned 9.0.4.1, which is long past end of support. Aside from being
+    a much larger download, one behavioural change matters directly: **HEC now enables SSL
+    by default.** FW #2 covers that at the point where it bites.
+
+### 11. Create the workshop environment file
+
+Every later module refers to the same handful of values. Put them in one file so any shell
+— including the second terminal you'll open for load testing — can load them in one command.
+
+```bash
+sudo -u splunk tee /home/splunk/.workshop-env >/dev/null <<'EOF'
+# Workshop session variables. Load with:  source ~/.workshop-env
+# Re-run that in every new terminal.
+
+# Your username. Prefixes every resource you create so attendees sharing a
+# Splunk or Observability Cloud environment don't collide.
+export WS_USER=CHANGE_ME
+
+# This instance's private IP — what the Collector uses to reach Splunk's HEC.
+export LOCAL_IP=$(ec2metadata --local-ipv4 2>/dev/null || hostname -I | awk '{print $1}')
+
+# The public DNS name — what you point a browser at, and what Log Observer
+# Connect uses to reach this instance in AW #2.
+export PUB_DNS=$(ec2metadata --public-hostname 2>/dev/null || curl -s ifconfig.me)
+
+# Pinned versions, so commands can be copied without editing.
+export CHART_VERSION=0.158.0
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+
+# Filled in as you go:
+#   HEC_TOKEN      — Foundational Workshop #2, step 3
+#   O11Y_REALM     — Advanced Workshop #2, step 1
+EOF
+
+sudo chown splunk:splunk /home/splunk/.workshop-env
+sudo chmod 600 /home/splunk/.workshop-env
+```
+
+Set your username, then load it:
+
+```bash
+sudo -i -u splunk
+sed -i "s/^export WS_USER=.*/export WS_USER=<your-username>/" ~/.workshop-env
+source ~/.workshop-env
+echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
+```
+
+!!! tip "Load it automatically in every shell"
+    ```bash
+    echo '[ -f ~/.workshop-env ] && source ~/.workshop-env' >> ~/.profile
+    ```
+    Saves remembering `source` each time you open a terminal. Tokens added later are
+    picked up on the next login.
+
+### 12. Set up the `splunk` shell environment
+
+```bash
+sudo -u splunk tee -a /home/splunk/.profile >/dev/null <<'EOF'
+
+# k8s workshop — point docker at minikube's daemon
+if command -v minikube >/dev/null && minikube status >/dev/null 2>&1; then
+  eval "$(minikube -p minikube docker-env)"
+fi
+EOF
+```
+
+This makes `docker build` place images inside minikube's image store, where Kubernetes can
+find them without a registry. FW #1 explains why that matters.
+
+---
+
+## Verify the host
+
+```bash
+sudo -i -u splunk
+~/k8s-otel-workshop/scripts/verify-setup.sh
+```
+
+<details>
+<summary>What it checks</summary>
+
+1. Ubuntu 24.04, x86-64
+2. `docker` running, with a working storage driver
+3. `overlay` filesystem usable (the one thing hardened images tend to block)
+4. `minikube`, `kubectl`, `helm` present at pinned versions
+5. `splunk` user exists, is in the `docker` group, and has an authorized key
+6. `minikube` resolves via `/etc/hosts`
+7. Splunk Enterprise installed and startable
+8. Enough free disk
+</details>
+
+---
+
+## Troubleshooting
+
+??? failure "`docker info` reports no storage driver, or Docker won't start"
+    The `overlay` kernel module is unavailable. Confirm:
+    ```bash
+    sudo mkdir -p /tmp/ov/{l,u,w,m}
+    sudo mount -t overlay overlay \
+      -o lowerdir=/tmp/ov/l,upperdir=/tmp/ov/u,workdir=/tmp/ov/w /tmp/ov/m \
+      && echo OK && sudo umount /tmp/ov/m
+    sudo rm -rf /tmp/ov
+    ```
+    `unknown filesystem type 'overlay'` means it's blocked — check
+    `/etc/modprobe.d/` for `install overlay /bin/false`. This appears on some hardened
+    images and prevents *any* container runtime from working. See
+    [Troubleshooting → hardened images](../troubleshooting.md#hardened-images).
+
+??? failure "`helm` install fails with an SSL certificate error"
+    You're using the `baltocdn.com` apt repository. Use the `get.helm.sh` tarball in
+    step 9 instead.
+
+??? failure "`sudo: a password is required` as the splunk user"
+    Expected — `splunk` has no sudo rights and no password. Privileged steps belong to the
+    `ubuntu` account. If you hit this mid-lab, something that should have happened during
+    setup didn't; `/etc/hosts` in step 6 is the usual culprit.
+
+??? failure "Splunk won't start / port 8000 refused"
+    ```bash
+    sudo -u splunk /opt/splunk/bin/splunk status
+    sudo tail -50 /opt/splunk/var/log/splunk/splunkd.log
+    ```
+    Ownership is the common cause — `/opt/splunk` must be owned by `splunk`:
+    ```bash
+    sudo chown -R splunk:splunk /opt/splunk
+    ```
+
+??? failure "Out of disk"
+    The full workshop uses roughly 30–35 GB: Splunk plus its indexes, minikube's images,
+    the Maven cache, several PetClinic image builds, and — in AW #2 — Playwright's
+    Chromium download at about 650 MB. 100 GB gives comfortable room to
+    rebuild repeatedly. `docker system prune` reclaims space from old image layers.
+
+---
+
+**Next:** [Foundational Workshop #1 — Containers and Kubernetes](../01-foundational-1/index.md)

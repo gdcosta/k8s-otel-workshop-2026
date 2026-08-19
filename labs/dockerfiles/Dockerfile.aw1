@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1
+# PetClinic with the Splunk OpenTelemetry Java agent (AW1 onward).
+# Build from the maven target/ dir, after placing the agent in ./splunk/
+FROM eclipse-temurin:21-jre-noble
+WORKDIR /app
+
+# Detect the jar name; it changes upstream (3.0.0 -> 4.0.0-SNAPSHOT and on).
+COPY spring-petclinic-*.jar ./app.jar
+COPY ./splunk/splunk-otel-javaagent.jar ./
+
+ENV OTEL_SERVICE_NAME="${WS_USER}-k8s-petclinic-service"
+ENV OTEL_RESOURCE_ATTRIBUTES="deployment.environment=${WS_USER}-k8s-petclinic-env"
+ENV OTEL_EXPORTER_OTLP_PROTOCOL="grpc"
+ENV OTEL_METRICS_EXPORTER="otlp"
+ENV OTEL_TRACES_EXPORTER="otlp"
+ENV OTEL_LOGS_EXPORTER="none"
+# OTEL_EXPORTER_OTLP_ENDPOINT is injected by the Deployment (downward API), not baked in.
+
+# NOTE: -Dsplunk.metrics.enabled / -Dsplunk.metrics.endpoint (port 9943) were REMOVED
+# in splunk-otel-java 2.x. Unknown -D flags are ignored silently — metrics just vanish.
+CMD ["java", "-javaagent:./splunk-otel-javaagent.jar", "-jar", "app.jar"]

@@ -1,0 +1,57 @@
+# PetClinic Deployment + NodePort Service.
+# Render with: WS_USER=<you> envsubst < petclinic.yml > my-petclinic.yml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${WS_USER}-petclinic-srv
+spec:
+  type: NodePort
+  selector:
+    app: ${WS_USER}-petclinic-otel-app
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+      nodePort: 30000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${WS_USER}-petclinic-otel-deployment
+  labels:
+    app: ${WS_USER}-petclinic-otel-app
+spec:
+  selector:
+    matchLabels:
+      app: ${WS_USER}-petclinic-otel-app
+  template:
+    metadata:
+      labels:
+        app: ${WS_USER}-petclinic-otel-app
+      # FW2 adds pod annotations here (metadata capture + index routing).
+    spec:
+      containers:
+        - name: ${WS_USER}-petclinic-otel-container01
+          image: ${WS_USER}/petclinic-otel:v1
+          # Image lives in minikube's local store; never try to pull it.
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          # AW1: the collector agent is a DaemonSet. Resolve the node IP at runtime —
+          # a pod cannot resolve the `minikube` hosts entry, that is host-only.
+          env:
+            - name: SPLUNK_OTEL_AGENT
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(SPLUNK_OTEL_AGENT):4317"
+          # Makes `kubectl rollout status` wait for the app, not just the container.
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30

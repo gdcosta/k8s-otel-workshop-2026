@@ -1,0 +1,38 @@
+# Splunk OTel Collector — workshop overlay.
+# Render: WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) HEC_TOKEN=<tok> \
+#           envsubst < values-workshop.yaml > my-values.yaml
+# Install: helm install $WS_USER-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+#           --version 0.158.0 -f my-values.yaml
+clusterName: ${WS_USER}-minikube-cluster
+
+splunkPlatform:
+  endpoint: "http://${LOCAL_IP}:8088/services/collector"
+  token: "${HEC_TOKEN}"
+  index: "k8s_ws_logs"
+  logsEnabled: true
+  metricsEnabled: false
+  tracesEnabled: false
+
+logsCollection:
+  containers:
+    excludeAgentLogs: false
+    multilineConfigs:
+      - namespaceName: { value: default }
+        podName: { value: "${WS_USER}-petclinic-.*", useRegexp: true }
+        containerName: { value: "${WS_USER}-petclinic-otel-container01" }
+        firstEntryRegex: ^[^\s].*
+
+extraAttributes:
+  fromAnnotations:
+    - key: docker_image_author
+      from: pod
+      tag_name: docker_image_author
+
+clusterReceiver:
+  eventsEnabled: true
+  k8sObjects:
+    - name: pods
+      mode: pull
+      interval: 60s
+    - name: events
+      mode: watch

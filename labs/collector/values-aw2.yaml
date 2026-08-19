@@ -1,0 +1,93 @@
+# Splunk OTel Collector — Advanced Workshop #1 overlay (logs + metrics + traces).
+# Render: WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) HEC_TOKEN=<tok> \
+#           envsubst < values-aw1.yaml > my-values.yaml
+# AW2 adds Splunk Observability Cloud as a SECOND destination.
+# Nothing about collection changes — only where the data goes.
+
+splunkObservability:
+  realm: "${O11Y_REALM}"
+  accessToken: "${O11Y_TOKEN}"
+  metricsEnabled: true
+  tracesEnabled: true
+  profilingEnabled: true
+  # NOTE: no logsEnabled here — the chart schema rejects it. Logs reach O11y
+  # via Log Observer Connect, which queries Splunk Enterprise directly.
+
+clusterName: ${WS_USER}-minikube-cluster
+
+splunkPlatform:
+  endpoint: "http://${LOCAL_IP}:8088/services/collector"
+  token: "${HEC_TOKEN}"
+  index: "k8s_ws_logs"
+  metricsIndex: "k8s_ws_metrics"
+  tracesIndex: "k8s_ws_traces"
+  logsEnabled: true
+  metricsEnabled: true
+  tracesEnabled: true
+
+logsCollection:
+  containers:
+    excludeAgentLogs: false
+    multilineConfigs:
+      - namespaceName: { value: default }
+        podName: { value: "${WS_USER}-petclinic-.*", useRegexp: true }
+        containerName: { value: "${WS_USER}-petclinic-otel-container01" }
+        firstEntryRegex: ^[^\s].*
+
+extraAttributes:
+  fromAnnotations:
+    - key: docker_image_author
+      from: pod
+      tag_name: docker_image_author
+
+clusterReceiver:
+  eventsEnabled: true
+  k8sObjects:
+    - name: pods
+      mode: pull
+      interval: 60s
+    - name: events
+      mode: watch
+
+agent:
+  config:
+    processors:
+      # AW1: app metrics -> their own index, keyed on the service name the agent reports.
+      # The splunk.com/metricsIndex annotation does NOT cover OTLP metrics from the app —
+      # it only moves cluster-receiver metrics (k8s.container.*, k8s.pod.phase).
+      transform/app_metrics_index:
+        metric_statements:
+          - set(resource.attributes["com.splunk.index"], "k8s_ws_petclinic_metrics")
+              where resource.attributes["service.name"] == "${WS_USER}-k8s-petclinic-service"
+
+      # AW1: traces inherit splunk.com/index from the pod, which overrides
+      # splunkPlatform.tracesIndex. There is no splunk.com/tracesIndex — override here.
+      transform/traces_index:
+        trace_statements:
+          - set(resource.attributes["com.splunk.index"], "k8s_ws_traces")
+
+      # FW2: rename sourcetype, extract log level, tag severity.
+      # NOTE: paths MUST be context-prefixed (log.* / resource.*). Bare `attributes[...]`
+      # parses and silently does nothing.
+      transform/petclinic_logs:
+        log_statements:
+          - set(resource.attributes["com.splunk.sourcetype"], "petclinic:app:log")
+              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+          - merge_maps(log.attributes,
+              ExtractPatterns(log.body, "(?P<log_level>INFO|WARN|ERROR|DEBUG|TRACE)"),
+              "upsert")
+              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+          - set(log.attributes["severity"], "high") where log.attributes["log_level"] == "ERROR"
+          - set(log.attributes["severity"], "low")  where log.attributes["log_level"] == "INFO"
+
+    service:
+      pipelines:
+        metrics:
+          processors: [memory_limiter, k8s_attributes, transform/app_metrics_index,
+                       batch, resource_detection, resource]
+        traces:
+          processors: [memory_limiter, k8s_attributes, transform/traces_index,
+                       batch, resource_detection, resource]
+        logs:
+          processors: [memory_limiter, k8s_attributes, filter/logs, transform/petclinic_logs,
+                       batch, resource_detection, resource, resource/logs]
