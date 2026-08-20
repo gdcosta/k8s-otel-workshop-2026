@@ -501,40 +501,53 @@ separate action that the guided setup never mentions.
    mappings and Make Default.
 
     ![Generate mappings menu](../assets/img/04-aw2/loc-07-generate-mappings-menu.png)
-    <!-- STATUS: pending-recapture · kebab menu on the connection row -->
+    <!-- STATUS: pending-recapture · menu contents are correct; the row behind it predates the two-index role -->
 
-2. You land on the **Mapping generation** tab. Tick the two workshop log indexes —
-   `k8s_ws_logs` and `k8s_ws_petclinic_logs`. The header should read *"Selected 2
-   indexes"*. Then **Generate**.
+2. You land on the **Mapping generation** tab. **Turn Global Index Search off** first —
+   see the note below for why — then tick the two workshop log indexes, `k8s_ws_logs` and
+   `k8s_ws_petclinic_logs`. The header should read *"Selected 2 indexes"*. Then
+   **Generate**.
 
-    ![Mapping generation — two indexes selected](../assets/img/04-aw2/loc-08-mapping-generation-select.png)
-    <!-- STATUS: pending-recapture · header must read "Selected 2 indexes" -->
+    ![Mapping generation — two indexes selected, Global Index Search off](../assets/img/04-aw2/loc-08-mapping-generation-select.png)
 
 3. Generation status shows **Accepted**, trigger source **Manual**.
 
     ![Generation status Accepted](../assets/img/04-aw2/loc-09-generation-accepted.png)
-    <!-- STATUS: pending-recapture -->
 
-4. Hit **Refresh**. A few seconds later the status becomes **Completed**.
+4. Hit **Refresh**. The indexes move through **In Progress**...
+
+    ![Generation status In Progress](../assets/img/04-aw2/loc-12-generation-in-progress.png)
+
+5. ...and land on **Completed**, one at a time. Keep refreshing until both read
+   **Completed** — they finish independently, so one can be done while the other is still
+   running.
 
     ![Generation status Completed](../assets/img/04-aw2/loc-10-generation-completed.png)
-    <!-- STATUS: pending-recapture -->
 
 !!! danger "Accepted is not done"
-    The status is asynchronous. **Accepted** means the request was queued, not that
-    mappings exist. Refresh until it reads **Completed** — participants who move on at
+    The status is asynchronous and moves **Accepted → In Progress → Completed**.
+    *Accepted* means the request was queued, not that mappings exist. Refresh until **both**
+    indexes read *Completed* — they progress independently, so it is normal to see one
+    Completed while the other is still Accepted or In Progress. Participants who move on at
     Accepted continue with mappings half-built and then debug step 5 for the rest of the
     module.
 
-!!! note "Global Index Search is ON by default"
-    The setting reads: *"Enable Global Index Search to broaden the search across all
-    indexes (`index=*`) when no entity-index mapping is found. This may increase SVC
-    consumption and impact performance."*
+!!! warning "Turn Global Index Search off"
+    It ships **on**, and the setting reads: *"Enable Global Index Search to broaden the
+    search across all indexes (`index=*`) when no entity-index mapping is found. This may
+    increase SVC consumption and impact performance."*
 
-    Two consequences worth knowing. It can **mask a broken mapping** — logs still appear,
-    via the `index=*` fallback, so a misconfiguration looks like a working setup. And it
-    carries a stated cost and performance warning, which matters the moment you apply any
-    of this outside a lab.
+    Switch it off for this workshop, for two reasons. It **masks a broken mapping** — logs
+    still appear through the `index=*` fallback, so a misconfiguration looks like a working
+    setup, and you learn nothing about whether your mappings are right. And it carries a
+    stated cost and performance warning that matters the moment you apply any of this
+    outside a lab.
+
+    Turning it off does not reduce what the service account can reach: `index=*` is scoped
+    to the role's `srchIndexesAllowed` either way. Verified — running that query as
+    `loc_svc` returns only `k8s_ws_logs` and `k8s_ws_petclinic_logs`, while the same query
+    as `admin` also returns `k8s_ws_traces`. The setting changes *breadth of search*, not
+    *permission*.
 
 ### ✅ Checkpoint
 
@@ -831,7 +844,7 @@ refresh them: **Logs → Logs connections → ⋮ → Generate mappings**, then 
 Wait for **Completed** as before.
 
 ![Regenerate All](../assets/img/04-aw2/loc-11-regenerate-all.png)
-<!-- STATUS: pending-recapture · Regenerate All button on the Mapping generation tab -->
+<!-- Captured on the two-index run; the Regenerate All button is top-left of the index table. -->
 
 !!! tip "Worth remembering outside the workshop"
     Aliases and mappings are generated once and then cached. Anyone who adds or corrects a
