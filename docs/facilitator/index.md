@@ -48,7 +48,7 @@ Maven download the internet.
 
 | Port | Source | Purpose |
 |---|---|---|
-| 22 | participant CIDR | SSH |
+| 22 | **the participant's own IP** | SSH — and every browser tunnel |
 | 8000 | **the participant's own IP** | Splunk Web — see the warning below |
 | 8080 | *not required* | see the note below — the tunnel makes this unnecessary |
 | 8089 | Splunk O11y realm IPs | AW #2 only — Log Observer Connect |
@@ -88,28 +88,45 @@ Outbound: all.
 
 ### Getting keys to participants
 
-Each participant needs a private key before they can start. Two workable arrangements:
+**One key pair per event, shared by the room, is the right default.** Generating and
+distributing a pair per participant is a real operational burden — chasing twenty people
+before an event, tracking which key went where, deleting them afterwards — and it buys far
+less than it appears to.
 
-**Ask for public keys (preferred).** Collect an SSH public key from each participant
-ahead of the event and add it at launch. Their private key never leaves their machine,
-there is nothing for you to distribute or clean up, and a lost laptop compromises one
-instance rather than all of them. Send them:
+!!! abstract "Why per-participant keys are not worth it here"
+    Look at what an SSH key is actually protecting. The Splunk admin password is
+    `Workshop2026!` on **every** instance and is printed in the guide. So anyone who can
+    reach port 8000 on any box is already admin there, key or no key.
 
-```bash
-ssh-keygen -t ed25519 -C "k8s-otel-workshop"   # then send me the .pub file only
-```
+    A per-participant SSH key does not change that. **The security group is the boundary**,
+    and it has to be right anyway for exactly the same reason.
 
-**Or issue a key pair per participant.** If collecting keys in advance is impractical,
-generate a **separate** pair per instance and send each participant only theirs, over a
-channel you would use for any other credential — not a shared drive, not the event chat.
-Delete them afterwards.
+    The one thing a shared key does enable is participant A reaching participant B's
+    instance over SSH — and scoping port 22 the same way you already scope 8000 removes it.
 
-!!! danger "Never distribute one key pair to the whole room"
-    Earlier versions of this workshop distributed a single key pair to all facilitators. One
-    private key that unlocks every instance ever built is not worth the convenience, and it
-    means any participant can reach every other participant's instance — including the
-    Splunk instance holding their data. Generate per event at minimum, per participant
-    ideally, and delete afterwards.
+**So the rule is one rule, applied to both ports:** source each participant's inbound
+access to **their own IP**, not to an office or conference CIDR. Same operational step you
+are already doing for Splunk Web, extended to 22. If someone's address changes mid-event,
+update that one rule.
+
+Then:
+
+- Generate **one key pair for the event**, distribute it as you would any other credential
+  — not a shared drive, not the event chat.
+- **Delete it afterwards**, and terminate the instances. Both are disposable by design.
+
+??? tip "Higher-assurance options, if your situation allows"
+    **Collect public keys in advance.** Ask participants for an SSH public key
+    (`ssh-keygen -t ed25519`, send the `.pub` only) and add it at launch. Private keys never
+    travel and there is nothing to distribute or clean up. Best security; only workable when
+    you have the participant list far enough ahead.
+
+    **Skip keys entirely with AWS Systems Manager.** Session Manager needs no key and no
+    inbound port 22 at all, and it supports the port forwarding this workshop depends on via
+    `AWS-StartPortForwardingSessionToRemoteHost` — which can target `192.168.49.2:30000`
+    directly. The catch is that every participant then needs AWS CLI and IAM credentials,
+    which is usually a bigger ask than a `.pem`. Worth it if your organisation already
+    runs SSM.
 
 !!! tip "Tell participants which case they are in"
     [Host setup](../00-setup/index.md) documents all three routes — key sent to them, public

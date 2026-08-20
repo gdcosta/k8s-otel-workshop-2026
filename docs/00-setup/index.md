@@ -37,9 +37,12 @@ toolchain, and a local Splunk Enterprise instance.
     | **You gave them a public key** | your own existing private key | use it as-is — nothing new to save |
     | **You are building your own** | whatever you create at launch | AWS offers a key pair in the launch wizard; download the `.pem` and keep it |
 
-    If a facilitator asks for a **public** key rather than sending you a private one, that
-    is the better arrangement — your private key never travels. Generate a pair with
-    `ssh-keygen -t ed25519` and send them only the `.pub` file.
+    At a taught event the usual arrangement is one key pair for the whole room, sent to you
+    by the facilitator. That is fine here: these instances are disposable, and the Splunk
+    credentials are published in this guide anyway, so what actually keeps your instance
+    yours is the **security group** — inbound access scoped to your own IP address. If a
+    facilitator instead asks for a **public** key, that is a stronger arrangement and your
+    private key never travels: `ssh-keygen -t ed25519`, send them the `.pub` only.
 
     You need this before step 1. There is no password login — that is deliberate, and
     covered in step 5.
@@ -62,7 +65,7 @@ Inbound, from your own IP — never `0.0.0.0/0`:
 
 | Port | Purpose |
 |---|---|
-| 22 | SSH — and every browser tunnel this workshop uses |
+| 22 | SSH — and every browser tunnel this workshop uses. Scope to **your own IP**, not an office range |
 | 8000 | Splunk Web |
 | 8080 | *Optional* — only if you publish PetClinic on the host instead of tunnelling |
 | 8089 | *Advanced Workshop #2 only* — Log Observer Connect |
@@ -109,7 +112,7 @@ in AW #2 — Splunk Observability Cloud.
 
 !!! danger "Port 8000 must be scoped to your own address"
     This workshop uses fixed credentials that are printed in the guide — `admin` /
-    `Workshop2026!` — so every later command is copy-pasteable and an facilitator can sign in
+    `Workshop2026!` — so every later command is copy-pasteable and a facilitator can sign in
     to help someone who is stuck. That is only safe while the login page is not open to the
     internet: an EC2 host name is predictable, and the password is on this page.
 
@@ -551,7 +554,7 @@ sudo -u splunk /opt/splunk/bin/splunk version
 
 !!! warning "Published credentials — two things follow, neither optional"
     `admin` / `Workshop2026!` is the same on every participant's instance and is printed in
-    this guide, so every later command is copy-pasteable and an facilitator can sign in to
+    this guide, so every later command is copy-pasteable and a facilitator can sign in to
     help. Because of that:
 
     - **Port 8000 must be restricted to your own IP** in the security group. A published
