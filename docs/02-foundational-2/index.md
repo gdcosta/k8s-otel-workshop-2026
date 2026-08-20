@@ -355,7 +355,7 @@ index=k8s_ws_logs sourcetype="kube:container:kube-apiserver" "user.username"="sy
 !!! abstract "Learning moment — what this is worth"
     That single query is the basis of a whole family of Kubernetes detections: cluster
     scanning, service accounts hitting forbidden endpoints, access to sensitive objects.
-    A set of ready-made searches ships in the [instructor guide](../instructor/index.md).
+    A set of ready-made searches ships in the [facilitator guide](../facilitator/index.md).
 
 ---
 

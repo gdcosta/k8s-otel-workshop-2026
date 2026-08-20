@@ -1,4 +1,4 @@
-# Instructor guide
+# Facilitator guide
 
 Everything you need to run this workshop for other people: provisioning, timing, the
 failure modes participants actually hit, and extra material for when a group moves fast.
@@ -77,7 +77,7 @@ Outbound: all.
     make sure nobody carries them to anything real.
 
 !!! danger "Do not reuse a shared key pair across events"
-    Earlier versions of this workshop distributed one key pair to all instructors. A single
+    Earlier versions of this workshop distributed one key pair to all facilitators. A single
     private key that unlocks every instance ever built is not worth the convenience —
     generate one per event and delete it afterwards.
 

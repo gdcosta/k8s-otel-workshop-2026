@@ -14,7 +14,7 @@ export DEBIAN_FRONTEND=noninteractive
 # Generating a password per instance bought nothing on a disposable lab box and
 # cost a great deal: FW2 §2, FW2 §3, AW2 §4 and verify-fw2.sh all had to carry a
 # <YOUR_ADMIN_PASSWORD> placeholder instead of a copy-pasteable command, an
-# instructor could not help a stuck participant without asking them to read the
+# facilitator could not help a stuck participant without asking them to read the
 # password out, and anyone who lost the note was locked out of their own
 # instance mid-module with no recovery path documented anywhere.
 #

@@ -1145,7 +1145,7 @@
     bytes: 128982
     section: "View RUM statistics in Splunk Observability Cloud"
 
-instructor:
+facilitator:
   image1.png:
     kind: screenshot
     status: stale

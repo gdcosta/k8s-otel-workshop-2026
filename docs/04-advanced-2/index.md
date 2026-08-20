@@ -404,7 +404,7 @@ timing problem.
 
 !!! note "These are fixed workshop credentials, and they go on the command line"
     `admin` / `Workshop2026!` and `loc_svc` / `LogObserver2026!` are published constants so
-    that every step in the workshop is copy-pasteable and an instructor can help a stuck
+    that every step in the workshop is copy-pasteable and an facilitator can help a stuck
     participant without guessing a generated password.
 
     Be aware of what that command does, because it is the one place the workshop puts
@@ -1627,5 +1627,5 @@ Worth exploring from here:
 - **The OpenTelemetry Operator** for auto-instrumentation without rebuilding images
   (`operator.enabled` in the chart)
 - **The Kubernetes audit log** as a security data source — see the
-  [instructor guide](../instructor/index.md) for ready-made detections
+  [facilitator guide](../facilitator/index.md) for ready-made detections
 - **Tearing it down** — `helm uninstall`, `minikube delete`, and terminating the instance

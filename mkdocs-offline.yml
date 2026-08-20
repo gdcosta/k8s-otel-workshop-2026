@@ -57,7 +57,7 @@ nav:
   - 'AW #1 — Metrics & traces': 03-advanced-1/index.md
   - 'AW #2 — Observability Cloud': 04-advanced-2/index.md
   - Troubleshooting: troubleshooting.md
-  - 'Instructor guide': instructor/index.md
+  - 'Facilitator guide': facilitator/index.md
 
 use_directory_urls: false
 plugins:

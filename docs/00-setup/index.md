@@ -54,7 +54,7 @@ in AW #2 — Splunk Observability Cloud.
 
 !!! danger "Port 8000 must be scoped to your own address"
     This workshop uses fixed credentials that are printed in the guide — `admin` /
-    `Workshop2026!` — so every later command is copy-pasteable and an instructor can sign in
+    `Workshop2026!` — so every later command is copy-pasteable and an facilitator can sign in
     to help someone who is stuck. That is only safe while the login page is not open to the
     internet: an EC2 host name is predictable, and the password is on this page.
 
@@ -468,7 +468,7 @@ sudo -u splunk /opt/splunk/bin/splunk version
 
 !!! warning "Published credentials — two things follow, neither optional"
     `admin` / `Workshop2026!` is the same on every participant's instance and is printed in
-    this guide, so every later command is copy-pasteable and an instructor can sign in to
+    this guide, so every later command is copy-pasteable and an facilitator can sign in to
     help. Because of that:
 
     - **Port 8000 must be restricted to your own IP** in the security group. A published
