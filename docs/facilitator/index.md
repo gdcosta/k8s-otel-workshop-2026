@@ -50,7 +50,7 @@ Maven download the internet.
 |---|---|---|
 | 22 | participant CIDR | SSH |
 | 8000 | **the participant's own IP** | Splunk Web — see the warning below |
-| 8080 | participant CIDR | PetClinic port-forward |
+| 8080 | *not required* | see the note below — the tunnel makes this unnecessary |
 | 8089 | Splunk O11y realm IPs | AW #2 only — Log Observer Connect |
 
 Outbound: all.
@@ -76,10 +76,46 @@ Outbound: all.
     These are throwaway credentials on a disposable lab instance. Say so to the group, and
     make sure nobody carries them to anything real.
 
-!!! danger "Do not reuse a shared key pair across events"
-    Earlier versions of this workshop distributed one key pair to all facilitators. A single
-    private key that unlocks every instance ever built is not worth the convenience —
-    generate one per event and delete it afterwards.
+!!! note "8080 does not need opening, and 30000 would not help"
+    Participants reach PetClinic over an SSH tunnel on port 22. Verified on a running host:
+    NodePort **30000 is not bound on the instance's interfaces at all** — it exists only on
+    minikube's internal address `192.168.49.2` — so a rule for it would expose nothing.
+
+    Direct exposure needs *two* changes, and either alone does nothing: the port-forward
+    must be given `--address 0.0.0.0` (it binds loopback by default), **and** 8080 must be
+    opened to the participant's own IP. Prefer the tunnel — no rule, nothing on the
+    internet, and it ends with the SSH session.
+
+### Getting keys to participants
+
+Each participant needs a private key before they can start. Two workable arrangements:
+
+**Ask for public keys (preferred).** Collect an SSH public key from each participant
+ahead of the event and add it at launch. Their private key never leaves their machine,
+there is nothing for you to distribute or clean up, and a lost laptop compromises one
+instance rather than all of them. Send them:
+
+```bash
+ssh-keygen -t ed25519 -C "k8s-otel-workshop"   # then send me the .pub file only
+```
+
+**Or issue a key pair per participant.** If collecting keys in advance is impractical,
+generate a **separate** pair per instance and send each participant only theirs, over a
+channel you would use for any other credential — not a shared drive, not the event chat.
+Delete them afterwards.
+
+!!! danger "Never distribute one key pair to the whole room"
+    Earlier versions of this workshop distributed a single key pair to all facilitators. One
+    private key that unlocks every instance ever built is not worth the convenience, and it
+    means any participant can reach every other participant's instance — including the
+    Splunk instance holding their data. Generate per event at minimum, per participant
+    ideally, and delete afterwards.
+
+!!! tip "Tell participants which case they are in"
+    [Host setup](../00-setup/index.md) documents all three routes — key sent to them, public
+    key they supplied, or self-provisioned. Say explicitly which one applies at your event,
+    because every `ssh` command in the workshop begins `-i <your-key.pem>` and a participant
+    who does not know what to substitute cannot begin at all.
 
 ### Building instances
 

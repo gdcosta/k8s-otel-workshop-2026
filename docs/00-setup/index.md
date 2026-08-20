@@ -26,6 +26,24 @@ toolchain, and a local Splunk Enterprise instance.
 | **Disk** | 100 GB |
 | **Access** | SSH key pair — no password authentication |
 
+!!! info "Where `<your-key.pem>` comes from"
+    Every command in this workshop that reaches the instance uses a private key file,
+    written throughout as `<your-key.pem>`. Substitute your own path. Which case you are in
+    depends on how you got your instance:
+
+    | | You have | Do this |
+    |---|---|---|
+    | **A facilitator built it for you** | a `.pem` they sent you | save it somewhere private, then `chmod 400` it |
+    | **You gave them a public key** | your own existing private key | use it as-is — nothing new to save |
+    | **You are building your own** | whatever you create at launch | AWS offers a key pair in the launch wizard; download the `.pem` and keep it |
+
+    If a facilitator asks for a **public** key rather than sending you a private one, that
+    is the better arrangement — your private key never travels. Generate a pair with
+    `ssh-keygen -t ed25519` and send them only the `.pub` file.
+
+    You need this before step 1. There is no password login — that is deliberate, and
+    covered in step 5.
+
 !!! danger "ARM will not work"
     Splunk Enterprise has **no Linux ARM64 build**. Splunk's own documentation states
     *"The ARM architecture is not supported for use with Splunk Enterprise at this time"* —
