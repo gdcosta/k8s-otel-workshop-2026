@@ -73,6 +73,71 @@ def journey(page, base, n):
     page.wait_for_timeout(1000)
 
 
+def report_rum_status(page, base, js_errors):
+    """Confirm RUM actually initialised, and say precisely what failed if not.
+
+    Three outcomes are genuinely different problems, and the fix for each lives
+    somewhere else entirely:
+
+      1. the snippet never reached the page      -> template edit / image / rollout
+      2. the snippet is on the page but broke    -> the JavaScript in the snippet
+      3. the library loaded but init() never ran -> the SplunkRum.init({...}) call
+
+    Grepping the served HTML cannot tell these apart, which is why this check
+    exists: a snippet containing invalid JavaScript (a `#` comment, a missing
+    comma) is still present in the HTML, still matches every grep, and still
+    collects nothing at all. Only the browser knows the difference.
+    """
+    loaded = page.evaluate("typeof SplunkRum !== 'undefined'")
+    # Newer @splunk/otel-web sets `inited` once init() completes. If the property
+    # is absent we cannot distinguish 2 from 3, so treat the library loading as
+    # sufficient rather than raising a false alarm.
+    inited = page.evaluate(
+        "typeof SplunkRum !== 'undefined' && typeof SplunkRum.inited === 'boolean'"
+        " ? SplunkRum.inited : null"
+    )
+    html = page.content()
+    snippet_served = "SplunkRum.init" in html
+    cdn_served = "o11y-gdi-rum" in html
+
+    if loaded and inited is not False:
+        print("  ✓ SplunkRum is initialised in the browser")
+        return 0
+
+    print("  ✗ RUM did NOT initialise in the browser.")
+
+    if not cdn_served and not snippet_served:
+        print("    Cause: the snippet is ABSENT from the served HTML — neither the")
+        print("    o11y-gdi-rum <script> tag nor SplunkRum.init appears in the page.")
+        print("    Look at how the snippet gets in: re-check the template edit, rebuild")
+        print("    the image, and roll the deployment — a running pod may predate it.")
+    elif not loaded:
+        print("    Cause: the snippet IS in the served HTML, but the SplunkRum library")
+        print("    never became available. Either the o11y-gdi-rum <script> tag did not")
+        print("    load (check the CDN URL and this host's network access), or the")
+        print("    inline script threw before it could run.")
+        print("    The template edit and the image build are NOT the problem here — the")
+        print("    snippet reached the browser.")
+    else:
+        print("    Cause: the snippet IS in the served HTML and the library loaded, but")
+        print("    SplunkRum.init() never completed. The fault is inside the init block")
+        print("    itself — NOT the template edit and NOT the image build.")
+        print("    Usual culprit: invalid JavaScript inside SplunkRum.init({...}) — a")
+        print("    `#` comment (JavaScript comments are `//`), a comma swallowed into")
+        print("    such a comment, or an unquoted value.")
+
+    if js_errors:
+        print("    JavaScript errors raised by the page:")
+        for err in js_errors:
+            print(f"      {err.splitlines()[0]}")
+    else:
+        print("    The page raised no JavaScript errors, so nothing threw at parse time.")
+
+    print("    Read the block back as JavaScript, not as YAML:")
+    print(f"      curl -s {base}/ | sed -n '/SplunkRum.init/,/}});/p'")
+    return 1
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://minikube:30000")
@@ -90,13 +155,17 @@ def main():
         context = browser.new_context(viewport={"width": 1440, "height": 900})
         page = context.new_page()
 
+        # Uncaught JavaScript errors are the evidence that separates "the snippet
+        # never arrived" from "the snippet arrived and is broken". Listen before
+        # the first navigation so a parse-time error is not missed.
+        js_errors = []
+        page.on("pageerror", lambda e: js_errors.append(str(e)))
+
         page.goto(f"{args.url}/", wait_until="networkidle")
-        if not page.evaluate("typeof SplunkRum !== 'undefined'"):
-            print("  ✗ SplunkRum is NOT defined — the RUM snippet is not being served.")
-            print("    Check the <head> of the page source before going further.")
+        rum_status = report_rum_status(page, args.url, js_errors)
+        if rum_status:
             browser.close()
-            return 1
-        print("  ✓ SplunkRum is initialised in the browser")
+            return rum_status
 
         for i in range(args.iterations):
             journey(page, args.url, i)

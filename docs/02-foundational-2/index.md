@@ -33,7 +33,7 @@ echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
 
     ```bash
     cat > ~/.workshop-env <<'EOF'
-    export WS_USER=<your-username>
+    export WS_USER=<the username you were assigned, e.g. wsuser01>
     export LOCAL_IP=$(ec2metadata --local-ipv4)
     export PUB_DNS=$(ec2metadata --public-hostname)
     export CHART_VERSION=0.158.0
@@ -77,7 +77,7 @@ sudo -i -u splunk
 /opt/splunk/bin/splunk status
 ```
 
-Open Splunk Web and log in with the credentials from host setup:
+Open Splunk Web and log in as `admin` with the password `Workshop2026!`:
 
 ```bash
 echo "http://$PUB_DNS:8000"
@@ -113,7 +113,7 @@ echo "http://$PUB_DNS:8000"
 
     ```bash
     SPLUNK=/opt/splunk/bin/splunk
-    AUTH="-auth admin:<YOUR_ADMIN_PASSWORD>"
+    AUTH="-auth admin:Workshop2026!"
 
     for idx in k8s_ws_logs k8s_ws_petclinic_logs k8s_ws_traces; do
       $SPLUNK add index $idx $AUTH
@@ -126,30 +126,71 @@ echo "http://$PUB_DNS:8000"
     $SPLUNK list index $AUTH | grep k8s_ws
     ```
 
+    !!! note "Every `/opt/splunk/bin/splunk` command prints a TLS warning"
+        Each invocation emits `WARNING: Server Certificate Hostname Validation is disabled.
+        Please see server.conf/[sslConfig]/cliVerifyServerName for details.` — once per
+        command, here and everywhere else the CLI is used. It's expected on a lab instance
+        with a self-signed certificate. Ignore it; it isn't a symptom of anything.
+
 ---
 
 ## 3. Create an HTTP Event Collector token
 
 HEC is the HTTP endpoint the Collector will push events to.
 
-!!! danger "Splunk 10.x enables SSL on HEC by default — you must turn it off"
-    This changed from earlier releases. In Splunk 10, HEC listens on **HTTPS** out of the
-    box. If you point the Collector at `http://…:8088` without changing this, the
-    connection is reset and **no data arrives, with no useful error**.
+!!! danger "Two toggles on the Global Settings page — you need to change both"
+    On a clean Splunk 10.x install HEC ships **disabled**, and SSL ships **on**. Neither
+    default is what this workshop needs, and changing only one of them still leaves you with
+    a Collector that delivers nothing.
 
-    **Settings → Data Inputs → HTTP Event Collector → Global Settings**, untick
-    **Enable SSL**, and Save.
+    **Settings → Data Inputs → HTTP Event Collector → Global Settings**:
 
-**Settings → Data Inputs → HTTP Event Collector → New Token**
+    - Set **All Tokens** to **Enabled**. It ships **Disabled**, which means nothing is
+      listening on 8088 at all — the smoke test below gets *connection refused*, not an
+      authentication error.
+    - Untick **Enable SSL**. This changed from earlier releases: in Splunk 10 HEC listens on
+      **HTTPS** out of the box, so pointing the Collector at `http://…:8088` gets the
+      connection reset, with **no useful error**.
+    - Leave **HTTP Port Number** at `8088`, then **Save**.
 
-- Name: `k8s-ws-hec`
-- Allowed indexes: all five you just created
-- Default index: `k8s_ws_logs`
+=== "Splunk Web"
 
-Copy the token value. Then confirm the whole path works before going further:
+    **Settings → Data Inputs → HTTP Event Collector → New Token**
+
+    - Name: `k8s-ws-hec`
+    - Allowed indexes: all five you just created
+    - Default index: `k8s_ws_logs`
+
+    Copy the token value.
+
+=== "Command line"
+
+    Both halves of the step — the Global Settings change and the token — without needing a
+    tunnel to port 8000.
+
+    ```bash
+    SPLUNK=/opt/splunk/bin/splunk
+    AUTH="-auth admin:Workshop2026!"
+
+    # Global Settings: enable HEC, turn SSL off, keep the port at 8088
+    curl -sk -u admin:Workshop2026! -X POST \
+      https://localhost:8089/servicesNS/nobody/splunk_httpinput/data/inputs/http/http \
+      -d enableSSL=0 -d disabled=0 -d port=8088
+
+    # New Token
+    $SPLUNK http create k8s-ws-hec -index k8s_ws_logs \
+      -indexes k8s_ws_logs,k8s_ws_petclinic_logs,k8s_ws_traces,k8s_ws_metrics,k8s_ws_petclinic_metrics $AUTH
+    ```
+
+    The token value is printed in the output of the `http create` command. As in step 2,
+    each `$SPLUNK` call also prints the `Server Certificate Hostname Validation is disabled`
+    warning — expected, ignore it.
+
+Then confirm the whole path works before going further:
 
 ```bash
-# Save it to the env file so later modules and new terminals pick it up
+# Keep the token in the env file so you don't have to go looking for it again.
+# Nothing sources this file for you — run `source ~/.workshop-env` in every new terminal.
 echo 'export HEC_TOKEN=<your-token>' >> ~/.workshop-env
 source ~/.workshop-env
 
@@ -171,7 +212,7 @@ You want `{"text":"Success","code":0}` and `200`.
 | Empty body, `000` | SSL still enabled on HEC — see the warning above |
 | `{"text":"Invalid token"}` | Token copied incorrectly |
 | `{"text":"Incorrect index"}` | Index not in the token's allowed list |
-| Connection refused | HEC not enabled globally, or Splunk not running |
+| Connection refused | **All Tokens** still `Disabled` in Global Settings, or Splunk not running |
 </details>
 
 Now find it in Splunk: `index=k8s_ws_logs hec-smoketest`
@@ -260,16 +301,32 @@ index=k8s_ws_logs | stats count by sourcetype
 <summary>Expected sourcetypes</summary>
 
 ```
-kube:container:kube-apiserver          3711
-kube:container:<you>-petclinic-...     2080
-kube:container:storage-provisioner      586
-kube:object:pods                        110
-kube:object:events                       54
-kube:container:etcd                       6
+kube:container:kube-apiserver                       5815
+kube:container:storage-provisioner                   896
+kube:container:otel-collector                         68
+kube:container:${WS_USER}-petclinic-...               46
+kube:object:pods                                      10
+kube:container:etcd                                    9
+workshop:test                                          1
+```
+
+**The counts are illustrative.** They vary a lot with how long the cluster has been up —
+it's the rows that matter, not the numbers.
+
+`kube:container:otel-collector` is the Collector reporting on itself, because the overlay
+above set `excludeAgentLogs: false`. `workshop:test` is the single smoke-test event you sent
+in step 3.
+
+`kube:object:events` may be **missing entirely at this point, and that is not a fault**. It
+is collected in `mode: watch`, so it only emits when something in the cluster *changes* — on
+a quiet, freshly installed cluster there may be nothing for several minutes. Force one:
+
+```bash
+kubectl delete pod <any-pod>
 ```
 
 No PetClinic rows yet? The application has had no traffic. That's what the load generator
-in step 6 is for — for now, `curl http://minikube:30000/` a few times to prove the path
+in step 7 is for — for now, `curl http://minikube:30000/` a few times to prove the path
 works.
 </details>
 
@@ -302,124 +359,7 @@ index=k8s_ws_logs sourcetype="kube:container:kube-apiserver" "user.username"="sy
 
 ---
 
-## 6. Set up the load generator
-
-Clicking around the application by hand produces a trickle of logs. Everything from here on
-— multiline stack traces, annotations, transforms, and all of both Advanced workshops —
-works far better with steady, repeatable traffic. So let's set up Apache JMeter once and
-reuse it for the rest of the series.
-
-!!! abstract "Learning moment — why generate load at all"
-    Observability tooling only shows you what actually happened. With no traffic there are
-    no application logs to transform, no error rates to read, and no traces to follow.
-
-    The test plan below walks the PetClinic application the way a user would — find an
-    owner, edit them, add a visit, browse vets — and deliberately triggers the app's error
-    page on every pass, so you always have real exceptions to find.
-
-### Open a second terminal
-
-**JMeter runs in the foreground and won't give your prompt back.** You'll want one terminal
-running load and another to keep working in.
-
-```bash
-ssh -i <your-key.pem> splunk@<your-instance>     # echo $PUB_DNS on the host for the name
-```
-
-!!! tip "If your session keeps timing out"
-    Some hardened hosts log you out after ~15 minutes at an idle prompt, which will kill a
-    running test. Use `tmux` so the run survives a disconnect:
-
-    ```bash
-    tmux new -s load          # start (or: tmux attach -t load to come back)
-    ```
-
-    Detach with ++ctrl+b++ then ++d++. The test keeps running.
-
-### Install JMeter
-
-```bash
-export WS_USER=<your-username>          # new terminal, so set this again
-mkdir -p ~/k8s_workshop/jmeter && cd ~/k8s_workshop/jmeter
-
-curl -fsSLO https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz
-tar -xzf apache-jmeter-5.6.3.tgz
-rm apache-jmeter-5.6.3.tgz
-./apache-jmeter-5.6.3/bin/jmeter --version
-```
-
-!!! note "Stock JMeter, no plugins"
-    Earlier versions of this workshop used a custom 111 MB JMeter build. It isn't needed —
-    this test plan uses only standard HTTP samplers. Advanced Workshop #2 handles
-    browser-based testing separately, with Playwright.
-
-### Get the test plan
-
-```bash
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/jmeter/petclinic_test_plan.jmx
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/jmeter/petclinic_owner_pets.csv
-ls -l
-```
-
-Both files must sit in the same directory — the plan reads the CSV by relative path.
-
-??? info "What's in the CSV, and why it exists"
-    PetClinic's seed data has 10 owners and 13 pets, and they are **not** numbered in
-    parallel — owner 3 has two pets, so owner 4's pet is number 5, and it drifts from there:
-
-    ```
-    1→1   2→2   3→3,4   4→5   5→6   6→7,8   7→9   8→10   9→11   10→12,13
-    ```
-
-    An earlier version of this plan generated the two IDs with independent counters, which
-    desynchronised after the third iteration and made ~90% of "add visit" requests fail
-    with HTTP 500. The CSV supplies only real, verified pairs.
-
-### Run it
-
-```bash
-./apache-jmeter-5.6.3/bin/jmeter -n \
-  -t petclinic_test_plan.jmx \
-  -JPETCLINIC_HOST=minikube \
-  -JPETCLINIC_PORT=30000 \
-  -l results.jtl
-```
-
-`-n` means non-GUI mode. 5 threads × 50 loops takes roughly **5 minutes**.
-
-<details>
-<summary>Expected output</summary>
-
-```
-summary +    486 in 00:00:30 =   16.2/s Avg:     8 Min: 2 Max: 70 Err: 19 (3.91%) Active: 5
-summary =   3750 in 00:04:03 =   15.4/s Avg:     6 Min: 1 Max: 85 Err: 250 (6.67%)
-```
-
-**The ~6.7% error rate is deliberate.** One sampler in thirteen calls the application's
-`/oups` endpoint, which throws a `RuntimeException` on purpose. You'll go looking for those
-exceptions in a moment, and in the Advanced workshops that same rate appears as the service
-error rate in APM.
-
-Anything materially above ~7% is worth investigating — check that PetClinic is healthy with
-`kubectl get pods`.
-</details>
-
-Stop early with ++ctrl+c++ if you need to. To run longer, raise the loop count:
-
-```bash
-./apache-jmeter-5.6.3/bin/jmeter -n -t petclinic_test_plan.jmx \
-  -JPETCLINIC_HOST=minikube -JPETCLINIC_PORT=30000 \
-  -Jloops=500 -l results.jtl
-```
-
-!!! tip "Leave it running"
-    Switch back to your first terminal and carry on with the workshop while load continues.
-    Every remaining step in this module benefits from live traffic. If the run finishes
-    before you do, just start it again.
-
----
-
-## 7. Make the application actually log
+## 6. Make the application actually log
 
 Before searching, there's a problem worth discovering yourself. Run some traffic, then look
 at what the container emitted:
@@ -461,14 +401,22 @@ container output. Add to the container's `env:` block in your manifest:
 ```
 
 ??? example "What your manifest should look like around here"
-    The access-log variables sit inside the container's existing `env:` list, after the profiler entries. Indentation matters — they're list items at the same level as the others.
+    The access-log variables sit inside the container's existing `env:` list, after the two
+    OTel entries FW #1 put there. Indentation matters — they're list items at the same level
+    as the others.
+
+    At this point in the sequence those two are the *only* env entries you have. The
+    profiler variables and `LOGGING_PATTERN_LEVEL` you'll see in the reference manifest at
+    the bottom of this page are added in AW #2 — don't go looking for them now.
 
     ```yaml
-            # The agent already puts trace_id/span_id in the MDC; Spring Boot's
-            # default pattern just never prints them. Without this there is no
-            # trace_id on the logs and APM <-> Logs correlation cannot work.
-            - name: LOGGING_PATTERN_LEVEL
-              value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
+            # Already present from FW #1 — shown so you can see where the new block goes.
+            - name: SPLUNK_OTEL_AGENT
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://$(SPLUNK_OTEL_AGENT):4317"
 
             # --- FW2: access logging -----------------------------------------------
             # PetClinic logs nothing for successful requests — only startup and
@@ -537,9 +485,129 @@ kubectl logs deploy/${WS_USER}-petclinic-otel-deployment --since=1m | tail -3
 10.244.0.1 - - [19/Aug/2026:21:26:38 +0000] "GET /owners?lastName= HTTP/1.1" 200 5015 72495
 ```
 
-Roughly 100 lines a minute under load, against zero before. The trailing number is the
-response time in microseconds — useful shortly.
+One line per request — thirty of them, against zero before. The trailing number is the
+response time in microseconds, which becomes useful shortly.
 </details>
+
+---
+
+## 7. Set up the load generator
+
+You have one line per request now — but only for the requests you make by hand. Everything
+from here on (multiline stack traces, annotations, transforms, and all of both Advanced
+workshops) works far better with steady, repeatable traffic. So let's set up Apache JMeter
+once and reuse it for the rest of the series.
+
+!!! abstract "Learning moment — why generate load at all"
+    Observability tooling only shows you what actually happened. With no traffic there are
+    no application logs to transform, no error rates to read, and no traces to follow.
+
+    The test plan below walks the PetClinic application the way a user would — find an
+    owner, edit them, add a visit, browse vets — and deliberately triggers the app's error
+    page on every pass, so you always have real exceptions to find.
+
+### Open a second terminal
+
+**JMeter runs in the foreground and won't give your prompt back.** You'll want one terminal
+running load and another to keep working in.
+
+```bash
+ssh -i <your-key.pem> splunk@<your-instance>     # echo $PUB_DNS on the host for the name
+```
+
+!!! tip "If your session keeps timing out"
+    Some hardened hosts log you out after ~15 minutes at an idle prompt, which will kill a
+    running test. Use `tmux` so the run survives a disconnect:
+
+    ```bash
+    tmux new -s load          # start (or: tmux attach -t load to come back)
+    ```
+
+    Detach with ++ctrl+b++ then ++d++. The test keeps running.
+
+### Install JMeter
+
+```bash
+source ~/.workshop-env                  # new terminal, so load the variables again
+mkdir -p ~/k8s_workshop/jmeter && cd ~/k8s_workshop/jmeter
+
+curl -fsSLO https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz
+tar -xzf apache-jmeter-5.6.3.tgz
+rm apache-jmeter-5.6.3.tgz
+./apache-jmeter-5.6.3/bin/jmeter --version
+```
+
+!!! note "Stock JMeter, no plugins"
+    Earlier versions of this workshop used a custom 111 MB JMeter build. It isn't needed —
+    this test plan uses only standard HTTP samplers. Advanced Workshop #2 handles
+    browser-based testing separately, with Playwright.
+
+### Get the test plan
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/jmeter/petclinic_test_plan.jmx
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/jmeter/petclinic_owner_pets.csv
+ls -l
+```
+
+Both files must sit in the same directory — the plan reads the CSV by relative path.
+
+??? info "What's in the CSV, and why it exists"
+    PetClinic's seed data has 10 owners and 13 pets, and they are **not** numbered in
+    parallel — owner 3 has two pets, so owner 4's pet is number 5, and it drifts from there:
+
+    ```
+    1→1   2→2   3→3,4   4→5   5→6   6→7,8   7→9   8→10   9→11   10→12,13
+    ```
+
+    An earlier version of this plan generated the two IDs with independent counters, which
+    desynchronised after the third iteration and made ~90% of "add visit" requests fail
+    with HTTP 500. The CSV supplies only real, verified pairs.
+
+### Run it
+
+```bash
+./apache-jmeter-5.6.3/bin/jmeter -n \
+  -t petclinic_test_plan.jmx \
+  -JPETCLINIC_HOST=minikube \
+  -JPETCLINIC_PORT=30000 \
+  -l results.jtl
+```
+
+`-n` means non-GUI mode. 5 threads × 50 loops takes roughly **5 minutes**.
+
+<details>
+<summary>Expected output</summary>
+
+```
+summary =    971 in 00:01:06 = 14.8/s ... Err:  72 (7.42%)
+summary =   1457 in 00:01:36 = 15.2/s ... Err: 110 (7.55%)
+```
+
+(The `Avg`/`Min`/`Max` columns are trimmed above for width; you'll see them.)
+
+**The ~7.7% error rate is deliberate.** One sampler in thirteen calls the application's
+`/oups` endpoint, which throws a `RuntimeException` on purpose. One in thirteen is **7.69%**,
+which is the ceiling — early iterations run slightly under it, so a healthy run settles
+somewhere around 7.4–7.7%. You'll go looking for those exceptions in a moment, and in the
+Advanced workshops that same rate appears as the service error rate in APM.
+
+Only worry if you're materially above **~10%** — then check that PetClinic is healthy with
+`kubectl get pods`.
+</details>
+
+Stop early with ++ctrl+c++ if you need to. To run longer, raise the loop count:
+
+```bash
+./apache-jmeter-5.6.3/bin/jmeter -n -t petclinic_test_plan.jmx \
+  -JPETCLINIC_HOST=minikube -JPETCLINIC_PORT=30000 \
+  -Jloops=500 -l results.jtl
+```
+
+!!! tip "Leave it running"
+    Switch back to your first terminal and carry on with the workshop while load continues.
+    Every remaining step in this module benefits from live traffic. If the run finishes
+    before you do, just start it again.
 
 ---
 
@@ -554,23 +622,56 @@ index=k8s_ws_logs "k8s.container.name"="${WS_USER}-petclinic-otel-container01" R
 You should see a steady stream of exceptions — the `/oups` endpoint firing on every pass of
 the test plan.
 
-### ✅ Checkpoint — the numbers should agree
+### ✅ Checkpoint — do the two systems agree?
 
-JMeter reported roughly 6.7% failures. Confirm Splunk sees the same events:
+JMeter reports roughly **7.7%** failures. Ask Splunk the same question — but ask it of the
+*access log*, which is one line per request, exactly like JMeter's counter:
 
 ```
 index=k8s_ws_logs "k8s.container.name"="${WS_USER}-petclinic-otel-container01"
-| stats count(eval(searchmatch("RuntimeException"))) as errors, count as total
-| eval error_pct = round(errors*100/total, 1)
+| rex "\" (?<status>\d{3}) "
+| where isnotnull(status)
+| stats count(eval(status>=500)) as errors, count as requests
+| eval error_pct = round(errors*100/requests, 2)
 ```
 
-!!! abstract "Learning moment — corroboration is the point"
-    You now have the same failures visible in two places: the tool that *caused* them and
-    the platform that *collected* them. In the Advanced workshops a third view is added —
-    APM's service error rate — and all three should agree.
+```
+errors  requests  error_pct
+    30       458       6.55
+```
 
-    That agreement is what makes the data trustworthy. When they *disagree*, that's a
-    finding in itself: something is being dropped, sampled, or misrouted.
+Within about a point of JMeter, over a shorter window. That's agreement. The same failures
+are now visible in two places: the tool that *caused* them and the platform that *collected*
+them. In the Advanced workshops a third view is added — APM's service error rate — and all
+three land within a point of each other (measured over one window: JMeter 7.69%, Splunk
+7.10%, APM 6.90%).
+
+!!! abstract "Learning moment — what you count decides whether you agree"
+    The obvious version of that query counts every event in the index:
+
+    ```
+    | stats count(eval(searchmatch("RuntimeException"))) as errors, count as total
+    ```
+
+    Run it and you get roughly **3.7%** against JMeter's 7.55%. Nothing is broken.
+
+    `total` counts **log events, not requests**. At this point in the module a 100-line Java
+    stack trace is 100 separate events, because nothing has reassembled it yet. Break the
+    denominator down and it is 93% stack-trace continuation lines:
+
+    ```
+    stack-trace continuation  7821
+    access-log line            451
+    exception header           310
+    other app log               60
+    ```
+
+    Neither side of that ratio corresponds to a request, so the percentage means nothing —
+    and it drifts with stack depth, so you can't fix it by adjusting the expected number.
+
+    Two systems appearing to disagree is far more often a difference in *what is being
+    counted* than a sign that data was dropped. It is also the concrete reason for the next
+    step: the denominator is polluted precisely because stack traces aren't reassembled yet.
 
 Now look closely at **how** the exception arrived. The stack trace is **split across many
 separate events**, one line each. That's the next problem to solve.
@@ -623,10 +724,6 @@ logsCollection:
             containerName:
               value: ${WS_USER}-petclinic-otel-container01
             firstEntryRegex: ^[^\s].*
-
-    # FW2: promote pod annotations to event attributes.
-    # tag_name gives a clean field name directly — no regex prefix-stripping needed.
-    # [FW2] Promote pod annotations onto events.
     ```
 
 ??? abstract "Full command sequence — collector change"
@@ -709,7 +806,7 @@ Add annotations to the pod template in your manifest:
           labels:
             app: ${WS_USER}-petclinic-otel-app
           annotations:
-            docker_image_author: "gerry"
+            docker_image_author: "${WS_USER}"
             splunk.com/index: "k8s_ws_petclinic_logs"
     ```
 
@@ -794,6 +891,7 @@ agent:
           - set(log.severity_number, SEVERITY_NUMBER_ERROR) where log.attributes["log_level"] == "ERROR"
           - set(log.severity_number, SEVERITY_NUMBER_WARN)  where log.attributes["log_level"] == "WARN"
           - set(log.severity_number, SEVERITY_NUMBER_INFO)  where log.attributes["log_level"] == "INFO"
+          - set(log.severity_number, SEVERITY_NUMBER_DEBUG) where log.attributes["log_level"] == "DEBUG"
 
           # A recombined stack trace begins with the exception class and carries
           # no level token of its own, so classify it explicitly.
@@ -814,6 +912,14 @@ agent:
           - set(log.severity_text, "ERROR") where IsMatch(log.attributes["http_status"], "^5")
           - set(log.severity_number, SEVERITY_NUMBER_INFO) where log.severity_text == "INFO"
           - set(log.severity_number, SEVERITY_NUMBER_WARN) where log.severity_text == "WARN"
+
+          # Log Observer's Severity column reads the RECORD's severity_text — which the
+          # splunk_hec exporter writes to Splunk as `otel.log.severity.text`, not as
+          # something you'd think to search on. Mirror it to an attribute so the same
+          # value is also a plain `severity` field in Splunk. One source of truth, two
+          # consumers. Leave this out and every `severity` search in this module, and in
+          # AW #2, returns nothing.
+          - set(log.attributes["severity"], log.severity_text) where log.severity_text != nil
     service:
       pipelines:
         logs:
@@ -865,7 +971,8 @@ agent:
     **3. Severity is a record field, not an attribute.** Setting
     `log.attributes["severity"]` produces a searchable field in Splunk but leaves
     Observability Cloud's Severity column showing **UNKNOWN**. Only `log.severity_text`
-    and `log.severity_number` drive it.
+    and `log.severity_number` drive it. That's why the last statement in the block sets
+    **both**: the record field for Log Observer, the mirrored attribute for Splunk search.
 
     There is no error for any of these. The Collector stays healthy and no data changes.
 
@@ -882,26 +989,64 @@ kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent
 
 ### ✅ Checkpoint
 
+Three searches. The sourcetype should have been rewritten, severity should be derived from
+the HTTP status, and response times should now be measurable straight from the logs:
+
 ```
 index=k8s_ws_petclinic_logs | stats count by sourcetype
-index=k8s_ws_petclinic_logs | stats count by http_status, severity
-index=k8s_ws_petclinic_logs http_duration_us=*
-| eval ms=round(http_duration_us/1000,1)
-| stats count, round(avg(ms),1) as avg_ms by http_path | sort -count
 ```
+
+```
+index=k8s_ws_petclinic_logs | stats count by http_status, severity
+```
+
+```
+index=k8s_ws_petclinic_logs http_duration_us=*
+| eval ms=http_duration_us/1000
+| stats count, avg(ms) as avg_ms by http_path
+| eval avg_ms=round(avg_ms,1)
+| sort -count
+```
+
+!!! note "`round()` goes after `stats`, not inside it"
+    Writing `| stats count, round(avg(ms),1) as avg_ms by http_path` looks reasonable and is
+    rejected: *`Error in 'stats' command: The argument 'round(avg(ms),1)' is invalid`*.
+    `stats` takes aggregates, not eval functions wrapping aggregates — round afterwards, in
+    its own `eval`. In Splunk Web this arrives as a red banner over an empty results pane,
+    which reads like "no data" rather than "bad query".
 
 <details>
 <summary>Expected</summary>
 
+Second search — severity derived from the status code:
+
 ```
-http_status  severity  count          http_path            count  avg_ms
-200          INFO        964          /                      312     8.1
-302          INFO         76          /owners?lastName=      298    12.4
-500          ERROR       147          /oups                   75     6.2
+http_status  severity  count
+200          INFO       2438
+302          INFO        200
+500          ERROR       221
 ```
 
-Severity is now derived from the status code, and you can measure response times
-straight from the logs — neither of which was possible before access logging.
+Third search — response times per endpoint:
+
+```
+http_path                                          count  avg_ms
+/                                                    240     3.0
+/resources/css/petclinic.css                         240     3.1
+/webjars/bootstrap/dist/js/bootstrap.bundle.min.js   239     1.9
+/owners/find                                         238     4.1
+/owners?lastName=                                    238    10.0
+/vets.html                                           238     5.0
+```
+
+Counts are illustrative, but their *shape* isn't: every non-`/oups` sampler fires once per
+iteration, so the top rows sit within one or two of each other. Neither of these searches was
+possible before access logging.
+
+Second search came back **empty**? `stats by` on a field that does not exist returns zero
+rows rather than an error, so an empty table means `severity` was never created — not that
+your `where` clauses failed to match. Check the mirror statement
+(`set(log.attributes["severity"], log.severity_text)`) is present in your transform.
 
 Still seeing `kube:container:...`? The transform didn't apply. Read the *generated* config
 — this is the debugging move that resolves it:
@@ -923,16 +1068,24 @@ steps. They're the exact files this module was tested with.
 
 
 ??? example "values-workshop.yaml (collector overlay)"
-    Placeholders are rendered with `envsubst`; substitute your own values by hand if you prefer.
+    This is the **final** state of the file, after AW #1 and AW #2. Each top-level
+    section is tagged `[FW2]`, `[AW1]` or `[AW2]` with the module that introduces it —
+    at the end of FW #2 you have the `[FW2]` sections only, and the rest is here so the
+    whole series has one canonical file to compare against. Placeholders are rendered
+    with `envsubst`; substitute your own values by hand if you prefer.
     ```yaml
     # Splunk OTel Collector — final workshop overlay (FW2 + AW1 + AW2).
     # TESTED end to end on 2026-08-19 against chart 0.158.0.
     #
     # Render:  WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) \
-    #          HEC_TOKEN=<hec> O11Y_TOKEN=<ingest> O11Y_REALM=us1 \
+    #          HEC_TOKEN=<hec> \
     #          envsubst < values-final.yaml > my-values.yaml
+    #
+    # The Observability Cloud ingest token is NOT rendered into the file. It is
+    # passed at install time, straight out of ~/.o11y-token:
     # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-    #            --version 0.158.0 -f my-values.yaml
+    #            --version 0.158.0 -f my-values.yaml \
+    #            --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
     #
     # Validate first — the chart schema is the only check that fails loudly:
     #          helm upgrade ... --dry-run=client
@@ -942,10 +1095,13 @@ steps. They're the exact files this module was tested with.
     # [AW2] Second destination. Added without changing how anything is collected.
     splunkObservability:
       realm: "us1"
-      accessToken: "${O11Y_TOKEN}"
+      # accessToken is deliberately absent. It is supplied at install time with
+      #   --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
+      # so the ingest token never lands in a file that gets compared, pasted or
+      # published — which is what makes this reference file safe to share.
       metricsEnabled: true
       tracesEnabled: true
-      profilingEnabled: true     # enabled later in this module
+      profilingEnabled: true     # enabled in step 6
 
     # [FW2] Splunk Enterprise via HEC.  [AW1] adds metricsIndex / tracesIndex.
     splunkPlatform:
@@ -1092,7 +1248,10 @@ steps. They're the exact files this module was tested with.
     ```
 
 ??? example "petclinic manifest"
-    
+    Also the **final** state: the profiler variables and `LOGGING_PATTERN_LEVEL` below
+    are added in AW #2, so at the end of FW #2 your manifest is this file minus those
+    three blocks. The comments name the module each one belongs to.
+
     ```yaml
     # PetClinic Deployment + NodePort Service — final workshop state.
     # TESTED 2026-08-19. Render with: WS_USER=<you> envsubst < petclinic-final.yml
@@ -1125,37 +1284,48 @@ steps. They're the exact files this module was tested with.
           labels:
             app: ${WS_USER}-petclinic-otel-app
           annotations:
-            docker_image_author: "gerry"
+            docker_image_author: "${WS_USER}"
             splunk.com/index: "k8s_ws_petclinic_logs"
         spec:
           containers:
           - name: ${WS_USER}-petclinic-otel-container01
-            image: gerry/petclinic-otel:v1
+            image: ${WS_USER}/petclinic-otel:v1
             imagePullPolicy: Never
             ports:
             - containerPort: 8080
             env:
+            # --- AW1: where to send telemetry -------------------------------------
+            # The collector agent is a DaemonSet, so the right target is whichever
+            # node this pod landed on. A pod cannot resolve the `minikube` hosts
+            # entry — that exists only on the host.
             - name: SPLUNK_OTEL_AGENT
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://$(SPLUNK_OTEL_AGENT):4317"
-            # AlwaysOn Profiling
+
+            # --- AW2: AlwaysOn Profiling ------------------------------------------
             - name: SPLUNK_PROFILER_ENABLED
               value: "true"
             - name: SPLUNK_PROFILER_MEMORY_ENABLED
               value: "true"
-            # The profiler defaults to http/protobuf on :4318. Our endpoint is gRPC
-            # on :4317, so the protocol must be matched or profiling silently fails.
+            # Defaults to http/protobuf on :4318, but our endpoint above is gRPC on
+            # :4317. Mismatched, the profiler starts and sends nothing, with no error.
             - name: SPLUNK_PROFILER_OTLP_PROTOCOL
               value: "grpc"
-            # Print the trace context the agent puts into the MDC. Without this the
-            # log line has no trace_id and APM<->Logs correlation cannot work.
+
+            # --- AW2: trace context in the log line --------------------------------
+            # The agent already puts trace_id/span_id in the MDC; Spring Boot's
+            # default pattern just never prints them. Without this there is no
+            # trace_id on the logs and APM <-> Logs correlation cannot work.
+            - name: LOGGING_PATTERN_LEVEL
+              value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
+
+            # --- FW2: access logging -----------------------------------------------
             # PetClinic logs nothing for successful requests — only startup and
-            # exceptions. Tomcat access logging gives one line per request, which is
-            # what makes the log exercises worth doing.
-            # directory=/dev + prefix=stdout with empty suffix writes to /dev/stdout.
+            # exceptions. One line per request is what makes the log exercises work.
+            # directory=/dev + prefix=stdout + empty suffix resolves to /dev/stdout.
             - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
               value: "true"
             - name: SERVER_TOMCAT_ACCESSLOG_DIRECTORY
@@ -1168,10 +1338,9 @@ steps. They're the exact files this module was tested with.
               value: ""
             - name: SERVER_TOMCAT_ACCESSLOG_BUFFERED
               value: "false"
+            # Single quotes: the pattern contains double quotes.
             - name: SERVER_TOMCAT_ACCESSLOG_PATTERN
               value: '%h %l %u %t "%r" %s %b %D'
-            - name: LOGGING_PATTERN_LEVEL
-              value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
             readinessProbe:
               httpGet:
                 path: /actuator/health
@@ -1188,13 +1357,21 @@ steps. They're the exact files this module was tested with.
     diff <(sed 's/[[:space:]]*$//' ~/k8s_workshop/k8s_otel/values-workshop.yaml) \
          <(sed 's/[[:space:]]*$//' /tmp/reference.yaml)
     ```
-    The reference is the **final** state after AW #2. Each top-level section is tagged
-    `[FW2]`, `[AW1]` or `[AW2]` with the module that introduces it, so ignore anything
-    tagged for a module you haven't reached yet.
+    Same file as the block above, so expect the `[AW1]` and `[AW2]` sections to show as
+    differences — ignore anything tagged for a module you haven't reached yet.
 
 ## ✅ Module checkpoint
 
 ```bash
+~/k8s-otel-workshop/scripts/verify-fw2.sh
+```
+
+The script logs into Splunk to run its searches. It defaults to `admin:Workshop2026!` — the
+credentials this workshop uses. If you changed the admin password during host setup, tell it
+so first:
+
+```bash
+export SPLUNK_AUTH=admin:<your-admin-password>
 ~/k8s-otel-workshop/scripts/verify-fw2.sh
 ```
 

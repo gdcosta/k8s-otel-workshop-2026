@@ -10,6 +10,12 @@ regexes = [
   '''00000000-0000-0000-0000-000000000000''',             # canary dummy token
   '''xxxxxxxx-xxxx-xxxx-xxxx-[0-9a-f]{12}''',             # redacted examples
   '''CHANGE_ME''',
+  # Fixed workshop lab credentials, published in the guide on purpose (finding F41).
+  # These exist only on disposable per-participant EC2 instances whose Splunk Web port
+  # is restricted to the participant's own IP. They are never valid anywhere else, and
+  # must never be reused. Listed here so the intent is explicit rather than incidental.
+  '''Workshop2026!''',
+  '''LogObserver2026!''',
 ]
 paths = [
   '''docs/assets/img/.*''',        # screenshots are reviewed by eye, not regex

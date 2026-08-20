@@ -4,9 +4,16 @@
 # matches early, which pipefail would report as a failed check.
 set -u
 : "${WS_USER:?export WS_USER=<your-username>}"
-# SPLUNK_AUTH is optional here; without it the log-side checks are skipped.
 REALM=${REALM:-us1}
 SPLUNK=${SPLUNK:-/opt/splunk/bin/splunk}
+REPO_DIR=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
+
+# The workshop ships fixed lab credentials (00-setup), so the log-side checks no
+# longer silently skip. Override if you changed the admin password:
+#   export SPLUNK_AUTH=admin:<your-password>
+# Set it to the empty string to skip the log-side checks deliberately.
+WORKSHOP_AUTH='admin:Workshop2026!'
+SPLUNK_AUTH="${SPLUNK_AUTH:-$WORKSHOP_AUTH}"
 
 pass=0; fail=0; warn=0
 ok(){ printf '  \033[32m✓\033[0m %s\n' "$1"; pass=$((pass+1)); }
@@ -68,14 +75,79 @@ if echo "$PL" | grep -q 'Enabled : true'; then
 else no "profiler not enabled" "set SPLUNK_PROFILER_ENABLED=true on the Deployment"; fi
 
 # --- RUM ---------------------------------------------------------------------
+# Grepping the served HTML proves NOTHING about RUM. The published snippet once
+# carried a `#` comment inside the object literal — a SyntaxError in JavaScript.
+# The page served both `o11y-gdi-rum` and `SplunkRum.init`, both greps passed,
+# SplunkRum.init never ran and no RUM data was ever collected. So: load the page
+# in a real browser and assert the global exists; if that is impossible, at
+# least prove the init block PARSES rather than merely being present.
 html=$(curl -s --max-time 20 http://minikube:30000/ 2>/dev/null)
 echo "$html" | grep -q 'o11y-gdi-rum'  && ok "RUM library served in page" \
   || no "RUM script tag missing" "re-check layout.html and rebuild the image"
-echo "$html" | grep -q 'SplunkRum.init' && ok "SplunkRum.init present" \
-  || no "SplunkRum.init missing" "snippet incomplete"
 
-[ -x ~/playwright-venv/bin/playwright ] && ok "playwright installed" \
-  || tbd "playwright not installed — RUM needs a real browser"
+# The init call, from `SplunkRum.init(` to its closing `});`.
+init_block=$(printf '%s\n' "$html" | tr -d '\r' | sed -n '/SplunkRum\.init(/,/});/p')
+
+rum_static_check(){
+  if [ -z "$init_block" ]; then
+    no "SplunkRum.init missing from the page" "snippet incomplete — see step 7"
+    return
+  fi
+  if command -v node >/dev/null 2>&1; then
+    tmp=$(mktemp /tmp/rum-init.XXXXXX.js) || { tbd "could not write a temp file — RUM snippet not validated"; return; }
+    printf '%s\n' "$init_block" > "$tmp"
+    if node --check "$tmp" >/dev/null 2>&1; then
+      ok "SplunkRum.init block parses as valid JavaScript (node --check)"
+    else
+      no "SplunkRum.init block is NOT valid JavaScript" \
+         "it is served, but the browser cannot run it — node --check says: $(node --check "$tmp" 2>&1 | head -2 | tr '\n' ' ')"
+    fi
+    rm -f "$tmp"
+    return
+  fi
+  # No node, no browser: catch the two failure modes seen in the wild —
+  # a `#` comment (SyntaxError), and a property line with no trailing comma.
+  if printf '%s' "$init_block" | grep -q '#'; then
+    no "SplunkRum.init contains a '#' comment" \
+       "'#' is not a JavaScript comment — it is a SyntaxError, and RUM never initialises. Use // or move the note to prose (step 7)"
+  elif [ "$(printf '%s\n' "$init_block" | grep -E '^[[:space:]]*[A-Za-z_$][A-Za-z0-9_$]*[[:space:]]*:' \
+            | sed '$d' | grep -cvE ',[[:space:]]*$')" -gt 0 ]; then
+    no "SplunkRum.init has a property with no trailing comma" \
+       "the object literal is malformed and will not parse — compare against the snippet in step 7"
+  else
+    tbd "SplunkRum.init present and structurally plausible — install Playwright (step 7) to prove it actually initialises"
+  fi
+}
+
+PW_PY=""
+for c in ~/playwright-venv/bin/python ~/playwright-venv/bin/python3; do
+  [ -x "$c" ] && { PW_PY=$c; break; }
+done
+RUM_SCRIPT=""
+for c in "${RUM_TEST:-}" "${REPO_DIR:-.}/labs/rum/petclinic_browser_test.py" \
+         ~/k8s-otel-workshop/labs/rum/petclinic_browser_test.py \
+         ~/labs/rum/petclinic_browser_test.py ~/petclinic_browser_test.py; do
+  [ -n "$c" ] && [ -r "$c" ] && { RUM_SCRIPT=$c; break; }
+done
+
+if [ -n "$PW_PY" ] && [ -n "$RUM_SCRIPT" ]; then
+  # --iterations 0 loads the page, asserts `typeof SplunkRum !== "undefined"`
+  # in the browser, and exits — the whole journey is not needed here.
+  pw_out=$("$PW_PY" "$RUM_SCRIPT" --url http://minikube:30000 --iterations 0 2>&1); pw_rc=$?
+  if printf '%s' "$pw_out" | grep -q 'SplunkRum is initialised'; then
+    ok "SplunkRum initialised in a real browser (Playwright)"
+  elif printf '%s' "$pw_out" | grep -q 'SplunkRum is NOT defined'; then
+    no "SplunkRum is not defined in the browser" \
+       "the snippet is served but does not run — check it is valid JavaScript ('#' is not a comment) and that the RUM library loaded (step 7)"
+  else
+    tbd "could not drive the browser (exit $pw_rc): $(printf '%s' "$pw_out" | tail -2 | tr '\n' ' ')"
+    rum_static_check
+  fi
+else
+  [ -n "$PW_PY" ] || tbd "playwright venv not found — RUM needs a real browser to verify (step 7)"
+  [ -n "$RUM_SCRIPT" ] || tbd "labs/rum/petclinic_browser_test.py not found — set RUM_TEST=/path/to/it"
+  rum_static_check
+fi
 
 # --- Related Content correlation fields --------------------------------------
 # APM<->Logs joins on host.name, service.name, deployment.environment and
@@ -115,7 +187,7 @@ if [ -n "${SPLUNK_AUTH:-}" ]; then
       || no "trace_id ${tid:0:16}… has no matching span" "logs and traces may cover different windows"
   fi
 else
-  tbd "SPLUNK_AUTH not set — skipped Related Content field checks"
+  tbd "SPLUNK_AUTH explicitly empty — skipped Related Content field checks"
 fi
 
 # --- Log Observer Connect (Splunk side) --------------------------------------

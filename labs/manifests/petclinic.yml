@@ -38,15 +38,9 @@ spec:
           imagePullPolicy: Never
           ports:
             - containerPort: 8080
-          # AW1: the collector agent is a DaemonSet. Resolve the node IP at runtime —
-          # a pod cannot resolve the `minikube` hosts entry, that is host-only.
-          env:
-            - name: SPLUNK_OTEL_AGENT
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.hostIP
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://$(SPLUNK_OTEL_AGENT):4317"
+          # AW1 adds the telemetry env block here (SPLUNK_OTEL_AGENT and
+          # OTEL_EXPORTER_OTLP_ENDPOINT). Nothing to add yet — FW1 has no Collector.
+
           # Makes `kubectl rollout status` wait for the app, not just the container.
           readinessProbe:
             httpGet:

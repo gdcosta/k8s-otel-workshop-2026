@@ -5,7 +5,12 @@
 set -u
 : "${WS_USER:?export WS_USER=<your-username>}"
 SPLUNK=${SPLUNK:-/opt/splunk/bin/splunk}
-: "${SPLUNK_AUTH:?export SPLUNK_AUTH=admin:<password>}"
+
+# The workshop ships fixed lab credentials (00-setup), so this no longer has to
+# hard-fail on a variable no module ever mentions. Override it if you changed
+# the admin password:  export SPLUNK_AUTH=admin:<your-password>
+WORKSHOP_AUTH='admin:Workshop2026!'
+SPLUNK_AUTH="${SPLUNK_AUTH:-$WORKSHOP_AUTH}"
 
 pass=0; fail=0
 ok(){ printf '  \033[32m✓\033[0m %s\n' "$1"; pass=$((pass+1)); }

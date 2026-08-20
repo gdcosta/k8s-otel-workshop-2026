@@ -2,10 +2,14 @@
 # TESTED end to end on 2026-08-19 against chart 0.158.0.
 #
 # Render:  WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) \
-#          HEC_TOKEN=<hec> O11Y_TOKEN=<ingest> O11Y_REALM=us1 \
+#          HEC_TOKEN=<hec> \
 #          envsubst < values-final.yaml > my-values.yaml
+#
+# The Observability Cloud ingest token is NOT rendered into the file. It is
+# passed at install time, straight out of ~/.o11y-token:
 # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-#            --version 0.158.0 -f my-values.yaml
+#            --version 0.158.0 -f my-values.yaml \
+#            --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 #
 # Validate first — the chart schema is the only check that fails loudly:
 #          helm upgrade ... --dry-run=client
@@ -15,10 +19,13 @@ clusterName: ${WS_USER}-minikube-cluster
 # [AW2] Second destination. Added without changing how anything is collected.
 splunkObservability:
   realm: "us1"
-  accessToken: "${O11Y_TOKEN}"
+  # accessToken is deliberately absent. It is supplied at install time with
+  #   --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
+  # so the ingest token never lands in a file that gets compared, pasted or
+  # published — which is what makes this reference file safe to share.
   metricsEnabled: true
   tracesEnabled: true
-  profilingEnabled: true     # enabled later in this module
+  profilingEnabled: true     # enabled in step 6
 
 # [FW2] Splunk Enterprise via HEC.  [AW1] adds metricsIndex / tracesIndex.
 splunkPlatform:

@@ -31,7 +31,7 @@ echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
 
     ```bash
     cat > ~/.workshop-env <<'EOF'
-    export WS_USER=<your-username>
+    export WS_USER=<the username you were assigned, e.g. wsuser01>
     export LOCAL_IP=$(ec2metadata --local-ipv4)
     export PUB_DNS=$(ec2metadata --public-hostname)
     export CHART_VERSION=0.158.0
@@ -76,21 +76,58 @@ load **before** turning anything on, and leave it running for the whole module.
 In a **second terminal**, as the `splunk` user:
 
 ```bash
-export WS_USER=<your-username>
+source ~/.workshop-env
 cd ~/k8s_workshop/jmeter
 
 ./apache-jmeter-5.6.3/bin/jmeter -n \
   -t petclinic_test_plan.jmx \
   -JPETCLINIC_HOST=minikube \
   -JPETCLINIC_PORT=30000 \
-  -Jloops=500 \
+  -Jloops=1500 \
+  -Jduration=7200 \
   -l results.jtl
 ```
 
 That's the same plan you set up in
-[FW #2, step 6](../02-foundational-2/index.md#6-set-up-the-load-generator). `-Jloops=500`
-makes it run long enough to outlast the module — roughly 50 minutes. Restart it whenever it
-finishes.
+[FW #2, step 7](../02-foundational-2/index.md#7-set-up-the-load-generator).
+
+!!! note "Why both `-Jloops` and `-Jduration`"
+    One loop is 13 samplers with a 300 ms pause between each, so a loop costs about
+    **4.9 seconds** per thread — FW #2's default run of 50 loops measured `00:04:03`.
+    Scaling from that, 1500 loops is roughly **two hours**, which covers this whole module
+    in one run so you never have to notice it stopped.
+
+    The thread group has **two independent ceilings** and stops at whichever is reached
+    first: the loop count running out, or `-Jduration` elapsing. The duration is measured
+    from test start, not per thread, so it caps the whole run. Its default is 3600 s —
+    which means `-Jloops` above ~750 buys nothing on its own. Raise both together or
+    neither.
+
+    | Flag | Default | Sets |
+    |---|---|---|
+    | `-JPETCLINIC_HOST` | `minikube` | target host |
+    | `-JPETCLINIC_PORT` | `30000` | target port |
+    | `-Jloops` | `50` | iterations per thread |
+    | `-Jthreads` | `5` | concurrent users |
+    | `-Jramp` | `10` | ramp-up seconds |
+    | `-Jduration` | `3600` | hard cap, seconds |
+
+    On a smaller instance, drop `-Jthreads` to 2 or 3. What the charts need is *sustained*
+    traffic, not volume.
+
+    Earlier revisions of this guide claimed `-Jloops=500` lasted "roughly 50 minutes". It
+    lasts about 40, and before the plan was parameterised the flag did nothing at all —
+    every run was 50 loops and about four minutes.
+
+!!! danger "If load stops, the rest of this module looks like broken telemetry"
+    When JMeter finishes, the only traffic left is kube-probe hitting `/actuator/health`
+    every five seconds. Step 6's endpoint query then returns a single `/actuator/health`
+    row, step 7's charts flatten, and **nothing reports an error anywhere** — it is
+    indistinguishable from a Collector that isn't collecting. This happened during testing
+    and cost real time.
+
+    Before you debug any empty or thin result in this module, look at the load terminal
+    first.
 
 !!! tip "Use `tmux` if your session times out"
     ```bash
@@ -99,9 +136,16 @@ finishes.
     On hardened hosts an idle prompt logs you out after ~15 minutes, which would kill the
     run halfway through the module.
 
-!!! note "Expect roughly 6.7% errors — they're deliberate"
-    One sampler in thirteen calls `/oups`. That error rate is the thing you'll go looking
-    for in APM later, so don't try to make it zero.
+!!! note "Expect roughly 7.7% errors — they're deliberate"
+    One sampler in thirteen calls `/oups`, so 1/13 = **7.69%** is the ceiling and a healthy
+    run sits around 7.4–7.7%. That error rate is the thing you'll go looking for in APM
+    later, so don't try to make it zero. A run that ends on the `-Jduration` cap stops
+    mid-iteration rather than on a clean loop boundary, so the final figure can land
+    slightly either side — that's the arithmetic, not a fault.
+
+    APM will report a slightly *lower* figure than the JMeter console (around 6.9%), and
+    Splunk lower still (around 7.1%). They are not disagreeing — each counts a different
+    denominator. That is the whole point of AW #2's closing exercise.
 
 `curl` still has its place for a quick "is it up?" check:
 
@@ -112,12 +156,27 @@ curl -s -o /dev/null -w '%{http_code}\n' http://minikube:30000/
 But anything you intend to read on a chart needs JMeter behind it — a handful of curls
 produces a spike, not a signal.
 
+!!! tip "Watch the application in a browser while load runs"
+    PetClinic is a NodePort on minikube's internal IP, so it isn't reachable from your
+    laptop directly. Use the tunnel from [host setup](../00-setup/index.md):
+
+    ```bash
+    ssh -i <your-key.pem> -L 8080:192.168.49.2:30000 splunk@<your-instance>
+    # then open http://localhost:8080
+    ```
+
+    `kubectl port-forward svc/${WS_USER}-petclinic-srv 8080:8080` on the instance plus
+    `ssh -L 8080:localhost:8080` works too. Clicking through the app yourself makes steps 6
+    and 7 far easier to read — the page you just opened shows up as a span with its own
+    route.
+
 ---
 
 ## 2. Turn on metrics and traces
 
-The indexes already exist from [host setup](../00-setup/index.md). The Collector just isn't
-sending to them yet — FW #2 explicitly disabled both signals.
+All five indexes already exist — you created them in
+[FW #2, step 2](../02-foundational-2/index.md#2-create-the-indexes). The Collector just
+isn't sending to them yet: FW #2 explicitly disabled both signals.
 
 Edit `~/k8s_workshop/k8s_otel/values-workshop.yaml`:
 
@@ -191,6 +250,7 @@ kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent
 | rename values(metric_name) as m | mvexpand m
 | eval family=mvindex(split(m,"."),0)
 | stats count by family | sort -count
+| where count > 1
 ```
 
 <details>
@@ -204,6 +264,22 @@ otelcol      5     ← the Collector's own health
 
 `jvm` and `db` don't appear yet — that's what the Java agent adds next.
 </details>
+
+!!! note "Why the query ends with `| where count > 1`"
+    Without it you get about **thirty** rows, not three. The query builds a family name by
+    splitting on `.`, but the Collector's own internal metrics are underscore-separated —
+    `otelcol_exporter_sent_log_records`, `otelcol_process_cpu_seconds` — so each one
+    becomes a family of exactly one member:
+
+    ```
+    otelcol_exporter_in_flight_requests   1
+    otelcol_exporter_queue_capacity       1
+    otelcol_process_cpu_seconds           1
+    ... and ~22 more
+    ```
+
+    They're there because FW #2 set `excludeAgentLogs: false`, which is deliberate. The
+    filter just keeps the checkpoint readable; drop it if you want to see them.
 
 ---
 
@@ -287,10 +363,11 @@ The agent needs to know where to send telemetry. The Collector agent runs as a
 **DaemonSet** — one pod per node — so the right target is the node your pod happens to be
 on.
 
-Add to the container spec in your manifest:
+Add these two entries to the container's `env:` list in your manifest — the list you
+already started in [FW #2, step 6](../02-foundational-2/index.md#6-make-the-application-actually-log)
+for the Tomcat access log:
 
 ```yaml
-        env:
         - name: SPLUNK_OTEL_AGENT
           valueFrom:
             fieldRef:
@@ -301,11 +378,13 @@ Add to the container spec in your manifest:
 
 ??? example "What your manifest should look like around here"
     `env:` is a sibling of `ports:` inside the container definition — not nested under it.
+    Order within the list doesn't matter; putting the telemetry pair first keeps it
+    readable.
 
     ```yaml
           containers:
           - name: ${WS_USER}-petclinic-otel-container01
-            image: gerry/petclinic-otel:v1
+            image: ${WS_USER}/petclinic-otel:v1
             imagePullPolicy: Never
             ports:
             - containerPort: 8080
@@ -320,6 +399,10 @@ Add to the container spec in your manifest:
                   fieldPath: status.hostIP
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://$(SPLUNK_OTEL_AGENT):4317"
+            # --- FW2: access logging, already present ------------------------------
+            - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
+              value: "true"
+            # ... the rest of the SERVER_TOMCAT_ACCESSLOG_* entries
     ```
 
 ??? abstract "Full command sequence — manifest change (no image rebuild)"
@@ -368,13 +451,20 @@ kubectl logs deploy/${WS_USER}-petclinic-otel-deployment | grep -i VersionLogger
 ```
 OTEL_EXPORTER_OTLP_ENDPOINT=http://192.168.49.2:4317
 OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+OTEL_LOGS_EXPORTER=none
 OTEL_METRICS_EXPORTER=otlp
-OTEL_SERVICE_NAME=<you>-k8s-petclinic-service
+OTEL_RESOURCE_ATTRIBUTES=deployment.environment=${WS_USER}-k8s-petclinic-env
+OTEL_SERVICE_NAME=${WS_USER}-k8s-petclinic-service
 OTEL_TRACES_EXPORTER=otlp
 SPLUNK_OTEL_AGENT=192.168.49.2
 
 [otel.javaagent] INFO ... VersionLogger - opentelemetry-javaagent - version: splunk-2.30.2-otel-2.30.0
 ```
+
+Eight variables, not six. Six of them — including `OTEL_LOGS_EXPORTER` and
+`OTEL_RESOURCE_ATTRIBUTES` — come from the `Dockerfile` you wrote in step 3. Only
+`SPLUNK_OTEL_AGENT` and `OTEL_EXPORTER_OTLP_ENDPOINT` come from the manifest you just
+edited.
 
 `SPLUNK_OTEL_AGENT` resolved to the node IP — that's the downward API working.
 </details>
@@ -393,16 +483,29 @@ traffic. If it has finished, start it again.
 <summary>Expected — 14 JVM metrics</summary>
 
 ```
-jvm.class.count            jvm.gc.duration
-jvm.class.loaded           jvm.memory.committed
-jvm.cpu.count              jvm.memory.limit
-jvm.cpu.recent_utilization jvm.memory.used
-jvm.cpu.time               jvm.thread.count
+jvm.class.count             jvm.gc.duration_sum
+jvm.class.loaded            jvm.memory.committed
+jvm.class.unloaded          jvm.memory.limit
+jvm.cpu.count               jvm.memory.used
+jvm.cpu.recent_utilization  jvm.memory.used_after_last_gc
+jvm.cpu.time                jvm.thread.count
+jvm.gc.duration_bucket
+jvm.gc.duration_count
 ```
 
-Plus `db.client.connections.*` from HikariCP — the agent instrumented the connection pool
-without being told about it.
+Plus `db.client.connections.*` from HikariCP — 13 series, and the agent instrumented the
+connection pool without being told about it.
 </details>
+
+!!! warning "There is no metric called `jvm.gc.duration`"
+    GC duration is a **histogram**, and Splunk stores a histogram as three separate series:
+    `jvm.gc.duration_bucket`, `_count` and `_sum`. Searching for the bare name
+    `jvm.gc.duration` returns nothing at all, which looks like the agent failed to emit it.
+
+    `_count` gives you how many collections ran, `_sum` the total time spent in them —
+    divide one by the other for mean pause time. The `_bucket` series carries the
+    distribution. Any OTLP metric of type histogram behaves this way, so expect it again in
+    AW #2.
 
 !!! warning "Searching for `runtime.jvm.threads.states` returns nothing"
     That was the metric name under the old SignalFx exporter. Agent 2.x emits
@@ -417,7 +520,7 @@ Right now application telemetry is mixed in with infrastructure telemetry. Separ
 matters for the same reason it did in FW #2 — retention and access control differ.
 
 !!! danger "Read this before you debug — the annotation captures traces too"
-    You set `splunkPlatform.tracesIndex: k8s_ws_traces` in step 1. Check where traces
+    You set `splunkPlatform.tracesIndex: k8s_ws_traces` in step 2. Check where traces
     actually landed:
 
     ```
@@ -548,7 +651,11 @@ index=k8s_ws_traces | head 1
 ```
 
 <details>
-<summary>What a span looks like</summary>
+<summary>What a span looks like (abridged)</summary>
+
+A real span carries far more than this — `start_time`, `end_time`, resource attributes for
+the pod and cluster, and a dozen more `attributes.*` keys. The fields below are the ones
+that matter for reading a trace:
 
 ```json
 {
@@ -574,11 +681,47 @@ Find the slowest endpoints:
 
 ```
 index=k8s_ws_traces
-| spath name | spath attributes.http.route as route | spath duration as duration
+| rename "attributes.http.route" as route
 | where isnotnull(route)
-| stats count, avg(duration) as avg_ms, max(duration) as max_ms by route
+| eval ms=(end_time-start_time)/1000000
+| stats count, avg(ms) as avg_ms, max(ms) as max_ms by route
+| eval avg_ms=round(avg_ms,2), max_ms=round(max_ms,2)
 | sort -avg_ms
 ```
+
+<details>
+<summary>Expected — slowest routes</summary>
+
+```
+route                                     count avg_ms max_ms
+/owners                                     132  21.77  61.13
+/owners/{ownerId}                           393  12.32  55.48
+/owners/{ownerId}/pets/{petId}/visits/new   262  11.86  42.08
+/owners/{ownerId}/edit                      262  11.07  72.15
+/vets.html                                  133  10.10  49.59
+/owners/find                                133   8.75  44.15
+/oups                                       130   6.43  33.13
+```
+
+Routes are **templated** — `/owners/{ownerId}`, not `/owners/7` — because the agent reads
+the Spring MVC mapping rather than the raw URL. That's what makes them aggregatable.
+</details>
+
+!!! warning "If the only row is `/actuator/health`, your load generator has stopped"
+    kube-probe hits `/actuator/health` every five seconds, so that one route keeps arriving
+    forever. A result with nothing but `/actuator/health` means no *user* traffic is
+    reaching the app — go back to step 1 and restart JMeter, then wait a minute.
+
+    This is worth knowing because it looks exactly like broken trace collection, in the one
+    step whose whole purpose is proving trace collection works. It is the failure that
+    actually happened when this module was tested.
+
+!!! note "No `spath`, and no `duration` field"
+    Splunk auto-extracts the span JSON, so `attributes.http.route`, `start_time` and
+    `end_time` are already fields — `spath` isn't needed, and it has no `as` clause anyway.
+    There is also **no `duration` field on a span**: the exporter writes `start_time` and
+    `end_time` as epoch nanoseconds, which is why the `eval` divides by 1,000,000 to get
+    milliseconds.
 
 ---
 
@@ -589,7 +732,8 @@ index=k8s_ws_traces
     rather than `search`. The storage is purpose-built for numeric time series: far smaller
     on disk, and far faster to aggregate over long windows.
 
-    That's why `k8s_ws_metrics` was created with `-datatype metric` during host setup.
+    That's why `k8s_ws_metrics` was created with `-datatype metric` back in
+    [FW #2, step 2](../02-foundational-2/index.md#2-create-the-indexes).
 
 In Splunk Web, open **Analytics Workspace** and chart JVM heap usage:
 
@@ -623,12 +767,28 @@ curl -fsSLO https://raw.githubusercontent.com/gdcosta/splunk-apm-dashboard/main/
 In Splunk Web: **Search & Reporting → Dashboards → Create New Dashboard → Classic Dashboards**,
 then paste the XML into the source editor.
 
+??? abstract "Command-line alternative — install it over REST"
+    Same result without leaving SSH. Run it from the directory you downloaded the XML into:
+
+    ```bash
+    curl -sk -u admin:Workshop2026! -X POST \
+      https://localhost:8089/servicesNS/admin/search/data/ui/views \
+      -d "name=apm_traces" --data-urlencode "eai:data@apm_traces_4.0.0.xml"
+    ```
+
+    The dashboard then appears under **Search & Reporting → Dashboards** as `apm_traces`.
+    `-k` skips certificate validation — the management port uses Splunk's self-signed
+    certificate, which is expected on a workshop host.
+
 ![Trace dashboard](../assets/img/03-aw1/image40.png)
 <!-- STATUS: pending-recapture · 2023 -->
 
-!!! note "This dashboard needs the Link Analysis visualization"
-    Service-dependency panels use the **Link Analysis App for Splunk** from Splunkbase.
-    Without it those panels render empty; the rest of the dashboard still works.
+!!! note "Some panels will render empty, and that isn't a fault"
+    The service-dependency panels use the **Link Analysis App for Splunk** from Splunkbase,
+    which this workshop doesn't install. Without it they draw nothing — no error, no
+    message, just blank space where a graph should be. Don't go debugging your trace data
+    over it: every other panel works, and those panels need a Splunkbase download rather
+    than a fix.
 
 ---
 
@@ -647,10 +807,14 @@ steps. They're the exact files this module was tested with.
     # TESTED end to end on 2026-08-19 against chart 0.158.0.
     #
     # Render:  WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) \
-    #          HEC_TOKEN=<hec> O11Y_TOKEN=<ingest> O11Y_REALM=us1 \
+    #          HEC_TOKEN=<hec> \
     #          envsubst < values-final.yaml > my-values.yaml
+    #
+    # The Observability Cloud ingest token is NOT rendered into the file. It is
+    # passed at install time, straight out of ~/.o11y-token:
     # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-    #            --version 0.158.0 -f my-values.yaml
+    #            --version 0.158.0 -f my-values.yaml \
+    #            --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
     #
     # Validate first — the chart schema is the only check that fails loudly:
     #          helm upgrade ... --dry-run=client
@@ -660,10 +824,13 @@ steps. They're the exact files this module was tested with.
     # [AW2] Second destination. Added without changing how anything is collected.
     splunkObservability:
       realm: "us1"
-      accessToken: "${O11Y_TOKEN}"
+      # accessToken is deliberately absent. It is supplied at install time with
+      #   --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
+      # so the ingest token never lands in a file that gets compared, pasted or
+      # published — which is what makes this reference file safe to share.
       metricsEnabled: true
       tracesEnabled: true
-      profilingEnabled: true     # enabled later in this module
+      profilingEnabled: true     # enabled in step 6
 
     # [FW2] Splunk Enterprise via HEC.  [AW1] adds metricsIndex / tracesIndex.
     splunkPlatform:
@@ -843,37 +1010,48 @@ steps. They're the exact files this module was tested with.
           labels:
             app: ${WS_USER}-petclinic-otel-app
           annotations:
-            docker_image_author: "gerry"
+            docker_image_author: "${WS_USER}"
             splunk.com/index: "k8s_ws_petclinic_logs"
         spec:
           containers:
           - name: ${WS_USER}-petclinic-otel-container01
-            image: gerry/petclinic-otel:v1
+            image: ${WS_USER}/petclinic-otel:v1
             imagePullPolicy: Never
             ports:
             - containerPort: 8080
             env:
+            # --- AW1: where to send telemetry -------------------------------------
+            # The collector agent is a DaemonSet, so the right target is whichever
+            # node this pod landed on. A pod cannot resolve the `minikube` hosts
+            # entry — that exists only on the host.
             - name: SPLUNK_OTEL_AGENT
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: "http://$(SPLUNK_OTEL_AGENT):4317"
-            # AlwaysOn Profiling
+
+            # --- AW2: AlwaysOn Profiling ------------------------------------------
             - name: SPLUNK_PROFILER_ENABLED
               value: "true"
             - name: SPLUNK_PROFILER_MEMORY_ENABLED
               value: "true"
-            # The profiler defaults to http/protobuf on :4318. Our endpoint is gRPC
-            # on :4317, so the protocol must be matched or profiling silently fails.
+            # Defaults to http/protobuf on :4318, but our endpoint above is gRPC on
+            # :4317. Mismatched, the profiler starts and sends nothing, with no error.
             - name: SPLUNK_PROFILER_OTLP_PROTOCOL
               value: "grpc"
-            # Print the trace context the agent puts into the MDC. Without this the
-            # log line has no trace_id and APM<->Logs correlation cannot work.
+
+            # --- AW2: trace context in the log line --------------------------------
+            # The agent already puts trace_id/span_id in the MDC; Spring Boot's
+            # default pattern just never prints them. Without this there is no
+            # trace_id on the logs and APM <-> Logs correlation cannot work.
+            - name: LOGGING_PATTERN_LEVEL
+              value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
+
+            # --- FW2: access logging -----------------------------------------------
             # PetClinic logs nothing for successful requests — only startup and
-            # exceptions. Tomcat access logging gives one line per request, which is
-            # what makes the log exercises worth doing.
-            # directory=/dev + prefix=stdout with empty suffix writes to /dev/stdout.
+            # exceptions. One line per request is what makes the log exercises work.
+            # directory=/dev + prefix=stdout + empty suffix resolves to /dev/stdout.
             - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
               value: "true"
             - name: SERVER_TOMCAT_ACCESSLOG_DIRECTORY
@@ -886,10 +1064,9 @@ steps. They're the exact files this module was tested with.
               value: ""
             - name: SERVER_TOMCAT_ACCESSLOG_BUFFERED
               value: "false"
+            # Single quotes: the pattern contains double quotes.
             - name: SERVER_TOMCAT_ACCESSLOG_PATTERN
               value: '%h %l %u %t "%r" %s %b %D'
-            - name: LOGGING_PATTERN_LEVEL
-              value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
             readinessProbe:
               httpGet:
                 path: /actuator/health

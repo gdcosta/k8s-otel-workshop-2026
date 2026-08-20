@@ -5,7 +5,12 @@
 set -u
 : "${WS_USER:?export WS_USER=<your-username>}"
 SPLUNK=${SPLUNK:-/opt/splunk/bin/splunk}
-: "${SPLUNK_AUTH:?export SPLUNK_AUTH=admin:<password>}"
+
+# The workshop ships fixed lab credentials (00-setup), so this no longer has to
+# hard-fail on a variable no module ever mentions. Override it if you changed
+# the admin password:  export SPLUNK_AUTH=admin:<your-password>
+WORKSHOP_AUTH='admin:Workshop2026!'
+SPLUNK_AUTH="${SPLUNK_AUTH:-$WORKSHOP_AUTH}"
 
 pass=0; fail=0
 ok(){ printf '  \033[32m✓\033[0m %s\n' "$1"; pass=$((pass+1)); }
@@ -19,7 +24,11 @@ echo "Verifying Foundational Workshop #2 (WS_USER=$WS_USER)"; echo
 # idle app the only log lines are readiness probes, which carry no trace context
 # and no errors — so generate a short burst rather than reporting a false
 # failure. Not a substitute for the JMeter load test; just enough to assert on.
+#
+# BURST_START is also what lets the severity checks below scope themselves to
+# events this script created, instead of a flat 15-minute lookback.
 warmup(){
+  BURST_START=$(date +%s)
   printf '  … generating a short burst of traffic\n'
   for _ in $(seq 1 20); do
     curl -s -o /dev/null --max-time 5 http://minikube:30000/          || true
@@ -69,29 +78,72 @@ for f in http_method http_path http_duration_us; do
 done
 
 # --- severity (step 11) ------------------------------------------------------
-# The classic failure is setting an ATTRIBUTE named severity, which yields
-# values like high/low and leaves Observability Cloud showing UNKNOWN.
-sev=$($SPLUNK search 'index=k8s_ws_petclinic_logs | stats count by severity | fields severity' \
-      -earliest_time -15m -auth "$SPLUNK_AUTH" 2>/dev/null | tr -d ' ' | grep -viE '^severity$|^-+$|^$' | tr '\n' ' ')
-if echo "$sev" | grep -qiE 'high|low'; then
-  no "severity has values: $sev" "you set an attribute, not log.severity_text — see step 11"
-elif echo "$sev" | grep -qE 'ERROR|INFO|WARN'; then
-  ok "severity_text populated (values: $sev)"
+# `severity` is written at INGEST by the OTTL transform, so an event keeps
+# whatever it was given when it was indexed — for ever. A flat 15-minute
+# lookback therefore reports a CORRECT configuration as broken for the first
+# quarter of an hour after the fix, with a number that keeps changing.
+# Scope these checks to the traffic this script generated a moment ago.
+if [ -n "${BURST_START:-}" ]; then
+  SEV_AGE=$(( $(date +%s) - BURST_START + 15 ))
+  SEV_EARLIEST="-${SEV_AGE}s"
+  SEV_WINDOW_NOTE="scoped to the last ${SEV_AGE}s — only the traffic this script just generated"
 else
-  no "severity empty or unexpected: '${sev:-none}'" "set log.severity_text, not an attribute"
+  SEV_EARLIEST="-15m"
+  SEV_WINDOW_NOTE="last 15m: this INCLUDES events indexed before your most recent change"
+fi
+printf '  … severity checks: %s\n' "$SEV_WINDOW_NOTE"
+
+scnt(){ $SPLUNK search "$1" -earliest_time "$SEV_EARLIEST" -auth "$SPLUNK_AUTH" 2>/dev/null | tail -1 | tr -dc '0-9'; }
+
+# The classic failure is setting an ATTRIBUTE named severity holding high/low,
+# which leaves Observability Cloud showing UNKNOWN. The other — far more common
+# — failure is having no `severity` field at all, because the transform sets
+# log.severity_text but never mirrors it to an attribute:
+#     set(log.attributes["severity"], log.severity_text) where log.severity_text != nil
+# severity_text drives Observability Cloud; the mirrored attribute is what makes
+# it searchable as `severity` in Splunk. Both statements are needed.
+MIRROR_HINT='the transform needs BOTH: set(log.severity_text, ...) for Observability Cloud AND set(log.attributes["severity"], log.severity_text) so it is searchable in Splunk — see step 11'
+
+sev=$($SPLUNK search 'index=k8s_ws_petclinic_logs | stats count by severity | fields severity' \
+      -earliest_time "$SEV_EARLIEST" -auth "$SPLUNK_AUTH" 2>/dev/null | tr -d ' ' | grep -viE '^severity$|^-+$|^$' | tr '\n' ' ')
+if echo "$sev" | grep -qiE 'high|low'; then
+  no "severity has values: $sev" "you set an attribute holding a priority, not the log level — $MIRROR_HINT"
+elif echo "$sev" | grep -qE 'ERROR|INFO|WARN'; then
+  ok "severity populated (values: $sev)"
+else
+  no "severity empty or unexpected: '${sev:-none}'" "$MIRROR_HINT"
 fi
 
-n=$(cnt 'index=k8s_ws_petclinic_logs severity="" | stats count')
-[ "${n:-0}" -eq 0 ] && ok "no events with blank severity" \
-  || no "$n events have blank severity" "severity_text defaults to \"\", not nil — test log_level instead"
+# A `severity=""` test passes VACUOUSLY when the field does not exist at all —
+# it reported "no events with blank severity" ✓ in exactly the broken state the
+# two checks either side of it were failing on. isnull() gives a real signal.
+tot=$(scnt 'index=k8s_ws_petclinic_logs | stats count')
+nul=$(scnt 'index=k8s_ws_petclinic_logs | where isnull(severity) OR severity="" | stats count')
+if [ "${tot:-0}" -eq 0 ]; then
+  no "no petclinic log events in the window" "generate traffic (curl http://minikube:30000/) and re-run"
+elif [ "${nul:-0}" -eq 0 ]; then
+  ok "every event carries a severity ($tot events checked)"
+elif [ $(( nul * 100 / tot )) -lt 5 ]; then
+  # A handful with no level is normal — container start-up lines are emitted
+  # before the logging pattern applies. A broken transform gives 100%, not 2%.
+  ok "$((tot-nul)) of $tot events carry a severity ($nul without — start-up lines, expected)"
+else
+  no "$nul of $tot events have no severity" "$MIRROR_HINT"
+fi
 
-n=$(cnt 'index=k8s_ws_petclinic_logs http_status=5* severity="ERROR" | stats count')
-m=$(cnt 'index=k8s_ws_petclinic_logs http_status=5* | stats count')
+n=$(scnt 'index=k8s_ws_petclinic_logs http_status=5* severity="ERROR" | stats count')
+m=$(scnt 'index=k8s_ws_petclinic_logs http_status=5* | stats count')
 if [ "${m:-0}" -gt 0 ]; then
   [ "${n:-0}" -eq "${m:-0}" ] && ok "every 5xx is severity=ERROR ($n)" \
-    || no "$n of $m 5xx marked ERROR" "check the status-derived severity rules"
+    || no "$n of $m 5xx marked ERROR" "check the status-derived severity rules in step 11"
 else
   ok "no 5xx in window (nothing to check)"
+fi
+
+if [ -z "${BURST_START:-}" ] && [ "$fail" -gt 0 ]; then
+  printf '\n  \033[33mNote:\033[0m severity is written at ingest and these checks used a 15-minute\n'
+  printf '  window, so events indexed before your last change are counted too. Re-run\n'
+  printf '  without SKIP_WARMUP=1 (or narrow the window) before believing a failure here.\n'
 fi
 
 echo

@@ -21,3 +21,7 @@ labs/**/*.rendered.yaml
 
 # OS
 .DS_Store
+
+# Python bytecode from local checks
+__pycache__/
+*.pyc

@@ -49,11 +49,32 @@ Maven download the internet.
 | Port | Source | Purpose |
 |---|---|---|
 | 22 | participant CIDR | SSH |
-| 8000 | participant CIDR | Splunk Web |
+| 8000 | **the participant's own IP** | Splunk Web — see the warning below |
 | 8080 | participant CIDR | PetClinic port-forward |
 | 8089 | Splunk O11y realm IPs | AW #2 only — Log Observer Connect |
 
 Outbound: all.
+
+!!! danger "Port 8000 must be restricted to the participant's own IP — the admin password is published"
+    Splunk Web binds `0.0.0.0:8000` on the EC2 host, so with a broad source range the login
+    page is reachable from the open internet. Verified from outside AWS during testing.
+    Combined with the published `admin` / `Workshop2026!` credential and a predictable
+    `ec2-<ip>.<region>.compute.amazonaws.com` hostname, anyone who finds the host can sign
+    in as admin. A CIDR covering a whole office or a conference network is not enough — scope
+    this rule to the single address each participant is connecting from.
+
+    If you would rather not open 8000 at all, close it and reach Splunk Web over an SSH
+    tunnel instead:
+
+    ```bash
+    ssh -i <your-key.pem> -L 8000:localhost:8000 splunk@<their-instance>
+    ```
+
+    Then browse **http://localhost:8000**. This is the same pattern port 8089 already
+    follows — it is open only to the four Observability Cloud realm IPs, never broadly.
+
+    These are throwaway credentials on a disposable lab instance. Say so to the group, and
+    make sure nobody carries them to anything real.
 
 !!! danger "Do not reuse a shared key pair across events"
     Earlier versions of this workshop distributed one key pair to all instructors. A single
@@ -68,9 +89,30 @@ cd ~/k8s-otel-workshop
 ./scripts/bootstrap.sh
 ```
 
-Idempotent, reads every version from `versions.env`, and generates a **unique Splunk admin
-password per instance** into `~/splunk-admin-password.txt`. Collect those when handing out
-credentials — don't set a common one.
+Idempotent, reads every version from `versions.env`, and seeds the **fixed workshop
+credentials**. There are no per-instance passwords to collect or hand out.
+
+| Account | Credential | Created by |
+|---|---|---|
+| Splunk admin | `admin` / `Workshop2026!` | `bootstrap.sh`, during host setup |
+| Log Observer service account | `loc_svc` / `LogObserver2026!` | AW #2, step 4 |
+
+!!! note "Why these are fixed and published"
+    An earlier revision generated a random admin password per instance. In a taught
+    workshop the randomness costs more than it buys:
+
+    - **You can help a stuck participant.** With a generated password you cannot predict
+      the credential on someone else's box, and screen-sharing to read it back wastes the
+      room's time.
+    - **Losing the note is no longer fatal.** A participant who closes the terminal that
+      printed their password used to be locked out of their own instance mid-module, with
+      no recovery path in the guide.
+    - **Every command becomes copy-pasteable.** `SPLUNK_AUTH`, the index creation in FW #2,
+      the HEC setup, and AW #2's `add user` all carried a `<YOUR_ADMIN_PASSWORD>`
+      placeholder. They now carry a literal that works as typed.
+
+    The trade is that the credential is public, which is entirely handled by scoping port
+    8000 to the participant's own IP — see the security group section above.
 
 Then confirm each instance before anyone arrives:
 
@@ -151,9 +193,14 @@ Each module ends with an assertion script. Have participants run them rather tha
 "did it work?" — they self-diagnose, and you see who's stuck without going desk to desk.
 
 ```bash
-export WS_USER=<their-username> SPLUNK_AUTH=admin:<password>
+export WS_USER=<their-username>
+export SPLUNK_AUTH=admin:'Workshop2026!'
 ./scripts/verify-fw2.sh
 ```
+
+The single quotes around the password matter — `!` is history expansion in an interactive
+`bash` shell. `verify-fw2.sh`, `verify-aw1.sh` and `verify-aw2.sh` all hard-require
+`SPLUNK_AUTH` and exit immediately without it.
 
 **55 assertions across the five scripts.** They're also what the CI canary runs against new
 Collector releases.
@@ -201,9 +248,47 @@ The audit log enabled in FW #1 is a genuine security data source. These run agai
 `k8s_ws_logs` and work with the data the workshop already collects — good for groups that
 finish early, or a security-focused audience.
 
-??? example "1 — Sensitive host path mounted into a pod"
+!!! warning "These searches have been run against live workshop data — keep it that way"
+    All 13 searches in this section and the next were executed against a real workshop
+    cluster. Two were invalid and one returned a false all-clear; those are fixed or flagged
+    inline below. Searches **1** (false negative), **3**, **8** and **9** carry notes
+    explaining what an empty result actually means — read them before demonstrating.
+
+    **Any search added here in future must be run against live data before it ships.** SPL
+    that looks right frequently isn't, and on this page the failure mode is an audience
+    watching a detection quietly return nothing.
+
+??? example "1 — Sensitive host path mounted into a pod ⚠ known false negative"
     A container mounting `/`, `/etc`, `/var/run/docker.sock` or the kubelet directory can
     usually escape to the node.
+
+    !!! warning "Do not present this as a working detection — it currently returns a false all-clear"
+        On a live workshop cluster this search returns **zero rows even though the
+        workshop's own Collector DaemonSet mounts `/etc` and `/proc`** — two paths on this
+        detection's own watchlist. Confirmed with `kubectl` against the running agent pod.
+
+        The SPL is valid and the field is populated; clause isolation pinned the failure to
+        the `spec.volumes{}.hostPath.path IN(...)` clause matching nothing:
+
+        ```
+        base sourcetype=kube:object:pods              10765
+        + spec.volumes{}.name=*                       10518
+        + TERM(hostPath)                               7532
+        + spec.volumes{}.hostPath.path=*               7285
+        + spec.volumes{}.hostPath.path IN("/etc","/proc")   0
+        ```
+
+        The indexed `kube:object:pods` records only ever carry a subset of the agent's
+        hostPaths — `/var/log`, `/var/lib/docker/containers`, `/var/addon/splunk/otel_pos`
+        — and never `/etc` or `/proc`. **This is a data-capture gap in what
+        `k8sObjects: pods` collects, not a query defect.**
+
+        **An empty result here means nothing.** It is not evidence that no sensitive host
+        paths are mounted. Use it to teach the *shape* of the detection, and say plainly
+        that it needs investigation before anyone relies on it. Do not use it as a negative
+        finding in front of an audience — a security detection that reads clean on a dirty
+        cluster teaches people to trust a false negative.
+
     ```
     index="k8s_ws_logs" (sourcetype=kube:object:pods OR sourcetype=kube:objects:pods)
       spec.volumes{}.name=* TERM(hostPath) TERM(image)
@@ -228,6 +313,9 @@ finish early, or a security-focused audience.
     ```
 
 ??? example "3 — Pod enumeration"
+    Zero rows is the expected, healthy result on a workshop cluster — nothing has enumerated
+    it. Show the query and what it *would* catch; don't treat the empty table as a fault.
+
     ```
     index="k8s_ws_logs" sourcetype="kube:container:kube-apiserver"
       "user.username"="system:anonymous" verb=list objectRef.resource=pods
@@ -273,6 +361,10 @@ finish early, or a security-focused audience.
     ```
 
 ??? example "8 — Anonymous kubectl from off-cluster"
+    Like #3, zero rows is the expected result here — the anonymous requests in the audit log
+    all come from minikube's own loopback health probes, which this search deliberately
+    excludes. An empty table means the cluster is clean, not that the search is broken.
+
     ```
     index="k8s_ws_logs" sourcetype="kube:container:kube-apiserver"
       userAgent=kubectl* sourceIPs{}!=127.0.0.1 sourceIPs{}!=::1
@@ -283,7 +375,14 @@ finish early, or a security-focused audience.
 
 ??? example "9 — Known scanner images being pulled"
     kube-hunter and kube-bench are legitimate tools. Nobody should be pulling them into
-    your cluster unannounced.
+    your cluster unannounced. Zero rows is the expected result on a workshop cluster.
+
+    !!! note "The wildcard warning on this one is expected"
+        Every run prints `WARN: The term '"object.message"="Pulling image *kube-bench*"'
+        contains a wildcard in the middle of a word or string.` That is Splunk noting the
+        leading/trailing wildcards can't use the index efficiently. The search is correct
+        and the warning is harmless — say so before someone asks.
+
     ```
     index="k8s_ws_logs" sourcetype=kube:object:events
       object.message IN ("Pulling image *kube-hunter*", "Pulling image *kube-bench*",
@@ -303,6 +402,9 @@ finish early, or a security-focused audience.
 
 ## Bonus material: operational views
 
+Validated against live workshop data alongside the security detections above — same rule
+applies: run anything new here before shipping it.
+
 ??? example "Client tooling by user agent"
     ```
     index="k8s_ws_logs" sourcetype="kube:container:kube-apiserver" earliest=-15m
@@ -311,27 +413,60 @@ finish early, or a security-focused audience.
     ```
 
 ??? example "Pod lifecycle events over time"
+    `earliest=-4h`, not `-1d@d` — the day-snapped version prints a full day of zero-count
+    rows before any real data appears.
+
     ```
-    index="k8s_ws_logs" sourcetype=kube:object:events earliest=-1d@d
+    index="k8s_ws_logs" sourcetype=kube:object:events earliest=-4h
     | rename object.* AS *, involvedObject.* AS *
     | timechart count by reason
     ```
 
 ??? example "CoreDNS query types"
+    The query type is preceded by a **double quote**, not whitespace — `\s` before the
+    capture never matches. A real CoreDNS line:
     ```
-    index="k8s_ws_logs" "k8s.cluster.name"="<WS_USER>-minikube-cluster"
+    [INFO] 10.244.0.1:51939 - 16000 "AAAA IN ingest.us1.observability.splunkcloud.com. udp 69 false 1232" NOERROR qr,rd,ra 303 0.004842068s
+    ```
+
+    Match the quote instead:
+
+    ```
+    index="k8s_ws_logs" "k8s.cluster.name"="${WS_USER}-minikube-cluster"
       sourcetype="kube:container:coredns" earliest=-1d@d
-    | rex field=_raw "\s(?<qtype>[A-Z]+)\s+IN\s"
+    | rex field=_raw "\"(?<qtype>[A-Z]+)\s+IN\s"
     | stats count by qtype
     ```
 
+    Expected shape — a roughly even split between `A` and `AAAA` lookups:
+    ```
+    qtype count
+    A      1950
+    AAAA   1950
+    HINFO     1
+    ```
+
 ??? example "Response times per endpoint, from access logs alone"
-    Only works after FW #2 step 7 enables access logging.
+    Only works after FW #2 step 7 enables access logging. Note the rounding happens in a
+    second `eval` **after** `stats` — `stats` rejects an eval function wrapping an aggregate
+    (`round(avg(ms),1)` is a FATAL error, not a warning).
+
     ```
     index=k8s_ws_petclinic_logs http_duration_us=*
-    | eval ms=round(http_duration_us/1000, 1)
-    | stats count, round(avg(ms),1) as avg_ms, round(p95(ms),1) as p95_ms by http_path
+    | eval ms=http_duration_us/1000
+    | stats count, avg(ms) as avg_ms, p95(ms) as p95_ms by http_path
+    | eval avg_ms=round(avg_ms,1), p95_ms=round(p95_ms,1)
     | sort -count
+    ```
+
+    Expected shape — `/actuator/health` dominates the count because kubelet probes it
+    continuously:
+    ```
+    http_path          count avg_ms p95_ms
+    /actuator/health   12720    1.8    4.3
+    /                   2323    5.9   11.5
+    /oups               2315    4.2    9.6
+    /owners?lastName=   2255   16.6   32.4
     ```
 
 ---

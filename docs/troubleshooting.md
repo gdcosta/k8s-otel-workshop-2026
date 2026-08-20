@@ -20,7 +20,24 @@ but a few settings will stop the workshop outright.
 
 **Symptom:** Docker won't start, reports no storage driver, or minikube fails immediately.
 
-**Test:**
+**Test — no privileges needed.** Do this one first. If Docker reports an overlay driver,
+the module is loaded and working, and there is nothing to investigate:
+
+```bash
+docker info -f '{{.Driver}}'      # want: overlayfs
+```
+
+!!! warning "The mount test below must be run as `ubuntu`, not `splunk`"
+    The workshop user `splunk` deliberately has no sudo rights (see
+    *"`sudo: a password is required` as the splunk user"* below). Run the mount test as
+    `splunk` and every `sudo` line fails on **permission**, which reads exactly like the
+    module being blocked. It isn't. Open an `ubuntu` session first:
+
+    ```bash
+    ssh -i <your-key.pem> ubuntu@<your-instance>
+    ```
+
+**Explicit test, as `ubuntu`:**
 
 ```bash
 sudo mkdir -p /tmp/ov/{l,u,w,m}
@@ -30,7 +47,9 @@ sudo mount -t overlay overlay \
 sudo rm -rf /tmp/ov
 ```
 
-`unknown filesystem type 'overlay'` means it's blocked. Confirm where:
+`unknown filesystem type 'overlay'` means it's genuinely blocked. `sudo: a password is
+required` means you are still the `splunk` user — that is not a diagnosis. Confirm where
+the block lives (also as `ubuntu`):
 
 ```bash
 sudo grep -rn 'overlay' /etc/modprobe.d/
@@ -55,7 +74,8 @@ prevents autoloading, but `install … /bin/false` prevents loading entirely.
     grep -E 'CONFIG_OVERLAY_FS|CONFIG_SQUASHFS' /boot/config-$(uname -r)
     ```
 
-If an exception is granted, override without editing the config-managed file:
+If an exception is granted, override without editing the config-managed file — again as
+`ubuntu`:
 
 ```bash
 echo 'install overlay /sbin/modprobe --ignore-install overlay' \
@@ -164,7 +184,81 @@ helm template t splunk-otel-collector-chart/splunk-otel-collector \
 
 ---
 
+## Data that looks wrong but isn't
+
+??? failure "Severity shows UNKNOWN in Log Observer"
+    **Check the time picker before you touch the configuration.**
+
+    Severity is written at **ingest**. Any log indexed while the OTTL transform was
+    incomplete — that is, everything from before you finished FW #2 step 11 — stays
+    `UNKNOWN` **permanently**. Fixing the transform classifies new events; it cannot
+    reclassify old ones. Re-running `helm upgrade`, re-reading your OTTL and re-checking
+    the Collector config will all produce no change, because nothing about the current
+    configuration is wrong.
+
+    Opening Log Observer with a wide or default time window therefore shows a large block of
+    UNKNOWN rows on a cluster that is working correctly.
+
+    **The diagnostic that separates "config is wrong" from "data is old"**, in one query:
+
+    ```
+    index=k8s_ws_petclinic_logs
+    | eval s=if(isnull(severity),"UNKNOWN","classified")
+    | timechart span=1h count by s
+    ```
+
+    Read the **most recent** buckets, not the totals:
+
+    | What the timechart shows | What it means |
+    |---|---|
+    | UNKNOWN early, `classified` taking over from one hour onward | Working. You're looking at pre-fix data — narrow the picker to the last 15 minutes. |
+    | UNKNOWN in the current hour, `classified` at zero throughout | The transform genuinely isn't classifying. Go back to FW #2 step 11. |
+
+    !!! tip "Narrow the window first"
+        Set Log Observer to the last 15 minutes before concluding anything. If severity is
+        correct there, the configuration is correct.
+
+    Some UNKNOWN in `k8s_ws_logs` is also expected and not a fault — Kubernetes audit
+    records are structured JSON about API calls and have no severity to extract.
+
+---
+
 ## Environment and access
+
+??? failure "Commands run, exit 0, and change the wrong thing after a reconnect"
+    **The single most common silent failure in this workshop.** `~/.workshop-env` is
+    **not** loaded automatically. Every new SSH session, every `tmux` pane, every
+    `sudo -i -u splunk` — all start with `WS_USER`, `LOCAL_IP` and `HEC_TOKEN` empty.
+
+    Nothing errors. `${WS_USER}` simply expands to nothing:
+
+    ```bash
+    helm upgrade ${WS_USER}-k8s-ws ...     # you typed this
+    helm upgrade -k8s-ws ...               # helm received this
+    ```
+
+    That is a **different release name**, not a failure. Helm will happily install a second
+    release, and your actual Collector is left untouched — so every check you run afterwards
+    reports the old configuration and you conclude the change didn't apply.
+
+    **The one-line check, every time you reconnect:**
+
+    ```bash
+    echo "$WS_USER on $LOCAL_IP"
+    ```
+
+    Empty output — or just the word `on` — means the variables aren't set:
+
+    ```bash
+    source ~/.workshop-env
+    ```
+
+    !!! tip "Make it stick"
+        ```bash
+        echo 'source ~/.workshop-env' >> ~/.profile
+        ```
+        If you already created a stray release from an unset variable, list what actually
+        exists with `helm list -A` and `helm uninstall` the wrong one.
 
 ??? failure "`sudo: a password is required` as the splunk user"
     By design — `splunk` has no password and no sudo rights. Privileged operations belong
@@ -220,8 +314,21 @@ helm template t splunk-otel-collector-chart/splunk-otel-collector \
 Every module ships an assertion script that reports precisely which step failed:
 
 ```bash
-export WS_USER=<your-username>
+cd ~/k8s-otel-workshop
+source ~/.workshop-env                     # WS_USER, LOCAL_IP, HEC_TOKEN
+export SPLUNK_AUTH=admin:'Workshop2026!'   # needed by verify-fw2.sh onward
+
 ./scripts/verify-setup.sh     # host
 ./scripts/verify-fw1.sh       # Foundational #1
 ./scripts/verify-fw2.sh       # Foundational #2
+./scripts/verify-aw1.sh       # Advanced #1
+./scripts/verify-aw2.sh       # Advanced #2
 ```
+
+!!! tip "If a script exits immediately"
+    `verify-fw2.sh: line 8: SPLUNK_AUTH: export SPLUNK_AUTH=admin:<password>` means you
+    skipped the `export` above. An empty `WS_USER` is the other common cause — see
+    *"Commands run, exit 0, and change the wrong thing after a reconnect"*.
+
+    `Workshop2026!` is the workshop's fixed admin password. The single quotes matter: `!`
+    is history expansion in an interactive `bash` shell.

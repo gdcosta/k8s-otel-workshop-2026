@@ -29,12 +29,12 @@ spec:
       labels:
         app: ${WS_USER}-petclinic-otel-app
       annotations:
-        docker_image_author: "gerry"
+        docker_image_author: "${WS_USER}"
         splunk.com/index: "k8s_ws_petclinic_logs"
     spec:
       containers:
       - name: ${WS_USER}-petclinic-otel-container01
-        image: gerry/petclinic-otel:v1
+        image: ${WS_USER}/petclinic-otel:v1
         imagePullPolicy: Never
         ports:
         - containerPort: 8080

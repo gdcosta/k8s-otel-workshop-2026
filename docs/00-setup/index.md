@@ -40,17 +40,111 @@ toolchain, and a local Splunk Enterprise instance.
 
 ### Network access
 
-Inbound, from your own IP:
+Inbound, from your own IP — never `0.0.0.0/0`:
 
 | Port | Purpose |
 |---|---|
-| 22 | SSH |
+| 22 | SSH — and every browser tunnel this workshop uses |
 | 8000 | Splunk Web |
-| 8080 | PetClinic (via port-forward) |
+| 8080 | *Optional* — only if you publish PetClinic on the host instead of tunnelling |
 | 8089 | *Advanced Workshop #2 only* — Log Observer Connect |
 
 Outbound: all. The host pulls from GitHub, Docker Hub, the Ubuntu archives, Splunk, and —
 in AW #2 — Splunk Observability Cloud.
+
+!!! danger "Port 8000 must be scoped to your own address"
+    This workshop uses fixed credentials that are printed in the guide — `admin` /
+    `Workshop2026!` — so every later command is copy-pasteable and an instructor can sign in
+    to help someone who is stuck. That is only safe while the login page is not open to the
+    internet: an EC2 host name is predictable, and the password is on this page.
+
+    Restrict the port 8000 rule to your own IP. If you would rather not open it at all,
+    leave it closed and reach Splunk Web through the SSH tunnel in the next section.
+
+    These are throwaway credentials on a disposable instance. Never reuse them — or this
+    practice — on anything real.
+
+---
+
+## Connect to your instance
+
+You have a host name and an SSH key file. Everything from here happens over SSH.
+
+=== "macOS / Linux"
+
+    ```bash
+    chmod 400 <your-key.pem>
+    ssh -i <your-key.pem> ubuntu@<your-instance>
+    ```
+
+=== "Windows"
+
+    ```powershell
+    icacls <your-key.pem> /inheritance:r /grant:r "$($env:USERNAME):R"
+    ssh -i <your-key.pem> ubuntu@<your-instance>
+    ```
+
+    PowerShell and Windows Terminal ship OpenSSH, `ssh -L` included. Nothing else — no
+    PuTTY, no extra tooling — is needed for anything in this workshop.
+
+!!! warning "`WARNING: UNPROTECTED PRIVATE KEY FILE`"
+    OpenSSH refuses a private key other users can read, and the error names the file rather
+    than the fix: `chmod 400 <your-key.pem>`. A key straight out of a browser download
+    almost always needs it.
+
+### Two accounts
+
+Host setup runs as **`ubuntu`**, the administrative account — it installs packages, edits
+`/etc/hosts`, and creates the workshop user. Everything after this page runs as
+**`splunk`**: the cluster, the application, and Splunk Enterprise all live under that
+account, which has no password and no sudo, deliberately.
+
+```bash
+sudo -i -u splunk      # from the ubuntu session, at any time
+```
+
+Step 5 copies your public key into the `splunk` account. After that you can connect
+straight to it, which is how you open the second terminal FW #2 asks for:
+
+```bash
+ssh -i <your-key.pem> splunk@<your-instance>
+```
+
+### Browser access, and the one thing that needs a tunnel
+
+Two web UIs matter here, and only one of them is reachable directly:
+
+| | Runs on | Listens on | From your laptop |
+|---|---|---|---|
+| Splunk Web `:8000` | the EC2 host | `0.0.0.0:8000` | direct, once your IP is allowed |
+| PetClinic `:30000` | inside Kubernetes | NodePort on `192.168.49.2` | **not reachable** — tunnel it |
+
+`192.168.49.2` is minikube's address on a Docker network *inside* the host. It isn't
+routable from anywhere else, so no security-group rule can expose it — opening ports simply
+does nothing. FW #1 explains what a NodePort is; this is the practical consequence.
+
+Forward it when you connect and it costs you nothing:
+
+```bash
+# PetClinic → http://localhost:8080 in your browser
+ssh -i <your-key.pem> -L 8080:192.168.49.2:30000 splunk@<your-instance>
+```
+
+`ssh -L` resolves the target address on the **remote** side, so it reaches the NodePort
+directly — no `kubectl`, nothing left running on the instance.
+
+```bash
+# the same, plus Splunk Web on http://localhost:8000 if you left 8000 closed
+ssh -i <your-key.pem> \
+  -L 8080:192.168.49.2:30000 \
+  -L 8000:localhost:8000 \
+  splunk@<your-instance>
+```
+
+!!! note "Nothing answers on 8080 until FW #1"
+    The tunnel is only useful once PetClinic is deployed. Until then `http://localhost:8080`
+    refuses the connection — that's expected, not a broken tunnel. Until step 5 has run,
+    connect as `ubuntu@` instead; the forwarding flags are identical.
 
 ---
 
@@ -66,14 +160,38 @@ It's idempotent — safe to re-run if something fails partway. It reads every ve
 [`versions.env`](https://github.com/gdcosta/k8s-otel-workshop-2026/blob/main/versions.env), so
 that file is the single place to change a pin.
 
-When it finishes, jump to [Verify the host](#verify-the-host).
+The verification scripts run as `splunk`, so that account needs its own copy of the repo:
+
+```bash
+sudo -u splunk git clone https://github.com/gdcosta/k8s-otel-workshop-2026.git \
+  /home/splunk/k8s-otel-workshop
+```
+
+Then set your username — the script leaves it as `CHANGE_ME`:
+
+```bash
+WS_USER=wsuser01     # ← your own, lowercase, no spaces
+sudo sed -i "s/^export WS_USER=.*/export WS_USER=${WS_USER}/" /home/splunk/.workshop-env
+```
+
+Confirm the variables reach a fresh login shell:
+
+```bash
+sudo -i -u splunk
+echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
+```
+
+Empty output means `.profile` isn't loading the file — apply
+[step 13](#13-set-up-the-splunk-shell-environment) by hand.
+
+When that reads back correctly, jump to [Verify the host](#verify-the-host).
 
 ---
 
 ## Manual setup
 
-Everything in this section runs as the **`ubuntu`** user — the administrative account.
-The workshop itself runs as a separate `splunk` user created below.
+Everything in this section runs as the **`ubuntu`** user — the administrative account you
+connected as above. The workshop itself runs as a separate `splunk` user, created in step 5.
 
 ### 1. Update the system
 
@@ -186,7 +304,21 @@ sudo chmod 600 /home/splunk/.ssh/authorized_keys
     sudo -i -u splunk                     # from the ubuntu account
     ```
 
-### 6. Add the minikube hostname
+### 6. Clone the workshop repository
+
+Every module ends with a `verify-*.sh` script from this repository, and they all run as
+`splunk` — so clone it into that account's home, not `ubuntu`'s:
+
+```bash
+sudo -u splunk git clone https://github.com/gdcosta/k8s-otel-workshop-2026.git \
+  /home/splunk/k8s-otel-workshop
+sudo -u splunk ls /home/splunk/k8s-otel-workshop/scripts
+```
+
+The repo also carries the lab files later modules download — manifests, Collector values,
+JMeter plans — so you have a local copy of each if a download ever fails.
+
+### 7. Add the minikube hostname
 
 ```bash
 echo -e "192.168.49.2\tminikube" | sudo tee -a /etc/hosts
@@ -204,7 +336,7 @@ getent hosts minikube
 
     The address is fixed because FW #1 starts minikube with `--subnet=192.168.49.0/24`.
 
-### 7. Install kubectl
+### 8. Install kubectl
 
 ```bash
 KUBECTL_VERSION=v1.36.3
@@ -219,7 +351,7 @@ kubectl version --client -o json | jq -r .clientVersion.gitVersion
     people running the workshop a week apart then get different clients, and a workshop
     that can't be reproduced can't be supported. Pin the version.
 
-### 8. Install minikube
+### 9. Install minikube
 
 ```bash
 MINIKUBE_VERSION=v1.38.1
@@ -229,7 +361,7 @@ rm minikube-linux-amd64
 minikube version
 ```
 
-### 9. Install Helm
+### 10. Install Helm
 
 ```bash
 HELM_VERSION=v4.2.4
@@ -256,46 +388,6 @@ helm version --short
 Helm 4 is used deliberately: the Splunk OTel Collector chart requires *"Helm 3.9+ or
 Helm 4.x"* and is tested against both.
 
-### 10. Install Splunk Enterprise
-
-```bash
-SPLUNK_VERSION=10.4.2
-SPLUNK_HASH=33c3bf42cd73
-cd ~/
-wget -O splunk.tgz \
-  "https://download.splunk.com/products/splunk/releases/${SPLUNK_VERSION}/linux/splunk-${SPLUNK_VERSION}-${SPLUNK_HASH}-linux-amd64.tgz"
-sudo tar -xzf splunk.tgz -C /opt
-sudo chown -R splunk:splunk /opt/splunk
-rm splunk.tgz
-```
-
-Seed the admin account. **Generate a password rather than reusing one:**
-
-```bash
-ADMIN_PW=$(openssl rand -base64 18 | tr -d '/+=' | head -c 20)
-echo "Splunk admin password: $ADMIN_PW"     # write this down now
-
-sudo -u splunk tee /opt/splunk/etc/system/local/user-seed.conf >/dev/null <<EOF
-[user_info]
-USERNAME = admin
-PASSWORD = ${ADMIN_PW}
-EOF
-
-sudo -u splunk /opt/splunk/bin/splunk start --accept-license --answer-yes --no-prompt
-sudo -u splunk /opt/splunk/bin/splunk version
-```
-
-Splunk Web is now on `http://$PUB_DNS:8000` — echo it if you need the value:
-
-```bash
-echo "http://$PUB_DNS:8000"
-```
-
-!!! note "Splunk 10.4 is a major jump from earlier versions of this workshop"
-    Previous revisions pinned 9.0.4.1, which is long past end of support. Aside from being
-    a much larger download, one behavioural change matters directly: **HEC now enables SSL
-    by default.** FW #2 covers that at the point where it bites.
-
 ### 11. Create the workshop environment file
 
 Every later module refers to the same handful of values. Put them in one file so any shell
@@ -303,8 +395,8 @@ Every later module refers to the same handful of values. Put them in one file so
 
 ```bash
 sudo -u splunk tee /home/splunk/.workshop-env >/dev/null <<'EOF'
-# Workshop session variables. Load with:  source ~/.workshop-env
-# Re-run that in every new terminal.
+# Workshop session variables. Loaded automatically by ~/.profile (step 13).
+# In a shell that hasn't loaded it:  source ~/.workshop-env
 
 # Your username. Prefixes every resource you create so attendees sharing a
 # Splunk or Observability Cloud environment don't collide.
@@ -330,26 +422,86 @@ sudo chown splunk:splunk /home/splunk/.workshop-env
 sudo chmod 600 /home/splunk/.workshop-env
 ```
 
-Set your username, then load it:
+Set your username. Do it from the `ubuntu` session — the remaining steps still need root:
 
 ```bash
-sudo -i -u splunk
-sed -i "s/^export WS_USER=.*/export WS_USER=<your-username>/" ~/.workshop-env
-source ~/.workshop-env
-echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
+WS_USER=wsuser01      # ← your own, lowercase, no spaces
+sudo sed -i "s/^export WS_USER=.*/export WS_USER=${WS_USER}/" /home/splunk/.workshop-env
+sudo -u splunk grep '^export WS_USER' /home/splunk/.workshop-env
 ```
 
-!!! tip "Load it automatically in every shell"
-    ```bash
-    echo '[ -f ~/.workshop-env ] && source ~/.workshop-env' >> ~/.profile
-    ```
-    Saves remembering `source` each time you open a terminal. Tokens added later are
-    picked up on the next login.
+!!! note "Why the file comes before the Splunk install"
+    The next step ends with the Splunk Web URL, which is `$PUB_DNS` — defined here. An
+    earlier revision created this file *afterwards*, and the URL printed as `http://:8000`.
+    Step 12 itself runs in the `ubuntu` shell, which never loads this file, so it asks the
+    instance metadata service for the same value directly.
 
-### 12. Set up the `splunk` shell environment
+    The quoted heredoc (`<<'EOF'`) is deliberate: `$(ec2metadata ...)` stays literal in the
+    file and is evaluated each time the file is sourced, so the values are right even if the
+    instance is stopped and started with a new public address.
+
+### 12. Install Splunk Enterprise
+
+```bash
+SPLUNK_VERSION=10.4.2
+SPLUNK_HASH=33c3bf42cd73
+cd ~/
+wget -O splunk.tgz \
+  "https://download.splunk.com/products/splunk/releases/${SPLUNK_VERSION}/linux/splunk-${SPLUNK_VERSION}-${SPLUNK_HASH}-linux-amd64.tgz"
+sudo tar -xzf splunk.tgz -C /opt
+sudo chown -R splunk:splunk /opt/splunk
+rm splunk.tgz
+```
+
+Seed the admin account with the workshop's standard credentials:
+
+```bash
+sudo -u splunk tee /opt/splunk/etc/system/local/user-seed.conf >/dev/null <<'EOF'
+[user_info]
+USERNAME = admin
+PASSWORD = Workshop2026!
+EOF
+
+sudo -u splunk /opt/splunk/bin/splunk start --accept-license --answer-yes --no-prompt
+sudo -u splunk /opt/splunk/bin/splunk version
+```
+
+!!! warning "Published credentials — two things follow, neither optional"
+    `admin` / `Workshop2026!` is the same on every participant's instance and is printed in
+    this guide, so every later command is copy-pasteable and an instructor can sign in to
+    help. Because of that:
+
+    - **Port 8000 must be restricted to your own IP** in the security group. A published
+      password on an internet-facing login page is an open door, and these hosts have
+      predictable names. If you would rather not open it at all, close 8000 and use the SSH
+      tunnel from [Connect to your instance](#browser-access-and-the-one-thing-that-needs-a-tunnel).
+    - **These are throwaway lab credentials on a disposable instance.** Never reuse them, or
+      this practice, on anything real. AW #2 adds a second fixed account —
+      `loc_svc` / `LogObserver2026!` — on exactly the same terms.
+
+Splunk Web is now up on port 8000. From this `ubuntu` shell:
+
+```bash
+echo "http://$(ec2metadata --public-hostname):8000"
+```
+
+In the `splunk` account that same value is `$PUB_DNS`, from the file you created in step 11.
+
+!!! note "Splunk 10.4 is a major jump from earlier versions of this workshop"
+    Previous revisions pinned 9.0.4.1, which is long past end of support. Aside from being
+    a much larger download, one behavioural change matters directly: **HEC now enables SSL
+    by default.** FW #2 covers that at the point where it bites.
+
+### 13. Set up the `splunk` shell environment
+
+Two things belong in that account's `.profile`: the workshop variables, and the pointer at
+minikube's Docker daemon.
 
 ```bash
 sudo -u splunk tee -a /home/splunk/.profile >/dev/null <<'EOF'
+
+# k8s workshop — load the session variables in every login shell
+[ -f ~/.workshop-env ] && . ~/.workshop-env
 
 # k8s workshop — point docker at minikube's daemon
 if command -v minikube >/dev/null && minikube status >/dev/null 2>&1; then
@@ -358,8 +510,25 @@ fi
 EOF
 ```
 
-This makes `docker build` place images inside minikube's image store, where Kubernetes can
-find them without a registry. FW #1 explains why that matters.
+The first block is what makes `${WS_USER}` work in every terminal, including one you open a
+week later; tokens added to the file by later modules are picked up at the next login. The
+second makes `docker build` place images inside minikube's image store, where Kubernetes can
+find them without a registry — FW #1 explains why that matters.
+
+Check it in a genuinely fresh login shell:
+
+```bash
+sudo -i -u splunk
+echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
+```
+
+!!! warning "Empty output is the failure you will actually hit"
+    If that prints ` on  ()`, the variables aren't loaded. `source ~/.workshop-env` fixes the
+    shell you're in; then check the `.profile` lines above really landed.
+
+    Nothing errors when they're missing, which is what makes it expensive:
+    `helm upgrade ${WS_USER}-k8s-ws ...` quietly becomes `helm upgrade -k8s-ws ...` — a
+    different release name, not a failure. Run that `echo` after every reconnect.
 
 ---
 
@@ -369,6 +538,9 @@ find them without a registry. FW #1 explains why that matters.
 sudo -i -u splunk
 ~/k8s-otel-workshop/scripts/verify-setup.sh
 ```
+
+That's the repository cloned in step 6. `No such file or directory` means the clone landed
+in `ubuntu`'s home instead of `splunk`'s — re-run the clone from step 6.
 
 <details>
 <summary>What it checks</summary>
@@ -403,12 +575,12 @@ sudo -i -u splunk
 
 ??? failure "`helm` install fails with an SSL certificate error"
     You're using the `baltocdn.com` apt repository. Use the `get.helm.sh` tarball in
-    step 9 instead.
+    step 10 instead.
 
 ??? failure "`sudo: a password is required` as the splunk user"
     Expected — `splunk` has no sudo rights and no password. Privileged steps belong to the
     `ubuntu` account. If you hit this mid-lab, something that should have happened during
-    setup didn't; `/etc/hosts` in step 6 is the usual culprit.
+    setup didn't; `/etc/hosts` in step 7 is the usual culprit.
 
 ??? failure "Splunk won't start / port 8000 refused"
     ```bash

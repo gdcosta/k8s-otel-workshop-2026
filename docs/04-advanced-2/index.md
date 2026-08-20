@@ -33,7 +33,7 @@ echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
 
     ```bash
     cat > ~/.workshop-env <<'EOF'
-    export WS_USER=<your-username>
+    export WS_USER=<the username you were assigned, e.g. wsuser01>
     export LOCAL_IP=$(ec2metadata --local-ipv4)
     export PUB_DNS=$(ec2metadata --public-hostname)
     export CHART_VERSION=0.158.0
@@ -119,11 +119,29 @@ Add to `~/k8s_workshop/k8s_otel/values-workshop.yaml`, above `splunkPlatform`:
 ```yaml
 splunkObservability:
   realm: "us1"          # must match $O11Y_REALM
-  accessToken: "<YOUR_INGEST_TOKEN>"
   metricsEnabled: true
   tracesEnabled: true
   profilingEnabled: false      # switched on in step 6
 ```
+
+!!! tip "No `accessToken` in the file — pass it at install time"
+    Step 1 went to some trouble to keep the token out of your shell history and outside any
+    Git repository. Pasting it into `values-workshop.yaml` would undo that: this is the one
+    file the module repeatedly asks you to compare, diff and share, and the "Reference —
+    complete files" section at the end publishes it verbatim.
+
+    So leave the key out entirely and supply it on the command line, reading straight from
+    the file:
+
+    ```bash
+    helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+      --version 0.158.0 -f values-workshop.yaml \
+      --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
+    ```
+
+    Every `helm upgrade` from here on carries that `--set`. Drop it on a later upgrade and
+    the token disappears from the release, exports start failing auth, and nothing in the
+    Collector log says so plainly.
 
 ??? example "What your values file should look like around here"
     `splunkObservability` is a new top-level key, a sibling of `splunkPlatform`. Both destinations coexist — you are adding, not replacing.
@@ -132,12 +150,12 @@ splunkObservability:
     clusterName: ${WS_USER}-minikube-cluster
 
     # [AW2] Second destination. Added without changing how anything is collected.
+    # accessToken is deliberately absent — it is passed with --set at install time.
     splunkObservability:
-      realm: "us1"
-      accessToken: "${O11Y_TOKEN}"
+      realm: "us1"          # must match $O11Y_REALM
       metricsEnabled: true
       tracesEnabled: true
-      profilingEnabled: true     # enabled later in this module
+      profilingEnabled: false      # switched on in step 6
 
     # [FW2] Splunk Enterprise via HEC.  [AW1] adds metricsIndex / tracesIndex.
     splunkPlatform:
@@ -165,11 +183,13 @@ splunkObservability:
     # Validate first. The chart schema is the only check in this workshop that
     # fails loudly instead of silently doing nothing.
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client
+      --version 0.158.0 -f values-workshop.yaml --dry-run=client \
+      --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     # Apply
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml
+      --version 0.158.0 -f values-workshop.yaml \
+      --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
 
@@ -194,7 +214,8 @@ splunkObservability:
 
     ```bash
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client
+      --version 0.158.0 -f values-workshop.yaml --dry-run=client \
+      --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
     ```
 
     Get into the habit. Almost every other misconfiguration in this workshop deploys
@@ -203,7 +224,8 @@ splunkObservability:
 ```bash
 cd ~/k8s_workshop/k8s_otel
 helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-  --version 0.158.0 -f values-workshop.yaml
+  --version 0.158.0 -f values-workshop.yaml \
+  --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent
 ```
 
@@ -252,8 +274,9 @@ You should see **two** services:
     This is why traces matter. The service map assembles itself from what's actually
     happening, rather than from a diagram someone drew and stopped updating.
 
-Your service should show roughly a **6.7% error rate** — the deliberate `/oups` sampler in
-the JMeter plan. The same failures you found in Splunk Enterprise in FW #2, now expressed
+Your service should show roughly a **6.9% error rate** — the deliberate `/oups` sampler in
+the JMeter plan. (The JMeter console reports ~7.7% for the same traffic; APM counts a
+different denominator. §8 makes that discrepancy the exercise.) The same failures you found in Splunk Enterprise in FW #2, now expressed
 as a service-level metric.
 
 ---
@@ -280,6 +303,23 @@ IPs for your realm — for `us1`:
 Other realms are listed in
 [Splunk's documentation](https://help.splunk.com/en/splunk-observability-cloud/manage-data/view-splunk-platform-logs/set-up-log-observer-connect-for-splunk-enterprise).
 
+!!! warning "Port 8089 is opened deliberately. Port 8000 should not be."
+    8089 has to be reachable from those four realm IPs and nothing else — that is the whole
+    point of scoping the rule rather than opening it to `0.0.0.0/0`.
+
+    **Splunk Web on 8000 is a different matter.** These credentials are published workshop
+    constants, and the instance has a predictable public hostname, so anyone who finds it
+    can sign in as `admin`. Restrict 8000 to **your own IP** in the security group. If you
+    would rather not open it at all, leave it closed and tunnel:
+
+    ```bash
+    ssh -i <your-key.pem> -L 8000:localhost:8000 splunk@<your-instance>
+    ```
+
+    Then use `http://localhost:8000` wherever this module says `$PUB_DNS:8000`.
+    [Host setup](../00-setup/index.md) covers this in full — it is repeated here only
+    because this is the step that first opens a port to the internet.
+
 ### Create the service account role
 
 ```bash
@@ -289,7 +329,7 @@ cat > /opt/splunk/etc/system/local/authorize.conf <<'EOF'
 search = enabled
 edit_tokens_own = enabled
 indexes_list_all = disabled
-srchIndexesAllowed = k8s_ws_logs;k8s_ws_petclinic_logs;k8s_ws_traces
+srchIndexesAllowed = k8s_ws_logs;k8s_ws_petclinic_logs
 srchIndexesDefault = k8s_ws_petclinic_logs
 srchJobsQuota = 40
 srchDiskQuota = 1000
@@ -298,29 +338,84 @@ srchTimeEarliest = 7776000
 EOF
 ```
 
-!!! danger "Three traps in that one file"
+!!! danger "Four things to get right in that one file"
     **1. `indexes_list_all` must be `disabled`.** Earlier versions of this workshop
     *enabled* it. Current Splunk guidance is the opposite.
 
     **2. There is deliberately no `importRoles`.** Splunk **unions** `srchIndexesAllowed`
     across inherited roles, so `importRoles = user` silently grants `main`, `summary`,
     `history` and every other index that role can reach — while the config still *looks*
-    restrictive. Without it, the account gets exactly the three indexes listed.
+    restrictive. Without it, the account gets exactly the two indexes listed.
 
     **3. `edit_tokens_own` is required.** Log Observer Connect mints its own token when it
     connects. Without this capability the connection fails in a way that looks like bad
     credentials.
 
+    **4. Exactly two indexes, and both of them are log indexes.** Which two, and why the
+    trace index is not among them, is the next box.
+
+!!! abstract "Learning moment — why `k8s_ws_traces` is *not* in that list"
+    AW #1 spent a whole section routing traces into `k8s_ws_traces`, so leaving it out here
+    looks like an oversight. It isn't.
+
+    `k8s_ws_traces` holds **spans**, not logs — one JSON span record per event, with no
+    severity and no message body. Grant it to `loc_svc` and Log Observer will happily
+    display 99,000+ span records as if they were log lines, every one of them Severity
+    **UNKNOWN**. On a measured run that single index was **56% of every UNKNOWN event Log
+    Observer could see**, and the reason the Severity column looks broken after step 5. It
+    is not an OTTL problem, and nothing in step 5 will fix it.
+
+    The reason the trace index exists at all is a **Splunk Enterprise** story: it shows that
+    teams who cannot adopt Observability Cloud can still store and visualise traces in
+    Splunk — that is what AW #1 §5's routing and §8's trace dashboard are for. On the
+    Observability Cloud side those same spans are already present natively through **APM**.
+    Querying them a second time through Log Observer is redundant, and actively degrades
+    the logs experience.
+
+    **The two indexes that *are* mapped are two halves of one stream.** In FW #2 §4
+    everything the Collector sent landed in `k8s_ws_logs` together; FW #2 §10's
+    `splunk.com/index` pod annotation then routed PetClinic out into its own index.
+    Watching one stream become two was the point of that step, and by now both halves are
+    needed:
+
+    | Index | Contents | Backs the pivot |
+    |---|---|---|
+    | `k8s_ws_logs` | everything not routed elsewhere — cluster and Kubernetes audit logs | Infrastructure → node/pod → **Logs** |
+    | `k8s_ws_petclinic_logs` | application logs, split out by the FW #2 §10 annotation | APM → service → **Logs** |
+
+    Drop either mapping and the corresponding pivot goes empty. Both hold data
+    Observability Cloud has no other copy of — which is exactly the asymmetry with traces.
+
+!!! note "`k8s_ws_logs` carries some UNKNOWN severity, and that is correct"
+    Around 13% of `k8s_ws_logs` has no severity, essentially all of it Kubernetes audit
+    records — structured JSON about API calls, not levelled log output. There is no
+    severity in them to extract. Don't reach for another OTTL statement.
+
 **Restart Splunk before creating the user** — roles are only read at startup:
 
 ```bash
 /opt/splunk/bin/splunk restart
-/opt/splunk/bin/splunk add user loc_svc -password '<CHOOSE_A_PASSWORD>' \
-  -role loc_service -auth admin:'<YOUR_ADMIN_PASSWORD>'
+/opt/splunk/bin/splunk add user loc_svc -password 'LogObserver2026!' \
+  -role loc_service -auth "admin:Workshop2026!"
 ```
 
 Skip the restart and you get `Could not find role`, which reads like a typo rather than a
 timing problem.
+
+!!! note "These are fixed workshop credentials, and they go on the command line"
+    `admin` / `Workshop2026!` and `loc_svc` / `LogObserver2026!` are published constants so
+    that every step in the workshop is copy-pasteable and an instructor can help a stuck
+    participant without guessing a generated password.
+
+    Be aware of what that command does, because it is the one place the workshop puts
+    secrets inline: both passwords land in `~/.bash_history` and are briefly visible in
+    `ps`. That is acceptable *only* because these are throwaway lab credentials on a
+    disposable instance. Never carry this pattern — or these passwords — to anything real.
+    Elsewhere the workshop keeps credentials in files (`umask 077`, `printf`, outside any
+    repository) for exactly this reason.
+
+    `loc_svc`'s password has to be typed into a browser form in a moment, so it cannot stay
+    purely in a file anyway.
 
 ### Generate a certificate for the management port
 
@@ -352,6 +447,22 @@ echo | openssl s_client -connect 127.0.0.1:8089 2>/dev/null | openssl x509 -noou
     by it — around fifteen steps. Current documentation only needs the certificate the
     management port presents, so a single self-signed certificate is enough.
 
+Print the certificate now, before you move to the browser — the next step asks you to paste
+it into a form, and you will not want to come back for it:
+
+```bash
+sudo cat /opt/splunk/etc/auth/loccerts/locCert.pem
+```
+
+!!! warning "Two different `.pem` files, and only one of them gets pasted"
+    This certificate was generated on the instance a moment ago. It has nothing to do with
+    the SSH key — [host setup](../00-setup/index.md) calls that `<your-key.pem>`, and the
+    collision genuinely catches people out.
+
+    `locCert.pem` is the public certificate and is meant to be shared. **`locKey.pem` is
+    the private key and must never be pasted anywhere** — not into the form, not into a
+    ticket, not into a chat.
+
 ### Run the guided setup
 
 **Logs → Logs connections**
@@ -370,32 +481,107 @@ paste from `-----BEGIN CERTIFICATE-----` to `-----END CERTIFICATE-----` inclusiv
 | Field | Value |
 |---|---|
 | Service account username | `loc_svc` |
-| Password | the one you chose above |
+| Password | `LogObserver2026!` |
 | Splunk platform URL | `https://$PUB_DNS:8089` — run `echo "https://$PUB_DNS:8089"` |
-| Connection name | e.g. `loc_<you>_k8s_otel_workshop` |
-| Certificate | contents of `locCert.pem` |
+| Connection name | e.g. `loc_${WS_USER}_k8s_otel_workshop` |
+| Certificate | output of `sudo cat /opt/splunk/etc/auth/loccerts/locCert.pem` |
 
 Then choose who may use the connection:
 
 ![Configure permissions](../assets/img/04-aw2/loc-05-configure-permissions.png)
 
+### Generate the index mappings
+
+**Creating the connection does not create the mappings.** Straight after the guided setup
+your connection shows **0/7** indexes with mappings, and it stays there until you run a
+separate action that the guided setup never mentions.
+
+1. **Logs → Logs connections**, then the kebab menu (**⋮**) on your connection row →
+   **Generate mappings**. The same menu offers Update Connection, Delete Connection, View
+   mappings and Make Default.
+
+    ![Generate mappings menu](../assets/img/04-aw2/loc-07-generate-mappings-menu.png)
+    <!-- STATUS: pending-recapture · kebab menu on the connection row -->
+
+2. You land on the **Mapping generation** tab. Tick the two workshop log indexes —
+   `k8s_ws_logs` and `k8s_ws_petclinic_logs`. The header should read *"Selected 2
+   indexes"*. Then **Generate**.
+
+    ![Mapping generation — two indexes selected](../assets/img/04-aw2/loc-08-mapping-generation-select.png)
+    <!-- STATUS: pending-recapture · header must read "Selected 2 indexes" -->
+
+3. Generation status shows **Accepted**, trigger source **Manual**.
+
+    ![Generation status Accepted](../assets/img/04-aw2/loc-09-generation-accepted.png)
+    <!-- STATUS: pending-recapture -->
+
+4. Hit **Refresh**. A few seconds later the status becomes **Completed**.
+
+    ![Generation status Completed](../assets/img/04-aw2/loc-10-generation-completed.png)
+    <!-- STATUS: pending-recapture -->
+
+!!! danger "Accepted is not done"
+    The status is asynchronous. **Accepted** means the request was queued, not that
+    mappings exist. Refresh until it reads **Completed** — participants who move on at
+    Accepted continue with mappings half-built and then debug step 5 for the rest of the
+    module.
+
+!!! note "Global Index Search is ON by default"
+    The setting reads: *"Enable Global Index Search to broaden the search across all
+    indexes (`index=*`) when no entity-index mapping is found. This may increase SVC
+    consumption and impact performance."*
+
+    Two consequences worth knowing. It can **mask a broken mapping** — logs still appear,
+    via the `index=*` fallback, so a misconfiguration looks like a working setup. And it
+    carries a stated cost and performance warning, which matters the moment you apply any
+    of this outside a lab.
+
 ### ✅ Checkpoint
 
 ![Connection active](../assets/img/04-aw2/loc-06-connection-active.png)
+<!-- STATUS: pending-recapture · captured when the role still included k8s_ws_traces; should read 2/7 -->
 
-Your connection should list a non-zero index count under **Indexes with access**.
+**Indexes with mappings** should read **2/7** — the two log indexes you allowed, out of the
+seven Log Observer Connect can enumerate.
 
-!!! warning "Showing `0/N`? Re-save the connection."
-    Log Observer Connect evaluates index access **once, when the connection is created**,
-    and caches the result. If you corrected the Splunk role *after* creating the
-    connection, it will still show the old answer — commonly `0/7`, which looks like a
-    broken setup.
+!!! danger "`7/7` means your role is wrong, not right"
+    The obvious assumption is that 7/7 is the good outcome. It is the opposite: it is the
+    signature of the `importRoles` union the danger box above warns about, where
+    `srchIndexesAllowed` is inherited from another role and quietly widened to `main`,
+    `summary`, `history` and everything else. A participant who keeps re-saving until the
+    number reaches 7/7 has recreated precisely the misconfiguration this step exists to
+    teach them to avoid.
 
-    Open the connection and save it again to force re-evaluation. Nothing on the Splunk
-    side needs changing.
+!!! note "Why the denominator is 7 and can't be reduced"
+    `main`, `summary`, `history` and `splunklogger` are already **inaccessible** —
+    `srchIndexesAllowed` is a whitelist, so anything absent is denied, and searching them
+    as `loc_svc` returns 0 events. They still appear in the picker because Log Observer
+    enumerates candidate indexes through `/services/data/indexes`, a REST endpoint that
+    **ignores search ACLs**. The search path (`eventcount`, `dbinspect`) correctly returns
+    only the two allowed indexes; the REST path returns all seven.
+
+    Adding `srchIndexesDisallowed` was tested and changed the enumeration not at all — it
+    only adds a maintenance trap, since deny beats allow if an index later appears in both.
+    So `/7` is fixed. The number to care about is the numerator.
+
+!!! warning "Still `0/7` *after* generating mappings?"
+    Log Observer Connect evaluates index access when the connection is created and caches
+    the result. If you corrected the Splunk role *after* creating the connection, it can
+    still be showing the old answer — open the connection, save it again to force
+    re-evaluation, then generate mappings once more.
+
+    This is only worth trying once mapping generation has reported **Completed**. Re-saving
+    on its own never creates mappings, and on a connection that has none it changes
+    nothing at all.
 
 Now try it: **Logs**, and search `index=k8s_ws_petclinic_logs`. Those are the events from
 FW #2, queried live from Splunk Enterprise.
+
+!!! tip "One thing improves these mappings, and it lives in step 5"
+    The Mapping generation screen notes: *"Adding logs field aliases prior to generation
+    will improve the accuracy of the mappings."* Field aliasing is set up in step 5, one
+    section from here — so step 5 ends by sending you back to **Regenerate All**. Nothing
+    to do yet; just know why you'll be returning.
 
 ---
 
@@ -411,7 +597,7 @@ Infrastructure (0)          Logs (0)
 
 Both zero. Everything is collected correctly; nothing is *linked*.
 
-!!! abstract "Learning moment — correlation is a data contract, not a feature
+!!! abstract "Learning moment — correlation is a data contract, not a feature"
     Observability Cloud joins logs to services by matching field values. It correlates on
     **`host.name`**, **`service.name`** and **`trace_id`** — and because APM identifies a
     service as *(service name, environment)*, **`deployment.environment`** has to match too.
@@ -433,16 +619,13 @@ default pattern simply never prints them. Add to the container's `env:` block:
 ```
 
 ??? example "What your manifest should look like around here"
-    One entry among the others in the same `env:` list. The comment block above shows what precedes it so you can find the right spot.
+    One entry among the others in the same `env:` list — add it at the end. The last two entries from FW #2 are shown so you can find the right spot. (The profiler variables come in step 6; they are not there yet.)
 
     ```yaml
-              value: "true"
-            - name: SPLUNK_PROFILER_MEMORY_ENABLED
-              value: "true"
-            # Defaults to http/protobuf on :4318, but our endpoint above is gRPC on
-            # :4317. Mismatched, the profiler starts and sends nothing, with no error.
-            - name: SPLUNK_PROFILER_OTLP_PROTOCOL
-              value: "grpc"
+            - name: SERVER_TOMCAT_ACCESSLOG_BUFFERED
+              value: "false"
+            - name: SERVER_TOMCAT_ACCESSLOG_PATTERN
+              value: '%h %l %u %t "%r" %s %b %D'
 
             # --- AW2: trace context in the log line --------------------------------
             # The agent already puts trace_id/span_id in the MDC; Spring Boot's
@@ -524,10 +707,12 @@ identifies the *service*. Add to `transform/petclinic_logs`:
     grep -n "$WS_USER" values-workshop.yaml | head    # confirm
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client
+      --version 0.158.0 -f values-workshop.yaml --dry-run=client \
+      --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml
+      --version 0.158.0 -f values-workshop.yaml \
+      --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
     ```
@@ -544,7 +729,8 @@ identifies the *service*. Add to `transform/petclinic_logs`:
 
 ```bash
 helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-  --version 0.158.0 -f values-workshop.yaml
+  --version 0.158.0 -f values-workshop.yaml \
+  --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 kubectl apply -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
 ```
 
@@ -583,7 +769,8 @@ cfb192a42a71c0a496a873cfb4c79d44  ERROR     <you>-k8s-petclinic-service  <you>-k
 ```
 
 Then prove the join actually resolves — take a `trace_id` from a log and find it in the
-trace index:
+trace index. Run this one in **Splunk Web as `admin`**, not in Log Observer: `loc_svc`
+deliberately has no access to `k8s_ws_traces` (step 4 explains why).
 
 ```
 index=k8s_ws_traces "cfb192a42a71c0a496a873cfb4c79d44" | stats count
@@ -607,6 +794,50 @@ Now reload **APM → Service Map**, click your service, and the panel should sho
     service map still shows zero, narrow the time picker to the last 15 minutes before
     concluding something is wrong.
 
+!!! warning "Severity works the same way — and this is where people give up"
+    Severity is written **at ingest**, exactly like the correlation fields. Any log indexed
+    before FW #2 §11's transform was complete stays UNKNOWN **permanently**. Re-running
+    `helm upgrade`, re-reading the OTTL and re-checking `severity_text` will change nothing,
+    because nothing about the current configuration is wrong — those events simply predate
+    the fix.
+
+    On a measured run that was 9,101 UNKNOWN out of 48,777 events, essentially all of them
+    from the hour before the transform was finished. Widen the time picker and you see a
+    wall of UNKNOWN and conclude the transform is broken.
+
+    **Narrow to the last 15 minutes when verifying.** To tell "config is wrong" from "data
+    is old" in one query:
+
+    ```
+    index=k8s_ws_petclinic_logs
+    | eval s=if(isnull(severity),"UNKNOWN","classified")
+    | timechart span=1h count by s
+    ```
+
+    A clean split — UNKNOWN in the early buckets, classified from a point onward — means the
+    transform is working and you are looking at history. UNKNOWN across *every* bucket
+    including the most recent means the configuration really is wrong.
+
+### Regenerate the mappings
+
+Now that field aliasing is confirmed, go back and rebuild the Log Observer index mappings.
+The Mapping generation screen says so itself:
+
+> Note: Adding logs field aliases prior to generation will improve the accuracy of the
+> mappings.
+
+The mappings you generated in step 4 were built before you had verified the aliases, so
+refresh them: **Logs → Logs connections → ⋮ → Generate mappings**, then **Regenerate All**.
+Wait for **Completed** as before.
+
+![Regenerate All](../assets/img/04-aw2/loc-11-regenerate-all.png)
+<!-- STATUS: pending-recapture · Regenerate All button on the Mapping generation tab -->
+
+!!! tip "Worth remembering outside the workshop"
+    Aliases and mappings are generated once and then cached. Anyone who adds or corrects a
+    field alias later gets stale mappings and nothing tells them — the mappings simply stay
+    as they were. Regenerating after an alias change is the habit to build.
+
 ---
 
 ## 6. AlwaysOn Profiling
@@ -629,12 +860,12 @@ splunkObservability:
     ```yaml
 
     # [AW2] Second destination. Added without changing how anything is collected.
+    # accessToken stays out of the file — passed with --set on every upgrade.
     splunkObservability:
-      realm: "us1"
-      accessToken: "${O11Y_TOKEN}"
+      realm: "us1"          # must match $O11Y_REALM
       metricsEnabled: true
       tracesEnabled: true
-      profilingEnabled: true     # enabled later in this module
+      profilingEnabled: true      # was false
     ```
 
 ??? abstract "Full command sequence — collector change"
@@ -647,10 +878,12 @@ splunkObservability:
     grep -n "$WS_USER" values-workshop.yaml | head    # confirm
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client
+      --version 0.158.0 -f values-workshop.yaml --dry-run=client \
+      --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml
+      --version 0.158.0 -f values-workshop.yaml \
+      --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
     ```
@@ -695,7 +928,8 @@ No image rebuild is needed — this is Deployment configuration, not baked into 
 
 ```bash
 helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-  --version 0.158.0 -f values-workshop.yaml
+  --version 0.158.0 -f values-workshop.yaml \
+  --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 kubectl apply -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
 kubectl rollout status deployment/${WS_USER}-petclinic-otel-deployment
 ```
@@ -726,7 +960,7 @@ flame graphs appear within a few minutes.
 
 ## 7. Real User Monitoring
 
-!!! abstract "Learning moment — the half you cannot see from the server
+!!! abstract "Learning moment — the half you cannot see from the server"
     Everything so far measures the *server's* view. RUM measures the **browser's**: how
     long the page took to become usable, which resources were slow, what JavaScript errors
     real users hit.
@@ -760,13 +994,24 @@ RUM is browser-side, so it goes in the page. Edit PetClinic's shared layout,
           crossorigin="anonymous"></script>
   <script>
     SplunkRum.init({
-      realm: "us1"          # must match $O11Y_REALM,
+      realm: "us1",
       rumAccessToken: "<YOUR_RUM_TOKEN>",
       applicationName: "${WS_USER}-petclinic-rum",
       deploymentEnvironment: "${WS_USER}-k8s-petclinic-env"
     });
   </script>
 ```
+
+`realm` must match `$O11Y_REALM` — the same value you set in step 1.
+
+!!! danger "This is JavaScript, not YAML. `#` is not a comment here."
+    Everywhere else in this workshop a `#` starts a comment, because everywhere else you are
+    editing YAML. Inside this object literal, `#` is a **SyntaxError**: the browser fails to
+    parse the script, `SplunkRum.init` never runs, and no RUM data is collected at all.
+
+    Nothing visible breaks. The page renders normally, the script tag is present in the
+    served HTML, and the only evidence is an error in the browser console that nobody on an
+    SSH session ever sees. If you want a comment in there, use `//`.
 
 !!! tip "Match `deploymentEnvironment` to your APM environment"
     Using the same value as `OTEL_RESOURCE_ATTRIBUTES` lets Observability Cloud correlate a
@@ -788,7 +1033,7 @@ kubectl rollout restart deployment/${WS_USER}-petclinic-otel-deployment
 kubectl rollout status  deployment/${WS_USER}-petclinic-otel-deployment
 ```
 
-### ✅ Checkpoint — is the snippet actually served?
+### Did the snippet reach the image?
 
 ```bash
 curl -s http://minikube:30000/ | grep -o 'o11y-gdi-rum\|SplunkRum.init'
@@ -797,21 +1042,59 @@ curl -s http://minikube:30000/ | grep -o 'o11y-gdi-rum\|SplunkRum.init'
 Both strings must appear. If they don't, the template edit didn't make it into the image —
 re-check the build.
 
+!!! warning "This is not the checkpoint, and it cannot be"
+    All that `grep` proves is that the **text** of the script is in the page. A snippet with
+    a syntax error in it — the `#` above, a missing comma, an unclosed brace — matches this
+    grep exactly as well as a working one, and returns a clean pass on a page whose RUM is
+    dead.
+
+    The real verification is that `SplunkRum` actually **initialised in a browser**, which
+    only a browser can tell you. That's the next section: the Playwright script asserts
+    `SplunkRum` is defined in the page context before it does anything else. Treat *that*
+    assertion as the checkpoint for this step.
+
 ### Drive a real browser
 
 RUM only produces data when a **real browser executes the JavaScript**. `curl` and JMeter
 cannot do this; they never run the page.
 
+Two of these commands need root, and the workshop `splunk` account deliberately has no
+sudo — privileged work belongs to `ubuntu`. Open a **second session as `ubuntu`** and keep
+your `splunk` session where it is; you'll alternate between them four times.
+
+**Order matters as much as the account does.** `install-deps` reads a path *inside* the
+virtualenv, so the venv must already exist when root runs it.
+
 ```bash
-sudo apt-get install -y python3-venv          # not installed by default on Ubuntu 24.04
+# 1. As ubuntu — python3-venv is not installed by default on Ubuntu 24.04.
+#    ssh -i <your-key.pem> ubuntu@<your-instance>
+sudo apt-get install -y python3-venv
 ```
 
 ```bash
+# 2. As splunk — create the venv and install the Playwright package.
+#    This is what puts a `playwright` binary at the path step 3 needs.
 python3 -m venv ~/playwright-venv
 ~/playwright-venv/bin/pip install playwright
-sudo ~/playwright-venv/bin/playwright install-deps chromium   # needs root
-~/playwright-venv/bin/playwright install chromium             # ~650 MB
 ```
+
+```bash
+# 3. As ubuntu again — the browser's OS-level shared libraries.
+sudo /home/splunk/playwright-venv/bin/playwright install-deps chromium
+```
+
+```bash
+# 4. As splunk — the browser itself.
+~/playwright-venv/bin/playwright install chromium    # 114.7 MiB download
+```
+
+!!! note "`sudo: a password is required`?"
+    You're still on the `splunk` account. That is by design — `splunk` has no password and
+    no sudo rights, and steps 1 and 3 above are the only commands in the entire workshop
+    that need root.
+
+    The 114.7 MiB in step 4 is the `chromium-headless-shell` download; the unpacked
+    `~/.cache/ms-playwright` tree is somewhat larger.
 
 !!! note "Why Playwright rather than JMeter's WebDriver plugin"
     Earlier versions of this workshop used a custom 111 MB JMeter build bundling the
@@ -839,14 +1122,56 @@ RUM browser test -> http://minikube:30000   (6 iterations)
 Done in 65s. RUM data appears in Observability Cloud within a minute or two.
 ```
 
-The script checks `SplunkRum` is defined **before** running the journey, so a missing
-snippet fails immediately with a clear message rather than producing no data silently.
+The script checks `SplunkRum` is defined in the page **before** running the journey. That
+assertion — not the earlier `grep` — is what proves RUM is live: it fails immediately and
+loudly if the snippet is missing *or* if it is present but didn't parse.
 </details>
+
+!!! failure "`SplunkRum is not defined`"
+    The script found the page but no RUM object. The snippet is almost certainly *in* the
+    HTML — the `grep` above would have told you so — and did not execute. Re-read it as
+    JavaScript: a `#` where you meant `//`, a missing comma after `realm`, an unclosed
+    brace. Load the page in a real browser and read the console; the parse error names the
+    line.
+
+### Browse it yourself
+
+Playwright gives you repeatable volume from one headless browser on a data-centre IP. It
+does not give you what RUM is actually for.
+
+PetClinic runs on a NodePort on minikube's internal address (`192.168.49.2:30000`), which
+is not routable from your laptop no matter how open the security group is. SSH resolves the
+target on the *remote* side, so a tunnel reaches it directly:
+
+```bash
+ssh -i <your-key.pem> -L 8080:192.168.49.2:30000 splunk@<your-instance>
+```
+
+Then open **http://localhost:8080** and use the application: find an owner, add a pet, look
+at the vets, and click **ERROR** in the menu bar to trigger `/oups`.
+
+Now go to **Digital Experience → RUM** and find *your own session*. Your real browser, your
+real geography, your real page-load timings, and a JavaScript error produced by an actual
+click rather than a scripted one. Compare it with the Playwright sessions sitting alongside
+it — same application, visibly different data.
+
+!!! abstract "Learning moment — why this one needs a tunnel and Splunk Web doesn't"
+    | | Runs on | Binds | From your laptop |
+    |---|---|---|---|
+    | Splunk Web `:8000` | the EC2 host | `0.0.0.0` | reachable directly |
+    | PetClinic `:30000` | inside Kubernetes | NodePort on `192.168.49.2` | **not** reachable |
+
+    That difference is entirely about where the process lives, and it is the same NodePort
+    and cluster-networking behaviour FW #1 introduced — now with a practical consequence.
+
+    `ssh -L` works natively in PowerShell and Windows Terminal, so no PuTTY-specific setup
+    is needed.
 
 ### ✅ Checkpoint
 
 **Digital Experience → RUM**, filtered to your application. You should see page views,
-load times, and the JavaScript error from `/oups`.
+load times, the JavaScript error from `/oups`, and both kinds of session — the Playwright
+runs and your own.
 
 ---
 
@@ -854,14 +1179,14 @@ load times, and the JavaScript error from `/oups`.
 
 This is what the whole series has been building toward.
 
-!!! abstract "Learning moment — the pivot
+!!! abstract "Learning moment — the pivot"
     You now have four views of the same running system: browser sessions, service traces,
     infrastructure metrics, and raw logs. Their value isn't in any one view — it's in
     moving between them without losing your place.
 
 With load running:
 
-1. **APM → your service.** Note the error rate — around 6.7%.
+1. **APM → your service.** Note the error rate — around 6.9%.
 2. **Click into the errors.** Trace Analyzer shows the failing traces; open one and you'll
    see the span for `/oups` marked as an error.
 3. **From the trace, pivot to Infrastructure.** The pod, node and container that served
@@ -873,14 +1198,20 @@ With load running:
 
 ### ✅ Checkpoint — do the numbers agree?
 
-| Source | Should show |
-|---|---|
-| JMeter console | ~6.7% failed samples |
-| APM service | ~6.7% error rate |
-| Splunk Enterprise | matching `RuntimeException` events |
+| Source | Should show | Measured on a real run |
+|---|---|---|
+| JMeter console | ~7.7% failed samples | 7.69% (250 / 3250) |
+| Splunk Enterprise | ~7.1% of requests 5xx | 7.10% (227 / 3197) |
+| APM service | ~6.9% error rate | 6.90% (182 / 2636) |
 
-When these disagree, that's a finding in itself: something is being sampled, dropped, or
-misrouted. Agreement is what makes the data trustworthy.
+Those three were measured over the same window and land within 0.8 points of each other.
+They are close but not identical, and the reason matters more than the numbers: JMeter
+counts *samples it sent*, the Splunk query counts *access-log lines*, and APM counts
+*spans it sampled*. Three different denominators for the same failures.
+
+Agreement at this level is what makes the data trustworthy. A gap of a fraction of a
+percent is accounting. A gap of a factor of two is a finding — something is being sampled,
+dropped, or misrouted, and FW #2 §8 showed you exactly what that looks like.
 
 ---
 
@@ -899,10 +1230,14 @@ steps. They're the exact files this module was tested with.
     # TESTED end to end on 2026-08-19 against chart 0.158.0.
     #
     # Render:  WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) \
-    #          HEC_TOKEN=<hec> O11Y_TOKEN=<ingest> O11Y_REALM=us1 \
+    #          HEC_TOKEN=<hec> \
     #          envsubst < values-final.yaml > my-values.yaml
+    #
+    # The Observability Cloud access token is deliberately NOT in this file, so the
+    # file stays safe to diff, publish and share. It is passed at install time:
     # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-    #            --version 0.158.0 -f my-values.yaml
+    #            --version 0.158.0 -f my-values.yaml \
+    #            --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
     #
     # Validate first — the chart schema is the only check that fails loudly:
     #          helm upgrade ... --dry-run=client
@@ -910,12 +1245,12 @@ steps. They're the exact files this module was tested with.
     clusterName: ${WS_USER}-minikube-cluster
 
     # [AW2] Second destination. Added without changing how anything is collected.
+    # accessToken is passed with --set at install time, never stored here.
     splunkObservability:
       realm: "us1"          # must match $O11Y_REALM
-      accessToken: "${O11Y_TOKEN}"
       metricsEnabled: true
       tracesEnabled: true
-      profilingEnabled: true     # enabled later in this module
+      profilingEnabled: true      # [AW2] turned on in step 6
 
     # [FW2] Splunk Enterprise via HEC.  [AW1] adds metricsIndex / tracesIndex.
     splunkPlatform:
@@ -1095,12 +1430,12 @@ steps. They're the exact files this module was tested with.
           labels:
             app: ${WS_USER}-petclinic-otel-app
           annotations:
-            docker_image_author: "gerry"
+            docker_image_author: "${WS_USER}"
             splunk.com/index: "k8s_ws_petclinic_logs"
         spec:
           containers:
           - name: ${WS_USER}-petclinic-otel-container01
-            image: gerry/petclinic-otel:v1
+            image: ${WS_USER}/petclinic-otel:v1
             imagePullPolicy: Never
             ports:
             - containerPort: 8080
@@ -1184,12 +1519,31 @@ steps. They're the exact files this module was tested with.
     kubectl logs daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent | grep -iE 'signalfx|401|403'
     ```
 
-??? failure "Log Observer Connect shows 0 indexes"
-    Re-save the connection — access is evaluated once at creation and cached. See step 4.
+??? failure "Log Observer Connect shows `0/7` indexes with mappings"
+    You almost certainly haven't generated the mappings. Creating the connection does not
+    create them — it's a separate action: **Logs → Logs connections → ⋮ → Generate
+    mappings**, tick the two log indexes, **Generate**, then refresh until the status reads
+    **Completed**. See step 4.
 
-??? failure "Log Observer Connect can see more indexes than expected"
-    Your role has `importRoles`. Splunk unions `srchIndexesAllowed` across inherited roles.
-    Remove it and restart Splunk.
+    Only if it is *still* 0/7 after that is this the caching problem: access is evaluated
+    once at creation, so re-save the connection and generate again.
+
+??? failure "Log Observer Connect shows `7/7`"
+    That is a broken setup, not a good one. Your role is inheriting `srchIndexesAllowed`
+    from another role — Splunk unions it across `importRoles`. Remove `importRoles` from
+    `authorize.conf` and restart Splunk. The correct number is **2/7**.
+
+??? failure "Severity is UNKNOWN on most rows in Log Observer"
+    Check which index they're in. If it's `k8s_ws_traces`, your service account should never
+    have had access to it — those are spans, not logs. Remove it from `srchIndexesAllowed`,
+    restart Splunk, and regenerate mappings. See step 4.
+
+    In `k8s_ws_logs`, roughly 13% UNKNOWN is expected and correct: Kubernetes audit records
+    have no severity to extract.
+
+    In `k8s_ws_petclinic_logs`, check the *time range* before the configuration — severity
+    is written at ingest, so events indexed before the transform was complete stay UNKNOWN
+    permanently. See step 5.
 
 ??? failure "`Could not find role loc_service`"
     Roles load at startup. Restart Splunk between writing `authorize.conf` and creating the
@@ -1224,12 +1578,28 @@ steps. They're the exact files this module was tested with.
     It must match the transport of `OTEL_EXPORTER_OTLP_ENDPOINT` — `grpc` for port 4317.
 
 ??? failure "No RUM data"
-    Confirm the snippet is served (`curl … | grep SplunkRum.init`), then confirm a real
-    browser ran. `curl` and JMeter never execute JavaScript, so neither produces RUM data
-    no matter how much traffic they generate.
+    Work through it in this order.
+
+    1. **Did a real browser run the page?** `curl` and JMeter never execute JavaScript, so
+       neither produces RUM data no matter how much traffic they generate.
+    2. **Did the snippet execute?** `grep` only proves the text is served. Run the
+       Playwright script — it asserts `SplunkRum` is defined in the page. If that assertion
+       fails while the `grep` passes, the snippet is present and **invalid JavaScript**:
+       look for a `#` comment, a missing comma after `realm`, or an unclosed brace.
+    3. **Is the token the right kind?** RUM ingest needs a token scoped **RUM**, not INGEST.
+    4. **Are you looking at the right application?** Filter on the `applicationName` you set
+       in the snippet.
+
+??? failure "`sudo: a password is required` during the Playwright install"
+    You're on the `splunk` account, which has no sudo by design. Open a second session as
+    `ubuntu` for `apt-get install python3-venv` and for `playwright install-deps`. See
+    step 7 — the order of the four commands matters, because `install-deps` needs the venv
+    to exist already.
 
 ??? failure "`python3 -m venv` fails with `ensurepip is not available`"
-    `sudo apt-get install -y python3-venv`. Ubuntu 24.04 ships Python without it.
+    `python3-venv` isn't installed, and installing it needs root: run
+    `sudo apt-get install -y python3-venv` from your **`ubuntu`** session, then repeat the
+    venv creation as `splunk`. Ubuntu 24.04 ships Python without it.
 
 ---
 

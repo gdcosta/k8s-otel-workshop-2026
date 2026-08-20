@@ -15,20 +15,27 @@ By the end you will have:
 
 ## Session variables
 
-Every command below uses these. Load them into **each** terminal you use — including the
-second one you'll open for load testing:
+Every command below uses these. Host setup step 13 wired them into the `splunk` account's
+`.profile`, so a login shell loads them for you. Confirm that in **each** terminal you use —
+including the second one you'll open for load testing:
 
 ```bash
-source ~/.workshop-env
 echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
 ```
+
+!!! warning "Empty output means every later command is subtly wrong"
+    If that prints ` on  ()`, nothing is loaded. `source ~/.workshop-env` fixes the current
+    shell. It matters more than it looks: with `WS_USER` unset,
+    `docker build --tag ${WS_USER}/petclinic-otel:v1` builds `/petclinic-otel:v1` and the
+    Deployment then can't find its image. Nothing errors at the point you make the mistake.
+    Run that `echo` after every reconnect.
 
 ??? info "Missing, or starting from a fresh shell?"
     The file is created during [host setup](../00-setup/index.md). If it isn't there:
 
     ```bash
     cat > ~/.workshop-env <<'EOF'
-    export WS_USER=<your-username>
+    export WS_USER=wsuser01          # ← your own, lowercase, no spaces
     export LOCAL_IP=$(ec2metadata --local-ipv4)
     export PUB_DNS=$(ec2metadata --public-hostname)
     export CHART_VERSION=0.158.0
@@ -36,6 +43,7 @@ echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
     EOF
     chmod 600 ~/.workshop-env
     source ~/.workshop-env
+    echo '[ -f ~/.workshop-env ] && . ~/.workshop-env' >> ~/.profile
     ```
 
     Values added by later modules:
@@ -56,7 +64,8 @@ Log in as the `splunk` user. Everything in this workshop runs as `splunk` — th
 the application, and Splunk Enterprise all live under that account.
 
 ```bash
-sudo -i -u splunk
+ssh -i <your-key.pem> splunk@<your-instance>   # from your laptop
+sudo -i -u splunk                              # or from an existing ubuntu session
 whoami
 ```
 
@@ -305,6 +314,13 @@ WS_USER=$WS_USER envsubst < petclinic.yml.tmpl > ${WS_USER}-petclinic-k8s-manife
 cat ${WS_USER}-petclinic-k8s-manifest.yml
 ```
 
+!!! note "The manifest may carry settings this module doesn't use"
+    Read what you just printed. Alongside the Deployment and the Service you may find
+    configuration that FW #1 never mentions — environment variables pointing at an
+    OpenTelemetry endpoint, for instance. That's deliberate: the same file serves every
+    module, and the later ones explain and switch on what they need. Nothing in this module
+    depends on it, and an unresolved endpoint costs the application nothing.
+
 !!! tip "Why a file instead of a long command"
     Earlier versions of this workshop generated manifests with chained `sed` commands,
     because copying indented YAML out of a Word document mangled the whitespace. In a
@@ -347,20 +363,59 @@ The hostname `minikube` was mapped to that IP during host setup, so this also wo
 curl -s -o /dev/null -w '%{http_code}\n' http://minikube:30000/
 ```
 
-To reach it from your laptop's browser, forward the port:
+### Now open it in a browser
+
+`200` proves the Service answers. Actually looking at the application is the point — you're
+about to spend four modules observing it.
+
+!!! abstract "Learning moment — why this needs a tunnel and Splunk Web doesn't"
+    `minikube ip` returned `192.168.49.2`: an address on the Docker network *inside* this
+    host. The NodePort publishes PetClinic on port 30000 of **that** address, not of the EC2
+    instance — so it is unreachable from your laptop no matter what the security group says.
+    Opening port 30000 would do nothing.
+
+    Splunk Enterprise is the opposite. It runs directly on the host and binds `0.0.0.0:8000`,
+    which is why `http://$PUB_DNS:8000` opens with no forwarding at all.
+
+    | | Runs on | Listens on | From your laptop |
+    |---|---|---|---|
+    | Splunk Web `:8000` | the EC2 host | `0.0.0.0:8000` | direct |
+    | PetClinic `:30000` | inside Kubernetes | NodePort on `192.168.49.2` | tunnel required |
+
+    That distinction is the whole point of a NodePort: it exposes a Service on the *node*,
+    and here the node is a container, not the machine you rented.
+
+From a terminal **on your laptop** — not on the instance:
 
 ```bash
-kubectl port-forward --address 0.0.0.0 service/${WS_USER}-petclinic-srv 8080:8080
+ssh -i <your-key.pem> -L 8080:192.168.49.2:30000 splunk@<your-instance>
 ```
 
-Leave that running and open PetClinic in a browser:
-
-```bash
-echo "http://$PUB_DNS:8080"
-```
+Leave it connected and open **<http://localhost:8080>**. `ssh -L` resolves `192.168.49.2` on
+the remote side, so it reaches the NodePort directly — nothing extra runs on the instance,
+and the same command works in PowerShell or Windows Terminal.
 
 ![PetClinic welcome page](../assets/img/01-fw1/image13.png)
 <!-- STATUS: pending-recapture · 2023 · replace with 4.0.0-SNAPSHOT UI -->
+
+??? tip "Alternative — `kubectl port-forward`, which proves the pod is serving"
+    More Kubernetes-native, and it tells you something the NodePort doesn't: the API server
+    forwards straight through to a pod, so a page here means the container itself is healthy
+    rather than that the Service happens to route.
+
+    ```bash
+    # on the instance, as splunk — leave it running
+    kubectl port-forward svc/${WS_USER}-petclinic-srv 8080:8080
+    ```
+
+    ```bash
+    # from your laptop, in a second terminal
+    ssh -i <your-key.pem> -L 8080:localhost:8080 splunk@<your-instance>
+    ```
+
+    Same URL, <http://localhost:8080>. Adding `--address 0.0.0.0` to the port-forward would
+    publish it on the host's public interface instead — that works too, but it needs 8080
+    open in the security group, and the tunnel doesn't.
 
 Click around — find owners, add a pet, look at the veterinarians list. Then click
 **ERROR** in the menu bar. That deliberately throws an exception, and in the next module
@@ -403,6 +458,14 @@ Run the verification script:
     The image wasn't built into minikube's Docker daemon. Re-run
     `eval $(minikube -p minikube docker-env)` and rebuild — `docker images` must list
     `${WS_USER}/petclinic-otel:v1` *after* that eval.
+
+??? failure "`http://localhost:8080` refuses the connection in your browser"
+    The tunnel isn't up, or it's pointed at the wrong place. Check, in order: the `ssh -L`
+    command is running in a terminal **on your laptop** (not on the instance); the target is
+    `192.168.49.2:30000`, minikube's address, not `localhost:30000`; and
+    `curl http://minikube:30000/` still returns `200` on the instance. A tunnel to a port
+    nothing listens on connects fine and then fails at the first request, so a clean SSH
+    login is not evidence that the forward works.
 
 ??? failure "`curl http://minikube:30000` fails but the IP works"
     The `/etc/hosts` entry is missing. It's created during host setup and needs root:
