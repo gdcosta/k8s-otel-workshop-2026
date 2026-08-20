@@ -417,6 +417,16 @@ and the same command works in PowerShell or Windows Terminal.
     publish it on the host's public interface instead — that works too, but it needs 8080
     open in the security group, and the tunnel doesn't.
 
+    !!! warning "Close your other tunnel first"
+        Both routes use **8080 on your laptop**, so they collide. If the NodePort tunnel
+        from host setup is still open, this second `ssh -L` fails with
+        `bind: Address already in use`. Close the first one, or forward to a different
+        local port — `-L 8081:localhost:8080`, then browse
+        <http://localhost:8081>.
+
+        Only the number left of the colon is yours to choose; it is the port on your
+        laptop, not a port anyone opens on the instance.
+
 Click around — find owners, add a pet, look at the veterinarians list. Then click
 **ERROR** in the menu bar. That deliberately throws an exception, and in the next module
 you'll find the resulting stack trace in Splunk.
