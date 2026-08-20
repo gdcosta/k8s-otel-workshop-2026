@@ -167,8 +167,36 @@ Forward it when you connect and it costs you nothing:
 ssh -i <your-key.pem> -L 8080:192.168.49.2:30000 splunk@<your-instance>
 ```
 
-`ssh -L` resolves the target address on the **remote** side, so it reaches the NodePort
-directly — no `kubectl`, nothing left running on the instance.
+!!! abstract "Learning moment — what `-L` actually does"
+    This is **SSH local port forwarding**, and it is worth understanding rather than
+    copying, because it is the mechanism behind every browser step in this workshop.
+
+    ```
+    -L  8080  :  192.168.49.2  :  30000
+        ^^^^     ^^^^^^^^^^^^     ^^^^^
+        │        │                └─ port there
+        │        └─ host, as seen FROM THE INSTANCE
+        └─ port on YOUR LAPTOP — the only part you choose
+    ```
+
+    Your browser connects to `localhost:8080` on your own machine. SSH carries that traffic
+    down the existing connection, and the instance opens the far side **on your behalf** —
+    so the target is resolved from *its* network, not yours. That is why `192.168.49.2`
+    works here and nowhere else.
+
+    Three consequences worth drawing out:
+
+    - **No security-group rule is involved.** The traffic is inside the SSH session on port
+      22, which is already open. There is nothing new listening on the instance and nothing
+      new exposed to the internet.
+    - **It needs no `kubectl` and leaves nothing running.** The forward exists only while
+      that SSH session does, and dies with it.
+    - **Only the left-hand number is yours.** Everything right of the first colon is
+      interpreted on the instance. If 8080 is busy on your laptop, change *that* number —
+      `-L 8081:192.168.49.2:30000` — and browse `localhost:8081` instead.
+
+    The same trick reaches anything the instance can see: `-L 8000:localhost:8000` for
+    Splunk Web, where `localhost` means *the instance's* localhost.
 
 ```bash
 # the same, plus Splunk Web on http://localhost:8000 if you left 8000 closed
