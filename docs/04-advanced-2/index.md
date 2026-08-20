@@ -552,40 +552,90 @@ separate action that the guided setup never mentions.
 ### ✅ Checkpoint
 
 ![Connection active](../assets/img/04-aw2/loc-06-connection-active.png)
-<!-- STATUS: pending-recapture · captured when the role still included k8s_ws_traces; should read 2/7 -->
+<!-- STATUS: pending-recapture · the mapping count in this shot is a snapshot; see the note below -->
 
-**Indexes with mappings** should read **2/7** — the two log indexes you allowed, out of the
-seven Log Observer Connect can enumerate.
+**Do not use the "Indexes with mappings" count as your checkpoint.** Right after generating
+you will see something like `2/7`, but that number drifts upward on its own — Observability
+Cloud also maps indexes on a **global schedule that is outside your control and outside
+this connection's settings**. Given time you may well see `7/7`, with every index in the
+list mapped.
 
-!!! danger "`7/7` means your role is wrong, not right"
-    The obvious assumption is that 7/7 is the good outcome. It is the opposite: it is the
-    signature of the `importRoles` union the danger box above warns about, where
-    `srchIndexesAllowed` is inherited from another role and quietly widened to `main`,
-    `summary`, `history` and everything else. A participant who keeps re-saving until the
-    number reaches 7/7 has recreated precisely the misconfiguration this step exists to
-    teach them to avoid.
+!!! warning "`7/7` does not mean your role is wrong — and `2/7` does not mean it is right"
+    An earlier revision of this guide claimed a high number was the signature of a
+    misconfigured role. That was wrong, and worth correcting explicitly because it sends
+    you chasing a problem you do not have.
 
-!!! note "Why the denominator is 7 and can't be reduced"
+    A mapping is only a statement that Log Observer has *catalogued* an index. It is not a
+    grant of access. The scheduler will happily map indexes the service account cannot read
+    a single event from — those mappings simply never return anything.
+
+**What to actually verify — the role.** This is the part you control, and it is the part
+that matters. Two checks, both deterministic:
+
+```bash
+# 1. What the role grants. Exactly two indexes, and no importRoles.
+curl -sk -u admin:'Workshop2026!' \
+  "https://localhost:8089/services/authorization/roles/loc_service?output_mode=json" \
+  | python3 -c 'import sys,json; c=json.load(sys.stdin)["entry"][0]["content"]; \
+      print("allowed :", c["srchIndexesAllowed"]); print("imported:", c["imported_roles"])'
+
+# 2. What the account can actually read — this is the query Global Index Search runs.
+/opt/splunk/bin/splunk search '| tstats count where index=* by index' \
+  -earliest_time -24h -auth loc_svc:'LogObserver2026!'
+```
+
+<details>
+<summary>Expected</summary>
+
+```
+allowed : ['k8s_ws_logs', 'k8s_ws_petclinic_logs']
+imported: []
+
+        index         count
+--------------------- ------
+k8s_ws_logs           633768
+k8s_ws_petclinic_logs  51139
+```
+
+The second check is the meaningful one. `index=*` is the broadest query available, and as
+`loc_svc` it returns **only the two allowed indexes** — no `k8s_ws_traces`, no `main`, no
+`summary`, no `_internal`. Run the same query as `admin` and `k8s_ws_traces` appears,
+confirming the difference is the role and not an absence of data.
+
+That is your access boundary, and it holds no matter how many indexes the scheduler
+eventually catalogues.
+
+</details>
+
+!!! note "Why other indexes appear in the picker at all"
     `main`, `summary`, `history` and `splunklogger` are already **inaccessible** —
-    `srchIndexesAllowed` is a whitelist, so anything absent is denied, and searching them
-    as `loc_svc` returns 0 events. They still appear in the picker because Log Observer
-    enumerates candidate indexes through `/services/data/indexes`, a REST endpoint that
-    **ignores search ACLs**. The search path (`eventcount`, `dbinspect`) correctly returns
-    only the two allowed indexes; the REST path returns all seven.
+    `srchIndexesAllowed` is a whitelist, so anything absent is denied. They appear because
+    Log Observer enumerates candidates through `/services/data/indexes`, a REST endpoint
+    that **ignores search ACLs**. The search path (`eventcount`, `dbinspect`) correctly
+    returns only the two allowed indexes.
 
-    Adding `srchIndexesDisallowed` was tested and changed the enumeration not at all — it
-    only adds a maintenance trap, since deny beats allow if an index later appears in both.
-    So `/7` is fixed. The number to care about is the numerator.
+    Adding `srchIndexesDisallowed` was tested and changed the enumeration not at all, so
+    there is nothing to fix here. Deleting and recreating the connection under a new name
+    does not change it either. Tick only the two log indexes and ignore the rest.
 
-!!! warning "Still `0/7` *after* generating mappings?"
-    Log Observer Connect evaluates index access when the connection is created and caches
-    the result. If you corrected the Splunk role *after* creating the connection, it can
-    still be showing the old answer — open the connection, save it again to force
-    re-evaluation, then generate mappings once more.
+!!! warning "Mappings never reached **Completed**?"
+    Distinct from the count drifting. If generation sits at *Accepted* or *In Progress*
+    indefinitely, or the **Entity mappings** tab stays empty, check in this order:
 
-    This is only worth trying once mapping generation has reported **Completed**. Re-saving
-    on its own never creates mappings, and on a connection that has none it changes
-    nothing at all.
+    1. **Is the service account locked out?** Changing the Splunk-side password after the
+       connection exists makes Observability Cloud retry with a stale credential until
+       Splunk locks the account. Log Observer then returns nothing, with no error
+       explaining why. Clear it with:
+       ```bash
+       curl -sk -u admin:'Workshop2026!' -X POST \
+         https://localhost:8089/services/authentication/users/loc_svc -d "locked-out=0"
+       ```
+       and update the password stored in the connection, or it re-locks within minutes.
+    2. **Is load running?** Generation reads *past related content queries*. With JMeter
+       stopped, the only traffic is kube-probe health checks, which produce access-log
+       lines with no `trace_id` and nothing to correlate an APM service against.
+    3. **Have you actually pivoted from APM to Logs?** That pivot is what creates the
+       related-content query the generator learns from.
 
 Now try it: **Logs**, and search `index=k8s_ws_petclinic_logs`. Those are the events from
 FW #2, queried live from Splunk Enterprise.
