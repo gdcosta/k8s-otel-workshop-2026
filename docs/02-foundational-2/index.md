@@ -371,6 +371,21 @@ kubectl logs deploy/${WS_USER}-petclinic-otel-deployment --since=1m | wc -l
 
 **Zero.** Thirty successful requests produced no log lines at all.
 
+!!! tip "Do it in the browser too — it makes the point better"
+    If your tunnel from [host setup](../00-setup/index.md) is still up, open
+    **http://localhost:8080** and click around: find an owner, open their pet, add a visit.
+    Otherwise reconnect with:
+
+    ```bash
+    ssh -i <your-key.pem> -L 8080:192.168.49.2:30000 splunk@<your-instance>
+    ```
+
+    Then re-run the `kubectl logs` line above. Still zero. Thirty automated requests are
+    easy to dismiss; a few minutes of genuinely using an application and getting **not one
+    line of output** is the thing worth remembering.
+
+    No extra security-group rule is needed for this — the tunnel rides port 22.
+
 !!! abstract "Learning moment — most applications are silent when healthy"
     Spring Boot logs at startup and when something throws. Successful requests produce
     nothing. That's normal and usually sensible — logging every request costs storage and
@@ -621,6 +636,13 @@ index=k8s_ws_logs "k8s.container.name"="${WS_USER}-petclinic-otel-container01" R
 
 You should see a steady stream of exceptions — the `/oups` endpoint firing on every pass of
 the test plan.
+
+!!! tip "Trigger one yourself and find it"
+    JMeter's errors all look alike. Open **http://localhost:8080/oups** in the browser
+    through your tunnel — you'll get PetClinic's error page — then note the time and search
+    for that single exception. Following one failure you caused by hand, from click to
+    stack trace, is a far better rehearsal for the Advanced workshops than reading a stream
+    of identical machine-generated ones.
 
 ### ✅ Checkpoint — do the two systems agree?
 

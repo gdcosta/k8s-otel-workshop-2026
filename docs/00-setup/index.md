@@ -49,6 +49,43 @@ Inbound, from your own IP — never `0.0.0.0/0`:
 | 8080 | *Optional* — only if you publish PetClinic on the host instead of tunnelling |
 | 8089 | *Advanced Workshop #2 only* — Log Observer Connect |
 
+!!! tip "Reaching PetClinic from your laptop needs **no extra port**"
+    The application listens on NodePort **30000**, but that port is bound to **minikube's
+    internal address** (`192.168.49.2`), not to the instance's own interfaces. Verified on a
+    running host:
+
+    ```
+    ss -ltn | grep 30000     ->  nothing. 30000 is not bound on the host at all.
+    curl http://192.168.49.2:30000/   ->  200   (works from the host only)
+    ```
+
+    So **opening 30000 in the security group accomplishes nothing** — there is no listener
+    on the public interface for the rule to expose. It is the obvious guess and it is wrong.
+
+    The SSH tunnel below reaches it over port **22**, which is already open. That is why
+    this workshop needs no additional inbound rule for the application.
+
+??? warning "If you really want PetClinic exposed directly, without a tunnel"
+    Two things are both required — either alone does nothing:
+
+    1. Publish it on the host's public interface. `kubectl port-forward` binds
+       **loopback only** by default (`127.0.0.1:8080`), so it must be given an address:
+
+        ```bash
+        kubectl port-forward --address 0.0.0.0 svc/${WS_USER}-petclinic-srv 8080:8080
+        ```
+
+        Verified: with `--address 0.0.0.0` it binds `0.0.0.0:8080` and answers `200` on the
+        instance's private IP; without it, nothing outside the host can connect.
+
+    2. Open **8080** inbound **to your own IP** in the security group.
+
+    Confirmed with step 1 running but 8080 still closed, from outside AWS: connection
+    refused. The security-group rule is the remaining gate.
+
+    Prefer the tunnel. It needs no rule, exposes nothing to the internet, and dies with your
+    SSH session rather than outliving it.
+
 Outbound: all. The host pulls from GitHub, Docker Hub, the Ubuntu archives, Splunk, and —
 in AW #2 — Splunk Observability Cloud.
 
