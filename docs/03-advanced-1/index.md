@@ -769,12 +769,14 @@ Generate load while watching, and you'll see heap sawtooth as garbage collection
 
 ---
 
-## 8. Install the trace dashboard
+## 8. Install the metrics & traces dashboard
 
-A prebuilt dashboard visualises the trace data you're now collecting.
+A capstone dashboard for everything this module built — seven panels, self-contained, no
+Splunkbase app required.
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/splunk-apm-dashboard/main/apm_traces_4.0.0.xml
+cd ~/k8s_workshop
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/aw1-dashboard.xml
 ```
 
 In Splunk Web: **Search & Reporting → Dashboards → Create New Dashboard → Classic Dashboards**,
@@ -786,22 +788,23 @@ then paste the XML into the source editor.
     ```bash
     curl -sk -u admin:Workshop2026! -X POST \
       https://localhost:8089/servicesNS/admin/search/data/ui/views \
-      -d "name=apm_traces" --data-urlencode "eai:data@apm_traces_4.0.0.xml"
+      -d "name=k8s_ws_aw1_dashboard" --data-urlencode "eai:data@aw1-dashboard.xml"
     ```
 
-    The dashboard then appears under **Search & Reporting → Dashboards** as `apm_traces`.
+    The dashboard then appears under **Search & Reporting → Dashboards**.
     `-k` skips certificate validation — the management port uses Splunk's self-signed
     certificate, which is expected on a workshop host.
 
-![Trace dashboard](../assets/img/03-aw1/image40.png)
-<!-- STATUS: pending-recapture · 2023 -->
+Seven panels, all backed by queries verified against live workshop data: Total Traces,
+P90 Latency, current JVM Heap Used, a trace-volume-and-errors timechart (span-adjustable),
+the JVM heap sawtooth from step 7 — the same `mstats`/`xyseries` query, now as a permanent
+chart instead of a one-off search — top routes by latency, and a HikariCP connection-pool
+snapshot.
 
-!!! note "Some panels will render empty, and that isn't a fault"
-    The service-dependency panels use the **Link Analysis App for Splunk** from Splunkbase,
-    which this workshop doesn't install. Without it they draw nothing — no error, no
-    message, just blank space where a graph should be. Don't go debugging your trace data
-    over it: every other panel works, and those panels need a Splunkbase download rather
-    than a fix.
+!!! note "Earlier revisions of this dashboard needed a Splunkbase app"
+    A previous version pulled from a different repo and needed the Link Analysis App for
+    Splunk for its service-dependency panels, which rendered blank without it. This one is
+    self-contained — every panel here works out of the box, with nothing extra to install.
 
 ---
 

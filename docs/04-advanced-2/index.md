@@ -1306,6 +1306,61 @@ dropped, or misrouted, and FW #2 §8 showed you exactly what that looks like.
 
 ---
 
+## 9. Install the dashboards
+
+Two capstone dashboards — one per destination, because they can't show the same things.
+Splunk Enterprise has the correlation story; Observability Cloud has APM, RUM and Profiling
+natively, which Splunk simply doesn't have.
+
+### Splunk Enterprise — correlation
+
+```bash
+cd ~/k8s_workshop
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/aw2-dashboard.xml
+```
+
+Same install path as FW #2 and AW #1's dashboards: **Search & Reporting → Dashboards →
+Create New Dashboard → Classic Dashboards**, paste the XML in.
+
+??? abstract "Command-line alternative — install it over REST"
+    ```bash
+    curl -sk -u admin:Workshop2026! -X POST \
+      https://localhost:8089/servicesNS/admin/search/data/ui/views \
+      -d "name=k8s_ws_aw2_dashboard" --data-urlencode "eai:data@aw2-dashboard.xml"
+    ```
+
+Five panels answering one question — *does a log line actually carry what APM needs to
+pivot to it?* — all verified against live data: the percentage of app events carrying
+`trace_id`, the percentage with severity classified, a severity-coverage timechart proving
+it's written at ingest and not retroactive (the exact §5 warning, now permanent), the
+single-event correlation proof (`trace_id`, `severity`, `service.name`,
+`deployment.environment`, `host` on one row), and the app-log-vs-access-log split that
+explains why coverage is partial by design.
+
+### Observability Cloud — APM, RUM, Profiling
+
+This one is a `.json` **export package**, not classic XML — a different import path.
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/aw2-o11y-dashboard.json
+```
+
+In Observability Cloud: **Dashboards → Create (+) → Import → Dashboard** (pick or create a
+dashboard group first if you're not already in one), then select the file.
+
+Import assigns fresh chart and dashboard IDs, so nothing collides with anyone else's copy.
+Three filter variables — **Service**, **Environment**, **RUM Application** — come
+pre-selected to this workshop's names; change them to point the whole dashboard at your own
+if you're viewing someone else's import.
+
+Four content panels, deliberately not five — profiling has no meaningful time-series shape,
+so rather than force a fake chart, that panel is explanatory and points at **APM → your
+service → AlwaysOn Profiling** for the real flame-graph view. The other three are real
+charts on real data: APM error rate (color-banded), request-and-error volume over time, and
+RUM page views — genuine browser sessions, bursty in a way synthetic APM load never is.
+
+---
+
 ---
 
 ## Reference — complete files at the end of this module

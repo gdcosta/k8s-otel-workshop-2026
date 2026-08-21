@@ -1090,6 +1090,31 @@ kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
 
 ---
 
+## 12. Install the dashboard
+
+A capstone dashboard for everything this module built — six panels, self-contained.
+
+```bash
+cd ~/k8s_workshop
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/fw2-dashboard.xml
+```
+
+In Splunk Web: **Search & Reporting → Dashboards → Create New Dashboard → Classic Dashboards**,
+then paste the XML into the source editor.
+
+??? abstract "Command-line alternative — install it over REST"
+    ```bash
+    curl -sk -u admin:Workshop2026! -X POST \
+      https://localhost:8089/servicesNS/admin/search/data/ui/views \
+      -d "name=k8s_ws_fw2_dashboard" --data-urlencode "eai:data@fw2-dashboard.xml"
+    ```
+
+Six panels, all backed by queries verified against live workshop data: Total Requests,
+Error Rate %, Distinct Routes, a request-volume timechart splitting 5xx from everything
+else, the severity/status breakdown that proves §11's OTTL transform, a live feed of the
+most recent `RuntimeException` stack traces — now single events instead of the scattered
+lines §9 fixed — and the index-routing proof from §10: one log stream, split in two.
+
 ---
 
 ## Reference — complete files at the end of this module

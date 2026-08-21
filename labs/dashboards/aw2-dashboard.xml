@@ -1,0 +1,179 @@
+<form version="1.1">
+  <label>Advanced Workshop #2 — Correlation</label>
+  <description>Splunk-side proof that one Collector, two destinations, and one log line carry everything needed to pivot into APM.</description>
+
+  <fieldset submitButton="false">
+    <input type="dropdown" token="span_token" searchWhenChanged="true">
+      <label>Time Granularity (Severity Chart)</label>
+      <choice value="10s">10 Seconds</choice>
+      <choice value="30s">30 Seconds</choice>
+      <choice value="1m">1 Minute</choice>
+      <choice value="15m">15 Minutes</choice>
+      <choice value="30m">30 Minutes</choice>
+      <choice value="1h">1 Hour</choice>
+      <choice value="1d">Daily</choice>
+      <choice value="1w">Weekly</choice>
+      <choice value="1mon">Monthly</choice>
+      <default>1m</default>
+      <initialValue>1m</initialValue>
+    </input>
+  </fieldset>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(135deg, #1F3864 0%, #2E75B6 100%); padding: 24px 32px; border-radius: 6px;">
+          <h1 style="margin:0 0 8px 0; font-size:26px; font-weight:700; color:#FFFFFF !important;">Advanced Workshop #2 — Correlation</h1>
+          <p style="margin:0; font-size:14px; line-height:1.5; color:#FFFFFF !important;">One OpenTelemetry Collector fans data out to two destinations — Splunk Enterprise and Splunk Observability Cloud. A single log line is pivot-able from APM the moment it carries <code style="color:#FFFFFF !important;">trace_id</code>, <code style="color:#FFFFFF !important;">service.name</code>, and <code style="color:#FFFFFF !important;">deployment.environment</code> together — this dashboard proves that correlation holds, and that severity classification actually works, on the Splunk side.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>% App Log Events Carrying trace_id (Last 15m)</title>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs
+| stats count as total, count(eval(isnotnull(trace_id) AND trace_id!="")) as with_trace
+| eval value=round((with_trace/total)*100,1)
+| table value
+          </query>
+          <earliest>-15m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="unit">%</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0xDC4E41","0xF1813F","0xF8BE34","0x53A051"]</option>
+        <option name="rangeValues">[50,75,90]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>% Log Events with Severity Classified (Last 15m)</title>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs
+| stats count as total, count(eval(isnotnull(severity))) as classified
+| eval value=round((classified/total)*100,1)
+| table value
+          </query>
+          <earliest>-15m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="unit">%</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0xDC4E41","0xF1813F","0xF8BE34","0x53A051"]</option>
+        <option name="rangeValues">[50,75,90]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Distinct App Metrics Flowing</title>
+      <single>
+        <search>
+          <query>
+| mcatalog values(metric_name) WHERE index=k8s_ws_petclinic_metrics
+| mvexpand values(metric_name)
+| stats count
+| rename count as value
+| table value
+          </query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="unit">metrics</option>
+        <option name="useColors">0</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Total Correlated Events (Last 15m)</title>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs trace_id=* severity=*
+| stats count as value
+| table value
+          </query>
+          <earliest>-15m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="unit">events</option>
+        <option name="useColors">0</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Severity Classification Coverage Over Time — Written at Ingest, Not Retroactive</title>
+      <chart>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs
+| eval s=if(isnull(severity),"UNKNOWN","classified")
+| timechart span=$span_token$ count by s
+          </query>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Event Count</option>
+        <option name="charting.seriesColors">[0xDC4E41,0x53A051]</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Single-Event Correlation Proof (Most Recent 15)</title>
+      <description>Each row is one Splunk Enterprise log event that already carries trace_id, service.name, and deployment.environment together. This is exactly what makes the APM service map's "Logs" pivot work: Log Observer Connect (or a manual search) can jump straight from a trace in APM to this event, and back, because the correlating fields already live on the same event — no join, no lookup, no extra pipeline required.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs trace_id=*
+| rename "service.name" as svc, "deployment.environment" as env
+| sort -_time
+| head 15
+| table trace_id, severity, svc, env, host
+          </query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">15</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Application Log vs Access Log Split (Expected Partial trace_id Coverage)</title>
+      <description>trace_id is auto-extracted only from application log lines that pass through logback. Tomcat access-log lines never carry a trace_id — that is expected and correct, not a bug. This split shows both populations side by side.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs
+| eval has_trace=if(isnotnull(trace_id) AND trace_id!="","app log (has trace_id)","access log (no trace_id)")
+| stats count by has_trace
+          </query>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+</form>

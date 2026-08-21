@@ -1,0 +1,454 @@
+{
+  "chartExports": [
+    {
+      "chart": {
+        "autoDetectRelatedDetectorIds": [],
+        "created": 0,
+        "creator": null,
+        "customProperties": {},
+        "description": "",
+        "id": "BAXtSWSKoIo",
+        "importOf": "Z_rh8H4DF0w",
+        "lastUpdated": 0,
+        "lastUpdatedBy": null,
+        "name": "AW2 Header",
+        "options": {
+          "markdown": "# Advanced Workshop #2 \u2014 Observability Cloud\n### What Splunk Enterprise can't show natively, from the same failures\n\nThis dashboard covers the three things the correlation story in the Splunk Enterprise capstone dashboard points back out to: **APM service health & traces**, **real browser (RUM) user data**, and **AlwaysOn continuous Profiling status**. Same failures, different angle.\n\n**Set the `Service` / `Environment` / `RUM Application` dashboard variables above to your own workshop identifiers** (e.g. `wsuser07-k8s-petclinic-...`) \u2014 every panel below re-scopes automatically; nothing here is hardcoded to one participant's data.\n\n**Build v1 (2026-08-21)**",
+          "type": "Text"
+        },
+        "packageSpecifications": "",
+        "programText": "",
+        "relatedDetectorIds": [],
+        "tags": []
+      }
+    },
+    {
+      "chart": {
+        "autoDetectRelatedDetectorIds": [],
+        "created": 0,
+        "creator": null,
+        "customProperties": {},
+        "description": "Live error rate for the selected service (SERVER-kind spans). Thresholds set from real observed traffic: healthy services run near 0%; this workshop's injected fault currently runs ~7% (one endpoint failing 100% of its calls).",
+        "id": "LwtK92RNxAo",
+        "importOf": "gs1aRom_d0s",
+        "lastUpdated": 0,
+        "lastUpdatedBy": null,
+        "name": "APM Error Rate",
+        "options": {
+          "colorBy": "Scale",
+          "colorScale": null,
+          "colorScale2": [
+            {
+              "gt": 50,
+              "gte": null,
+              "lt": null,
+              "lte": null,
+              "paletteIndex": 16
+            },
+            {
+              "gt": 20,
+              "gte": null,
+              "lt": null,
+              "lte": 50,
+              "paletteIndex": 17
+            },
+            {
+              "gt": 5,
+              "gte": null,
+              "lt": null,
+              "lte": 20,
+              "paletteIndex": 18
+            },
+            {
+              "gt": null,
+              "gte": null,
+              "lt": null,
+              "lte": 5,
+              "paletteIndex": 19
+            }
+          ],
+          "maximumPrecision": 2,
+          "noDataOptions": {
+            "linkText": null,
+            "linkUrl": null,
+            "noDataMessage": "Currently, no data is available for this chart."
+          },
+          "programOptions": {
+            "disableSampling": false,
+            "maxDelay": null,
+            "minimumResolution": 0,
+            "timezone": null
+          },
+          "publishLabelOptions": [
+            {
+              "displayName": "APM Error Rate",
+              "label": "A",
+              "paletteIndex": null,
+              "plotType": null,
+              "valuePrefix": "",
+              "valueSuffix": "%",
+              "valueUnit": null,
+              "yAxis": 0
+            }
+          ],
+          "refreshInterval": 5000,
+          "secondaryVisualization": "Sparkline",
+          "showSparkLine": false,
+          "time": {
+            "range": 3600000,
+            "rangeEnd": 0,
+            "type": "relative"
+          },
+          "timestampHidden": false,
+          "type": "SingleValue",
+          "unitPrefix": "Metric"
+        },
+        "packageSpecifications": "",
+        "programText": "E = data('spans.count', filter=filter('sf_kind','SERVER') and filter('sf_error','true')).sum().publish(label='E', enable=False)\nT = data('spans.count', filter=filter('sf_kind','SERVER')).sum().publish(label='T', enable=False)\nA = (E/T*100).publish(label='A')",
+        "relatedDetectorIds": [],
+        "tags": []
+      }
+    },
+    {
+      "chart": {
+        "autoDetectRelatedDetectorIds": [],
+        "created": 0,
+        "creator": null,
+        "customProperties": {},
+        "description": "Request and error volume over time for the selected service \u2014 the same failures the Splunk Enterprise correlation dashboard points back to, from the APM angle.",
+        "id": "g7kmaFtgOls",
+        "importOf": "H1iBTtJ0Dks",
+        "lastUpdated": 0,
+        "lastUpdatedBy": null,
+        "name": "Request & Error Volume",
+        "options": {
+          "areaChartOptions": {
+            "showDataMarkers": false
+          },
+          "axes": [
+            {
+              "highWatermark": null,
+              "highWatermarkLabel": null,
+              "label": "",
+              "lowWatermark": null,
+              "lowWatermarkLabel": null,
+              "max": null,
+              "min": null
+            },
+            {
+              "highWatermark": null,
+              "highWatermarkLabel": null,
+              "label": "",
+              "lowWatermark": null,
+              "lowWatermarkLabel": null,
+              "max": null,
+              "min": null
+            }
+          ],
+          "axisPrecision": null,
+          "colorBy": "Dimension",
+          "defaultPlotType": "AreaChart",
+          "eventPublishLabelOptions": [],
+          "histogramChartOptions": {
+            "colorThemeIndex": 16
+          },
+          "includeZero": false,
+          "legendOptions": {
+            "fields": []
+          },
+          "lineChartOptions": {
+            "showDataMarkers": false
+          },
+          "noDataOptions": {
+            "linkText": null,
+            "linkUrl": null,
+            "noDataMessage": "Currently, no data is available for this chart."
+          },
+          "onChartLegendOptions": {
+            "dimensionInLegend": null,
+            "showLegend": false
+          },
+          "programOptions": {
+            "disableSampling": true,
+            "maxDelay": null,
+            "minimumResolution": 0,
+            "timezone": null
+          },
+          "publishLabelOptions": [
+            {
+              "displayName": "Requests",
+              "label": "Requests",
+              "paletteIndex": 2,
+              "plotType": null,
+              "valuePrefix": "",
+              "valueSuffix": "",
+              "valueUnit": null,
+              "yAxis": 0
+            },
+            {
+              "displayName": "Errors",
+              "label": "Errors",
+              "paletteIndex": 4,
+              "plotType": null,
+              "valuePrefix": "",
+              "valueSuffix": "",
+              "valueUnit": null,
+              "yAxis": 0
+            }
+          ],
+          "showEventLines": false,
+          "stacked": false,
+          "time": {
+            "range": 3600000,
+            "rangeEnd": 0,
+            "type": "relative"
+          },
+          "type": "TimeSeriesChart",
+          "unitPrefix": "Metric"
+        },
+        "packageSpecifications": "",
+        "programText": "Requests = data('spans.count', filter=filter('sf_kind','SERVER')).sum().publish(label='Requests')\nErrors = data('spans.count', filter=filter('sf_kind','SERVER') and filter('sf_error','true')).sum().publish(label='Errors')",
+        "relatedDetectorIds": [],
+        "tags": [],
+        "chartLinks": []
+      }
+    },
+    {
+      "chart": {
+        "autoDetectRelatedDetectorIds": [],
+        "created": 0,
+        "creator": null,
+        "customProperties": {},
+        "description": "Real Boomerang/RUM browser session traffic for the selected RUM application \u2014 not a server metric, so it can be bursty/gappy by nature (unlike the constant synthetic APM load above). No data visible? Check Digital Experience -> RUM and confirm the RUM Application variable matches your app.",
+        "id": "0NdxEJatnwk",
+        "importOf": "YUd-N8Z4Kdg",
+        "lastUpdated": 0,
+        "lastUpdatedBy": null,
+        "name": "RUM Page Views (Real Browser Sessions)",
+        "options": {
+          "areaChartOptions": {
+            "showDataMarkers": false
+          },
+          "axes": [
+            {
+              "highWatermark": null,
+              "highWatermarkLabel": null,
+              "label": "",
+              "lowWatermark": null,
+              "lowWatermarkLabel": null,
+              "max": null,
+              "min": null
+            },
+            {
+              "highWatermark": null,
+              "highWatermarkLabel": null,
+              "label": "",
+              "lowWatermark": null,
+              "lowWatermarkLabel": null,
+              "max": null,
+              "min": null
+            }
+          ],
+          "axisPrecision": null,
+          "colorBy": "Dimension",
+          "defaultPlotType": "ColumnChart",
+          "eventPublishLabelOptions": [],
+          "histogramChartOptions": {
+            "colorThemeIndex": 16
+          },
+          "includeZero": false,
+          "legendOptions": {
+            "fields": []
+          },
+          "lineChartOptions": {
+            "showDataMarkers": false
+          },
+          "noDataOptions": {
+            "linkText": null,
+            "linkUrl": null,
+            "noDataMessage": "Currently, no data is available for this chart."
+          },
+          "onChartLegendOptions": {
+            "dimensionInLegend": null,
+            "showLegend": false
+          },
+          "programOptions": {
+            "disableSampling": true,
+            "maxDelay": null,
+            "minimumResolution": 0,
+            "timezone": null
+          },
+          "publishLabelOptions": [
+            {
+              "displayName": "Page views",
+              "label": "A",
+              "paletteIndex": 11,
+              "plotType": null,
+              "valuePrefix": "",
+              "valueSuffix": "",
+              "valueUnit": null,
+              "yAxis": 0
+            }
+          ],
+          "showEventLines": false,
+          "stacked": false,
+          "time": {
+            "range": 3600000,
+            "rangeEnd": 0,
+            "type": "relative"
+          },
+          "type": "TimeSeriesChart",
+          "unitPrefix": "Metric"
+        },
+        "packageSpecifications": "",
+        "programText": "A = data('rum.page_view.count').sum().publish(label='A')",
+        "relatedDetectorIds": [],
+        "tags": [],
+        "chartLinks": []
+      }
+    },
+    {
+      "chart": {
+        "autoDetectRelatedDetectorIds": [],
+        "created": 0,
+        "creator": null,
+        "customProperties": {},
+        "description": "",
+        "id": "UCrIJMfUn3o",
+        "importOf": "H1zo5xmWenQ",
+        "lastUpdated": 0,
+        "lastUpdatedBy": null,
+        "name": "AlwaysOn Profiling",
+        "options": {
+          "markdown": "## AlwaysOn Profiling\nAlwaysOn Profiling is enabled for this workshop's service and continuously captures CPU and (where supported) memory call stacks alongside traces \u2014 at production-safe overhead, no code changes.\n\nProfiling data is **fundamentally not a time-series metric** (it's call-stack samples correlated to spans), so it is not charted here. View it at: **APM -> (select your service) -> AlwaysOn Profiling tab** for the flame graph, or jump into a slow trace and look for the linked profile.",
+          "type": "Text"
+        },
+        "packageSpecifications": "",
+        "programText": "",
+        "relatedDetectorIds": [],
+        "tags": []
+      }
+    }
+  ],
+  "dashboardExport": {
+    "dashboard": {
+      "authorizedWriters": null,
+      "chartDensity": "DEFAULT",
+      "charts": [
+        {
+          "chartId": "BAXtSWSKoIo",
+          "column": 0,
+          "row": 0,
+          "width": 12,
+          "height": 1
+        },
+        {
+          "chartId": "LwtK92RNxAo",
+          "column": 0,
+          "row": 1,
+          "width": 4,
+          "height": 2
+        },
+        {
+          "chartId": "g7kmaFtgOls",
+          "column": 4,
+          "row": 1,
+          "width": 8,
+          "height": 2
+        },
+        {
+          "chartId": "0NdxEJatnwk",
+          "column": 0,
+          "row": 3,
+          "width": 6,
+          "height": 2
+        },
+        {
+          "chartId": "UCrIJMfUn3o",
+          "column": 6,
+          "row": 3,
+          "width": 6,
+          "height": 2
+        }
+      ],
+      "created": 0,
+      "creator": null,
+      "customProperties": null,
+      "description": "Advanced Workshop #2 capstone, Observability Cloud half: APM service health, RUM real-browser data, and AlwaysOn Profiling \u2014 the things Splunk Enterprise can't show natively. Scope via the Service / Environment / RUM Application dashboard variables.",
+      "discoveryOptions": null,
+      "eventOverlays": null,
+      "filters": {
+        "sources": [],
+        "time": {
+          "end": "Now",
+          "start": "-1h"
+        },
+        "variables": [
+          {
+            "alias": "Service",
+            "applyIfExists": true,
+            "description": "APM service to scope the APM panels to.",
+            "preferredSuggestions": [],
+            "property": "sf_service",
+            "propertyMappings": [
+              "sf_service"
+            ],
+            "replaceOnly": false,
+            "required": false,
+            "restricted": false,
+            "value": [
+              "sonnet01-k8s-petclinic-service"
+            ]
+          },
+          {
+            "alias": "Environment",
+            "applyIfExists": true,
+            "description": "APM environment to scope the APM panels to.",
+            "preferredSuggestions": [],
+            "property": "sf_environment",
+            "propertyMappings": [
+              "sf_environment"
+            ],
+            "replaceOnly": false,
+            "required": false,
+            "restricted": false,
+            "value": [
+              "sonnet01-k8s-petclinic-env"
+            ]
+          },
+          {
+            "alias": "RUM Application",
+            "applyIfExists": true,
+            "description": "RUM application to scope the RUM panel to.",
+            "preferredSuggestions": [],
+            "property": "app",
+            "propertyMappings": [
+              "app"
+            ],
+            "replaceOnly": false,
+            "required": false,
+            "restricted": false,
+            "value": [
+              "sonnet01-petclinic-rum"
+            ]
+          }
+        ]
+      },
+      "groupName": "Workshop Dashboards",
+      "name": "AW2 \u2014 Observability Cloud (APM, RUM, Profiling)",
+      "permissions": null,
+      "selectedEventOverlays": [],
+      "tags": [],
+      "id": "LRGuXp29lMc",
+      "groupId": "wFmZWMFW9CE",
+      "importOf": "Msqnr1cg94E",
+      "lastUpdated": 0,
+      "lastUpdatedBy": null,
+      "maxDelayOverride": null
+    }
+  },
+  "modelVersion": 1,
+  "packageType": "DASHBOARD",
+  "id": "LRGuXp29lMc",
+  "hashCode": 280132333
+}

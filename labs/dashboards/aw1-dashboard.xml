@@ -1,0 +1,219 @@
+<form version="1.1">
+  <label>Advanced Workshop #1 — Metrics &amp; Traces</label>
+  <description>Self-contained capstone: auto-instrumented trace latency and JVM/HikariCP metrics, entirely inside Splunk Enterprise — no external Splunkbase app required.</description>
+
+  <fieldset submitButton="false">
+    <input type="dropdown" token="span_token" searchWhenChanged="true">
+      <label>Time Granularity (Trace Volume Chart)</label>
+      <choice value="10s">10 Seconds</choice>
+      <choice value="30s">30 Seconds</choice>
+      <choice value="1m">1 Minute</choice>
+      <choice value="15m">15 Minutes</choice>
+      <choice value="30m">30 Minutes</choice>
+      <choice value="1h">1 Hour</choice>
+      <choice value="1d">Daily</choice>
+      <choice value="1w">Weekly</choice>
+      <choice value="1mon">Monthly</choice>
+      <default>1m</default>
+      <initialValue>1m</initialValue>
+    </input>
+  </fieldset>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(135deg, #1F3864 0%, #2E75B6 100%); padding: 24px 32px; border-radius: 6px;">
+          <h1 style="margin:0 0 8px 0; font-size:26px; font-weight:700; color:#FFFFFF !important;">Advanced Workshop #1 — Metrics &amp; Traces</h1>
+          <p style="margin:0; font-size:14px; line-height:1.5; color:#FFFFFF !important;">Auto-instrumentation (the Java agent, zero code changes) generates traces and JVM metrics that the Collector routes by index — <code style="color:#FFFFFF !important;">k8s_ws_traces</code> for spans, <code style="color:#FFFFFF !important;">k8s_ws_petclinic_metrics</code> for JVM/HikariCP — and every panel below is built from that data with plain SPL, no external app required.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Total Traces (Last 30m)</title>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_traces
+| stats count as value
+| table value
+          </query>
+          <earliest>-30m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="unit">spans</option>
+        <option name="useColors">0</option>
+      </single>
+    </panel>
+    <panel>
+      <title>P90 Latency, All Spans (Last 30m)</title>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_traces
+| eval ms=(end_time-start_time)/1000000
+| stats perc90(ms) as value
+| eval value=round(value,2)
+| table value
+          </query>
+          <earliest>-30m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.00</option>
+        <option name="unit">ms</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x53A051","0xF8BE34","0xF1813F","0xDC4E41"]</option>
+        <option name="rangeValues">[10,25,50]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>JVM Heap Used, Current (MB)</title>
+      <single>
+        <search>
+          <query>
+| mstats avg(jvm.memory.used) as value WHERE index=k8s_ws_petclinic_metrics jvm.memory.type=heap span=10s
+| sort - _time
+| head 1
+| eval value=round(value/1024/1024,2)
+| table value
+          </query>
+          <earliest>-30m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.00</option>
+        <option name="unit">MB</option>
+        <option name="useColors">0</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Trace Volume &amp; Error Spans Over Time</title>
+      <chart>
+        <search>
+          <query>
+index=k8s_ws_traces
+| rename "status.code" as status_code
+| eval is_error=if(status_code=="STATUS_CODE_ERROR",1,0)
+| timechart span=$span_token$ count as "Total Spans" sum(is_error) as "Error Spans"
+          </query>
+          <earliest>-30m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Span Count</option>
+        <option name="charting.seriesColors">[0x2E75B6,0xDC4E41]</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>JVM Heap Used Over Time — Auto-Instrumented, No Code Changes (heap vs. non-heap, 10s resolution)</title>
+      <description>Sawtooth pattern is expected: heap usage climbs as objects are allocated, then drops sharply on each garbage-collection cycle.</description>
+      <chart>
+        <search>
+          <query>
+| mstats avg(jvm.memory.used) WHERE index=k8s_ws_petclinic_metrics span=10s BY jvm.memory.type
+| xyseries _time jvm.memory.type avg(jvm.memory.used)
+          </query>
+          <earliest>-30m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Bytes</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.seriesColors">[0x2E75B6,0x1F3864]</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Top Routes by Latency (Last 30m)</title>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_traces
+| rename "attributes.http.route" as route
+| where isnotnull(route)
+| eval ms=(end_time-start_time)/1000000
+| stats count, avg(ms) as avg_ms, max(ms) as max_ms by route
+| eval avg_ms=round(avg_ms,2), max_ms=round(max_ms,2)
+| sort -avg_ms
+| rename route as "Route", count as "Span Count", avg_ms as "Avg Latency (ms)", max_ms as "Max Latency (ms)"
+          </query>
+          <earliest>-30m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Avg Latency (ms)">
+          <option name="precision">2</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="number" field="Max Latency (ms)">
+          <option name="precision">2</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="color" field="Avg Latency (ms)">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>HikariCP Connection Pool Health (Current)</title>
+      <description>idle + active should sum to at most the pool max; a nonzero pending-requests count means callers are queued waiting for a free connection.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(db.client.connections.usage) as value WHERE index=k8s_ws_petclinic_metrics BY state
+| stats latest(value) as value by state
+| eval metric=if(state="idle","Idle Connections","Active Connections")
+| eval value=round(value,0)
+| table metric value
+| append [
+| mstats latest(db.client.connections.max) as value WHERE index=k8s_ws_petclinic_metrics
+| eval metric="Max Pool Size"
+| eval value=round(value,0)
+| table metric value
+]
+| append [
+| mstats latest(db.client.connections.pending_requests) as value WHERE index=k8s_ws_petclinic_metrics
+| eval metric="Pending Requests"
+| eval value=round(value,0)
+| table metric value
+]
+| rename metric as "Metric", value as "Value"
+          </query>
+          <earliest>-30m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+</form>

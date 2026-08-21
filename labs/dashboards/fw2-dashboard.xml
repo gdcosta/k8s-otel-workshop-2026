@@ -1,0 +1,183 @@
+<form version="1.1">
+  <label>Foundational Workshop 2 - What You Built</label>
+  <description>Capstone dashboard for Foundational Workshop #2: Petclinic request traffic, OTTL-derived severity, and the log-to-two-indexes routing pattern.</description>
+  <fieldset submitButton="false">
+    <input type="dropdown" token="span_token" searchWhenChanged="true">
+      <label>Time Granularity</label>
+      <choice value="10s">10 Seconds</choice>
+      <choice value="30s">30 Seconds</choice>
+      <choice value="1m">1 Minute</choice>
+      <choice value="15m">15 Minutes</choice>
+      <choice value="30m">30 Minutes</choice>
+      <choice value="1h">1 Hour</choice>
+      <choice value="1d">Daily</choice>
+      <choice value="1w">Weekly</choice>
+      <choice value="1mon">Monthly</choice>
+      <default>1m</default>
+      <initialValue>1m</initialValue>
+    </input>
+  </fieldset>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(135deg, #1F3864 0%, #2E75B6 100%); padding: 28px 36px; border-radius: 6px;">
+          <h1 style="margin:0 0 8px 0; font-size:26px; font-weight:700; color:#FFFFFF !important;">Foundational Workshop #2 &#8212; What You Built</h1>
+          <p style="margin:0; font-size:14px; line-height:1.6; color:#FFFFFF !important;">You wired up multiline stack-trace parsing, added an OTTL transform to derive log severity, and routed one Kubernetes log stream into two indexes via a pod annotation &#8212; this dashboard is the proof, built entirely from the data you generated.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Total Requests</title>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs http_status=*
+| stats count as value
+| table value
+          </query>
+          <earliest>-60m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x2E75B6"]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Error Rate %</title>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs http_status=*
+| stats count as total count(eval(http_status&gt;=500)) as errors
+| eval value=round((errors/total)*100,1)
+| table value
+          </query>
+          <earliest>-60m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="unit">%</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x53A051","0xF8BE34","0xF1813F","0xDC4E41"]</option>
+        <option name="rangeValues">[1,5,10]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Distinct Routes</title>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs http_status=*
+| stats dc(http_path) as value
+| table value
+          </query>
+          <earliest>-60m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x2E75B6"]</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Request Volume Over Time (5xx vs. Everything Else)</title>
+      <chart>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs http_status=*
+| eval status_class=if(http_status&gt;=500,"5xx (error)","Other")
+| timechart span=$span_token$ count by status_class
+          </query>
+          <earliest>-60m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.axisTitleY.text">Requests</option>
+        <option name="charting.seriesColors">[0xDC4E41,0x2E75B6]</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Severity / Status Breakdown &#8212; Powered by the OTTL Severity Transform</title>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs
+| stats count by http_status "otel.log.severity.text"
+| sort -count
+          </query>
+          <earliest>-60m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="count">
+          <option name="precision">0</option>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Most Recent Errors &#8212; RuntimeException Stack Traces (Multiline Parsing in Action)</title>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs RuntimeException
+| sort -_time
+| head 15
+| table _time severity trace_id "service.name"
+          </query>
+          <earliest>-24h</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Index Routing Proof &#8212; One Log Stream Becomes Two (via the Pod Annotation)</title>
+      <table>
+        <search>
+          <query>
+(index=k8s_ws_logs OR index=k8s_ws_petclinic_logs)
+| stats count by index sourcetype
+| sort -count
+          </query>
+          <earliest>-60m</earliest>
+          <latest>now</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="count">
+          <option name="precision">0</option>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+</form>
