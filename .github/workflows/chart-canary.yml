@@ -6,6 +6,12 @@ name: Collector chart canary
 on:
   schedule: [{ cron: '0 6 * * 1' }]
   workflow_dispatch:
+# The final step files an issue when the chart breaks the overlay. The repository
+# default for GITHUB_TOKEN is read-only, so without this the canary would detect
+# drift correctly and then fail 403 trying to report it.
+permissions:
+  contents: read
+  issues: write
 jobs:
   canary:
     runs-on: ubuntu-latest
