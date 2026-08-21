@@ -51,9 +51,7 @@ index=k8s_ws_petclinic_logs http_status=*
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0</option>
-        <option name="colorMode">block</option>
-        <option name="useColors">1</option>
-        <option name="rangeColors">["0x2E75B6"]</option>
+        <option name="useColors">0</option>
       </single>
     </panel>
     <panel>
@@ -84,6 +82,8 @@ index=k8s_ws_petclinic_logs http_status=*
         <search>
           <query>
 index=k8s_ws_petclinic_logs http_status=*
+| rex field=http_path mode=sed "s/;jsessionid=[A-F0-9]+//"
+| rex field=http_path mode=sed "s|/[0-9]+|/{id}|g"
 | stats dc(http_path) as value
 | table value
           </query>
@@ -92,9 +92,7 @@ index=k8s_ws_petclinic_logs http_status=*
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0</option>
-        <option name="colorMode">block</option>
-        <option name="useColors">1</option>
-        <option name="rangeColors">["0x2E75B6"]</option>
+        <option name="useColors">0</option>
       </single>
     </panel>
   </row>
@@ -182,6 +180,188 @@ index=k8s_ws_petclinic_logs RuntimeException
         <option name="wrap">true</option>
         <format type="number" field="count">
           <option name="precision">0</option>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(135deg, #2E75B6 0%, #1F3864 100%); padding: 24px 36px; border-radius: 6px;">
+          <h2 style="margin:0 0 8px 0; font-size:22px; font-weight:700; color:#FFFFFF !important;">What This Data Lets You Answer &#8212; The Kubernetes Audit Log</h2>
+          <p style="margin:0 0 8px 0; font-size:14px; line-height:1.6; color:#FFFFFF !important;">Everything above proves your pipeline works. Everything below shows why it was worth building. The same Collector that shipped your application logs is also shipping the <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px;">kube-apiserver</code> audit stream &#8212; a record of every call made to your cluster's control plane: who made it, what they touched, whether it was allowed.</p>
+          <p style="margin:0; font-size:14px; line-height:1.6; color:#FFFFFF !important;">No application log can answer &#8220;who deleted that deployment?&#8221; or &#8220;is anything unauthenticated talking to my API server?&#8221; These panels can. On this lab cluster the answers are reassuringly boring &#8212; that is the point: these are the exact queries whose <em style="color:#FFFFFF !important;">non</em>-boring answers matter in production.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Who Is Talking to Your Kubernetes API &#8212; Top Identities by Verb</title>
+      <description>Every bar is an identity that authenticated (or didn't) to your control plane, split by what it asked for. Conclude: a healthy cluster is dominated by its own machinery - controllers, the scheduler, kubelet, and your Collector's service account - all doing predictable read/watch work. The identity to look for in production is the one you cannot name: a human user or service account you didn't provision, or a known account suddenly issuing verbs it never used before.</description>
+      <chart>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="kube:container:kube-apiserver" verb=*
+| eval identity='user.username'
+| chart useother=f count over identity by verb
+| addtotals fieldname=Total
+| sort -Total
+| head 10
+| fields - Total
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleX.text">API Requests</option>
+        <option name="charting.axisTitleY.text">Identity</option>
+        <option name="charting.seriesColors">[0x2E75B6,0x53A051,0xF8BE34,0xF1813F,0xDC4E41,0x1F3864]</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Unauthenticated (Anonymous) API Access Over Time</title>
+      <description>Requests reaching the API server with no credentials, as system:anonymous. Conclude: a flat, metronomic line like this one is health probing, not an attack - kubelet and the load balancer poll /readyz and /livez on a fixed interval, so the shape is a constant. What you are watching for in production is the shape changing: a step up, a burst, or anonymous traffic appearing at a time of day when nothing should be probing. This is the panel that turns "we collect audit logs" into "we would notice."</description>
+      <chart>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="kube:container:kube-apiserver" "user.username"="system:anonymous"
+| timechart span=$span_token$ useother=f limit=8 count by requestURI
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.axisTitleY.text">Anonymous Requests</option>
+        <option name="charting.seriesColors">[0x2E75B6,0xF8BE34,0xF1813F,0xDC4E41]</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>&#8230; And What That Anonymous Caller Is Actually Hitting</title>
+      <description>The same unauthenticated traffic, resolved to endpoint, client, and source IP. Conclude: this is benign - kube-probe and a Go HTTP client issuing GET against the three health endpoints from inside the cluster network, which is exactly what Kubernetes is designed to allow without credentials. Judge a real cluster the same way, on three questions: is the URI a health endpoint or a real resource path, is the user agent a known probe or a scanner, and is the source IP inside your network. An anonymous GET against /api/v1/namespaces/default/secrets from an unfamiliar IP is the same query returning a very different answer.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="kube:container:kube-apiserver" "user.username"="system:anonymous"
+| stats count as Requests values("sourceIPs{}") as "Source IP" values(verb) as Verbs by requestURI userAgent
+| rename requestURI as "Request URI" userAgent as "User Agent"
+| sort -Requests
+| table "Request URI" "User Agent" "Source IP" Verbs Requests
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Requests">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Requests">
+          <colorPalette type="list">[#115BAD]</colorPalette>
+          <scale type="threshold"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>API Operation Mix &#8212; Which Verbs Against Which Resources</title>
+      <description>The shape of normal control-plane chatter. Conclude: watch and update against endpoints, endpointslices, and leases should dominate - that is service discovery and leader election keeping themselves alive, and it is load-bearing noise, not waste. Read this panel as a baseline you now own. The deviations that matter later are create or delete appearing on pods outside a deploy window, any get against secrets, or a single resource suddenly outweighing the leases traffic.</description>
+      <chart>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="kube:container:kube-apiserver" verb=* "objectRef.resource"=*
+| eval resource='objectRef.resource'
+| chart useother=f count over resource by verb
+| addtotals fieldname=Total
+| sort -Total
+| head 12
+| fields - Total
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleX.text">Kubernetes Resource</option>
+        <option name="charting.axisTitleY.text">API Requests</option>
+        <option name="charting.seriesColors">[0x2E75B6,0x53A051,0xF8BE34,0xF1813F,0xDC4E41,0x1F3864]</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Write Operations Audit Trail &#8212; Who Changed What</title>
+      <description>Mutating verbs only: create, update, patch, delete. Conclude: on an idle cluster this list is short and entirely machine-driven - the storage provisioner refreshing endpoints, the kubelet and API server renewing their leases, a node status patch. Every row is an identity, an action, an object, and a timestamp, which is the whole compliance answer to "who changed this, and when." The row that should stop you in production is one whose user.username is a person or an unexpected service account, especially on delete.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="kube:container:kube-apiserver" (verb=create OR verb=update OR verb=patch OR verb=delete)
+| stats count as Operations values("objectRef.namespace") as Namespace latest(_time) as last_seen by "user.username" verb "objectRef.resource"
+| eval "Last Seen"=strftime(last_seen,"%Y-%m-%d %H:%M:%S")
+| rename "user.username" as Identity verb as Verb "objectRef.resource" as Resource
+| sort -Operations
+| head 20
+| table Identity Verb Resource Namespace Operations "Last Seen"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Operations">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Verb">
+          <colorPalette type="map">{"delete":#DC4E41,"create":#F1813F,"patch":#F8BE34,"update":#65778A}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Sensitive Resource Access &#8212; Secrets, Service Accounts, and RBAC</title>
+      <description>Every touch of the objects that grant access: secrets, serviceaccounts, roles, rolebindings, and their cluster-scoped equivalents, plus configmaps. Conclude: legitimate access here is almost entirely watch by system:apiserver, the controller manager, and the scheduler - they must observe these objects to function. The signals to alert on are different verbs and different actors: a get or list against secrets (that is a read of the actual value), or any create or patch of a rolebinding, which is how an attacker turns a foothold into cluster-admin.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="kube:container:kube-apiserver" ("objectRef.resource"=secrets OR "objectRef.resource"=configmaps OR "objectRef.resource"=serviceaccounts OR "objectRef.resource"=roles OR "objectRef.resource"=rolebindings OR "objectRef.resource"=clusterroles OR "objectRef.resource"=clusterrolebindings)
+| stats count as Requests by "objectRef.resource" verb "user.username"
+| rename "objectRef.resource" as Resource verb as Verb "user.username" as Identity
+| sort -Requests
+| head 20
+| table Resource Verb Identity Requests
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Requests">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Verb">
+          <colorPalette type="map">{"delete":#DC4E41,"create":#F1813F,"patch":#F8BE34,"get":#F1813F,"list":#F8BE34,"watch":#65778A}</colorPalette>
         </format>
       </table>
     </panel>

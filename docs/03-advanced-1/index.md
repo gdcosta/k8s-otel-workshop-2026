@@ -769,10 +769,13 @@ Generate load while watching, and you'll see heap sawtooth as garbage collection
 
 ---
 
-## 8. Install the metrics & traces dashboard
+## 8. Install the capstone dashboards
 
-A capstone dashboard for everything this module built — seven panels, self-contained, no
-Splunkbase app required.
+Two dashboards for everything this module built — thirteen panels each, self-contained, no
+Splunkbase app required. The first asks *how is my application behaving?*; the second asks
+*is the platform underneath it at fault?*
+
+### Metrics & traces
 
 ```bash
 cd ~/k8s_workshop
@@ -797,16 +800,80 @@ then paste the XML into the source editor.
 
 ![AW1 dashboard](../assets/img/03-aw1/aw1-dashboard.png)
 
-Seven panels, all backed by queries verified against live workshop data: Total Traces,
-P90 Latency, current JVM Heap Used, a trace-volume-and-errors timechart (span-adjustable),
-the JVM heap sawtooth from step 7 — the same `mstats`/`xyseries` query, now as a permanent
-chart instead of a one-off search — top routes by latency, and a HikariCP connection-pool
-snapshot.
+The first half is the module's own output: Total Traces, P90 Latency, current JVM Heap
+Used, a trace-volume-and-errors timechart (span-adjustable), the JVM heap sawtooth from
+step 7 — the same `mstats`/`xyseries` query, now a permanent chart instead of a one-off
+search — top routes by latency, and a HikariCP connection-pool snapshot.
+
+The second half is where tracing starts earning its keep. Everything above that line is
+built from **SERVER** spans — one per HTTP request, which is roughly what an access log
+already tells you. But the Java agent also emits **CLIENT** spans (every database
+round-trip, with the SQL text attached) and **INTERNAL** spans (individual application
+methods). Six panels read those instead, and they surface a textbook **N+1 query pattern**:
+a single page view fires **four separate database round-trips**.
+
+No log line and no metric contains that fact. The SQL-count-per-request only exists once
+spans are correlated by `trace_id` — which is the entire reason distributed tracing exists.
+The panels break it down by route, rank the top SQL statements by volume and by latency,
+split request time into database-versus-application time, list the slowest INTERNAL
+methods, and show error rate by route.
+
+!!! tip "Read the DB-time split carefully"
+    Database time comes out at only a few percent of request time here, which looks like it
+    contradicts the N+1 finding. It doesn't — PetClinic runs H2 **in memory**, so each
+    round-trip is almost free. Point the same application at a real network database and
+    those four round-trips per page become four network latencies per page. The count is
+    the finding; the timing is an artefact of the lab.
 
 !!! note "Earlier revisions of this dashboard needed a Splunkbase app"
     A previous version pulled from a different repo and needed the Link Analysis App for
     Splunk for its service-dependency panels, which rendered blank without it. This one is
     self-contained — every panel here works out of the box, with nothing extra to install.
+
+### Infrastructure & Collector health
+
+The companion capstone. When the application looks wrong, the next question is whether the
+platform underneath it is at fault — and the last question is whether you can trust the
+telemetry telling you any of this.
+
+```bash
+cd ~/k8s_workshop
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/aw1-infra-dashboard.xml
+```
+
+Same install path: **Search & Reporting → Dashboards → Create New Dashboard → Classic
+Dashboards**, then paste the XML into the source editor.
+
+??? abstract "Command-line alternative — install it over REST"
+    ```bash
+    curl -sk -u admin:Workshop2026! -X POST \
+      https://localhost:8089/servicesNS/admin/search/data/ui/views \
+      -d "name=k8s_ws_infra_dashboard" --data-urlencode "eai:data@aw1-infra-dashboard.xml"
+    ```
+
+![AW1 infrastructure dashboard](../assets/img/03-aw1/aw1-infra-dashboard.png)
+
+Everything on it comes from the single `k8s_ws_metrics` index, fed by three sources inside
+the one Collector deployment you already have — the `hostmetrics` receiver, the `k8s_cluster`
+receiver, and the Collector's own `otelcol_*` self-telemetry. Three sections:
+
+**Host health** — CPU load, saturation against core count, and memory composition over time.
+Kubernetes schedules against *requests*, not against what is actually happening on the node,
+so it will happily place pods on a box that is already saturated. These panels show the truth
+the scheduler cannot see.
+
+**Kubernetes object state** — pod phase by namespace, container restarts and readiness,
+workload drift (desired versus available), and the scheduling contract (CPU and memory
+requests versus limits). Kubernetes is declarative, so nearly every outage is a gap between
+what you declared and what you got; this section is built from those differences rather than
+from absolute numbers. The limits table is worth a pause — most control-plane components run
+with **no CPU or memory limit at all**, which means any one of them can starve the whole node.
+
+**Collector pipeline health** — throughput by signal type, a data-loss audit (accepted versus
+refused at the receiver), and exporter queue utilisation. A Collector that is silently
+dropping spans produces a dashboard that looks *calmer* during an incident, not noisier,
+which is the most dangerous failure mode an observability stack has. Prove the pipeline is
+intact before you trust anything above it.
 
 ---
 

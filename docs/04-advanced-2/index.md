@@ -1331,13 +1331,29 @@ Create New Dashboard → Classic Dashboards**, paste the XML in.
 
 ![AW2 Splunk correlation dashboard](../assets/img/04-aw2/aw2-dashboard.png)
 
-Five panels answering one question — *does a log line actually carry what APM needs to
-pivot to it?* — all verified against live data: the percentage of app events carrying
-`trace_id`, the percentage with severity classified, a severity-coverage timechart proving
-it's written at ingest and not retroactive (the exact §5 warning, now permanent), the
-single-event correlation proof (`trace_id`, `severity`, `service.name`,
+Thirteen panels, all verified against live data. The first half answers one question —
+*does a log line actually carry what APM needs to pivot to it?* — with the percentage of app
+events carrying `trace_id`, the percentage with severity classified, a severity-coverage
+timechart proving it's written at ingest and not retroactive (the exact §5 warning, now
+permanent), the single-event correlation proof (`trace_id`, `severity`, `service.name`,
 `deployment.environment`, `host` on one row), and the app-log-vs-access-log split that
 explains why coverage is partial by design.
+
+The second half uses that correlation rather than just proving it. By this point your single
+Collector is shipping **logs, metrics and traces into Splunk Enterprise simultaneously**, so
+the same incident can be counted, timed and dissected three independent ways in one search
+bar. Six panels do exactly that: all three signals on one timeline, the same failures counted
+three different ways (access-log 5xx, ERROR-severity app logs, and spans with
+`STATUS_CODE_ERROR` — which agree to within a fraction of a percent), the log→trace pivot
+success rate, a join proof classifying every distinct `trace_id` as span-only, fully
+correlated, or log-only-with-no-span, the ingest mix showing what each signal actually costs
+you in volume, and one real request rendered end to end as a span waterfall — parent/child,
+kind, offset, duration and SQL text, picked live from the deepest trace in the window.
+
+!!! tip "The recurring lesson"
+    When three lenses agree, you trust the number. When they diverge, **the divergence is
+    itself the finding** — it means something is sampling, dropping or misrouting in the
+    pipeline, and it is only visible because all three signals landed in the same place.
 
 ### Observability Cloud — APM, RUM, Profiling
 

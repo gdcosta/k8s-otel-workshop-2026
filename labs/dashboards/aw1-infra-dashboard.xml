@@ -1,0 +1,467 @@
+<form version="1.1">
+  <label>Advanced Workshop #1 — Infrastructure &amp; Collector Health</label>
+  <description>The infrastructure capstone: host resource pressure, Kubernetes object state, and the OpenTelemetry Collector's own pipeline health — every panel built from the k8s_ws_metrics index with plain SPL.</description>
+
+  <fieldset submitButton="false">
+    <input type="time" token="tr">
+      <label>Time Range</label>
+      <default>
+        <earliest>-30m</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="span_token" searchWhenChanged="true">
+      <label>Time Granularity (Trend Charts)</label>
+      <choice value="10s">10 Seconds</choice>
+      <choice value="30s">30 Seconds</choice>
+      <choice value="1m">1 Minute</choice>
+      <choice value="15m">15 Minutes</choice>
+      <choice value="30m">30 Minutes</choice>
+      <choice value="1h">1 Hour</choice>
+      <choice value="1d">Daily</choice>
+      <choice value="1w">Weekly</choice>
+      <choice value="1mon">Monthly</choice>
+      <default>1m</default>
+      <initialValue>1m</initialValue>
+    </input>
+  </fieldset>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(135deg, #1F3864 0%, #2E75B6 100%); padding: 24px 32px; border-radius: 6px;">
+          <h1 style="margin:0 0 8px 0; font-size:26px; font-weight:700; color:#FFFFFF !important;">Advanced Workshop #1 — Infrastructure &amp; Collector Health</h1>
+          <p style="margin:0 0 10px 0; font-size:14px; line-height:1.5; color:#FFFFFF !important;">The companion capstone to the Metrics &amp; Traces dashboard. That one asks "how is my application behaving?" — this one asks the three questions you ask when the application is misbehaving and you need to know whether the platform underneath it is at fault: <strong style="color:#FFFFFF !important;">Is the host out of resources? Is Kubernetes actually running what I asked it to run? And is my telemetry pipeline still telling me the truth?</strong></p>
+          <p style="margin:0; font-size:14px; line-height:1.5; color:#FFFFFF !important;">Everything below comes from a single index — <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">k8s_ws_metrics</code> — fed by three sources inside one Collector deployment: the <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">hostmetrics</code> receiver, the <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">k8s_cluster</code> receiver, and the Collector's own <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">otelcol_*</code> self-telemetry.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background:#F0F4F8; border-left:5px solid #2E75B6; padding:14px 20px; border-radius:4px;">
+          <h3 style="margin:0 0 6px 0; color:#1F3864 !important; font-size:15px;">Section 1 — Host Health: is the machine under the cluster running out of road?</h3>
+          <p style="margin:0; color:#333333 !important; font-size:13px; line-height:1.6;">Kubernetes will happily schedule pods onto a node that is already saturated; it schedules against <em>requests</em>, not against what is actually happening. These panels come from the <code style="background:#DCE6F1 !important; color:#1F3864 !important; padding:1px 5px; border-radius:3px; font-family:monospace;">hostmetrics</code> receiver reading <code style="background:#DCE6F1 !important; color:#1F3864 !important; padding:1px 5px; border-radius:3px; font-family:monospace;">/proc</code> directly, so they show the truth the scheduler cannot see.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>CPU Load Average (1m)</title>
+      <description>Raw run-queue depth. Meaningless on its own until you divide it by core count — see the next panel.</description>
+      <single>
+        <search>
+          <query>
+| mstats avg(system.cpu.load_average.1m) as v WHERE index=k8s_ws_metrics span=1m
+| sort - _time
+| head 1
+| eval value=round(v,2)
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.00</option>
+        <option name="unit">load</option>
+        <option name="useColors">0</option>
+      </single>
+    </panel>
+    <panel>
+      <title>CPU Saturation (load ÷ cores)</title>
+      <description>The number that actually matters. Under 100% the node keeps up with its work; sustained above 100% means processes are queueing for CPU and every latency number on the app dashboard will start to drift upward.</description>
+      <single>
+        <search>
+          <query>
+| mstats avg(system.cpu.load_average.1m) as l avg(system.cpu.logical.count) as c WHERE index=k8s_ws_metrics span=1m
+| sort - _time
+| head 1
+| eval value=round(l/c*100,1)
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="unit">%</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x53A051","0xF8BE34","0xF1813F","0xDC4E41"]</option>
+        <option name="rangeValues">[70,100,150]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Memory In Use</title>
+      <description>Anonymous, non-reclaimable memory — the portion the kernel cannot hand back under pressure. This is what the OOM killer counts against you, not the cached figure.</description>
+      <single>
+        <search>
+          <query>
+| mstats avg(system.memory.usage) as v WHERE index=k8s_ws_metrics state=used span=1m
+| sort - _time
+| head 1
+| eval value=round(v/1024/1024/1024,2)
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.00</option>
+        <option name="unit">GB</option>
+        <option name="useColors">0</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Memory Utilization</title>
+      <description>Used memory as a share of total physical RAM. Below ~70% you have room to schedule more pods; above ~90% the next deployment is a coin flip between eviction and an OOM kill.</description>
+      <single>
+        <search>
+          <query>
+| mstats avg(system.memory.usage) as v WHERE index=k8s_ws_metrics BY state
+| eventstats sum(v) as total
+| where state="used"
+| eval value=round(v/total*100,1)
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="unit">%</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x53A051","0xF8BE34","0xF1813F","0xDC4E41"]</option>
+        <option name="rangeValues">[70,85,95]</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Load Average Trend — 1m vs 5m vs 15m</title>
+      <description>Read the ordering, not the values. 1m above 15m means load is climbing right now and you are watching a problem arrive; 1m below 15m means the spike has already passed and the cluster is recovering on its own. Three flat, overlapping lines is a node doing steady work — the only shape you want to see during a workshop run.</description>
+      <chart>
+        <search>
+          <query>
+| mstats avg(system.cpu.load_average.1m) as "1-minute" avg(system.cpu.load_average.5m) as "5-minute" avg(system.cpu.load_average.15m) as "15-minute" WHERE index=k8s_ws_metrics span=$span_token$
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Run Queue Depth</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.seriesColors">[0xDC4E41,0xF1813F,0x2E75B6]</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Memory Composition Over Time — Used vs Cached vs Free</title>
+      <description>"Free memory is near zero" is almost never the problem — Linux deliberately spends idle RAM on page cache. The failure signature to look for is <em>cached</em> collapsing while <em>used</em> climbs: that is the kernel evicting its own cache to feed a growing process, and it is the last quiet moment before an OOM kill.</description>
+      <chart>
+        <search>
+          <query>
+| mstats avg(system.memory.usage) WHERE index=k8s_ws_metrics AND (state=used OR state=cached OR state=free) span=$span_token$ BY state
+| xyseries _time state avg(system.memory.usage)
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Bytes</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.seriesColors">[0x2E75B6,0x53A051,0xDC4E41]</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background:#F3E5F5; border-left:5px solid #6A1B9A; padding:14px 20px; border-radius:4px;">
+          <h3 style="margin:0 0 6px 0; color:#4A148C !important; font-size:15px;">Section 2 — Kubernetes Object State: is the cluster running what you declared?</h3>
+          <p style="margin:0; color:#333333 !important; font-size:13px; line-height:1.6;">Kubernetes is a declarative system, so almost every outage is a <em>gap</em>: desired minus available, requested minus scheduled, expected minus ready. The <code style="background:#E1CCE8 !important; color:#4A148C !important; padding:1px 5px; border-radius:3px; font-family:monospace;">k8s_cluster</code> receiver polls the API server for exactly those declared-vs-actual pairs, which is why this section is built out of differences rather than absolute numbers.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Pod Phase by Namespace</title>
+      <description>Every bar should be a single solid colour — one hundred percent Running. A second colour appearing in any namespace is the fastest visual signal in this dashboard: Pending means the scheduler could not place the pod (check Section 1 for the resource reason), Failed means it placed it and the container died.</description>
+      <chart>
+        <search>
+          <query>
+| mstats latest(k8s.pod.phase) as phase WHERE index=k8s_ws_metrics BY k8s.namespace.name k8s.pod.name
+| eval Phase=case(phase=1,"Pending",phase=2,"Running",phase=3,"Succeeded",phase=4,"Failed",phase=5,"Unknown",true(),"Other")
+| rename "k8s.namespace.name" as Namespace
+| chart count over Namespace by Phase
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Pods</option>
+        <option name="charting.axisTitleX.text">Namespace</option>
+        <option name="charting.seriesColors">[0x53A051,0xF8BE34,0xDC4E41,0x65778A]</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Container Restarts &amp; Readiness</title>
+      <description>A restart count above zero is the single most actionable signal Kubernetes emits — the container died and was resurrected, and nothing in the application logs will say so. Watch the count across refreshes: a static number is old scar tissue from cluster startup and can be ignored, but a number that <em>increments while you watch</em> is an active crash loop. A container that is restarting AND showing NOT READY is failing its probes right now and is currently serving no traffic.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(k8s.container.restarts) as restarts latest(k8s.container.ready) as ready WHERE index=k8s_ws_metrics BY k8s.namespace.name k8s.pod.name k8s.container.name
+| eval Ready=if(ready=1,"Ready","NOT READY")
+| eval Assessment=if(restarts&gt;0,"Investigate — container has died before","Stable")
+| sort - restarts
+| rename "k8s.namespace.name" as Namespace, "k8s.pod.name" as Pod, "k8s.container.name" as Container, restarts as Restarts
+| table Namespace Pod Container Restarts Ready Assessment
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">15</option>
+        <format type="number" field="Restarts">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Restarts">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Workload Drift — Desired vs Available (Deployments &amp; DaemonSets)</title>
+      <description>The Gap column IS the outage. Kubernetes never reports "broken" — it reports that you asked for three replicas and two are available, and the missing one is the capacity your users are not getting. A DaemonSet gap is worse than it looks: because DaemonSets run one pod per node, a gap of one means an entire node has lost that capability — and if the missing pod is the Collector agent, you have gone blind on that node without a single error appearing anywhere else in this dashboard.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(k8s.deployment.desired) as desired latest(k8s.deployment.available) as available WHERE index=k8s_ws_metrics BY k8s.namespace.name k8s.deployment.name
+| eval Kind="Deployment"
+| rename "k8s.deployment.name" as Workload, "k8s.namespace.name" as Namespace
+| table Kind Namespace Workload desired available
+| append [
+| mstats latest(k8s.daemonset.desired_scheduled_nodes) as desired latest(k8s.daemonset.ready_nodes) as available WHERE index=k8s_ws_metrics BY k8s.namespace.name k8s.daemonset.name
+| eval Kind="DaemonSet"
+| rename "k8s.daemonset.name" as Workload, "k8s.namespace.name" as Namespace
+| table Kind Namespace Workload desired available
+]
+| eval Gap=desired-available
+| eval Status=if(Gap=0,"Healthy — declared state achieved","DEGRADED — capacity missing")
+| sort - Gap Kind Workload
+| rename desired as Desired, available as Available
+| table Kind Namespace Workload Desired Available Gap Status
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Desired">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Available">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Gap">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Gap">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Scheduling Contract — CPU &amp; Memory Requests vs Limits</title>
+      <description>Requests are what the scheduler reserves; limits are what the kernel enforces. Every UNBOUNDED cell is a container that can consume the whole node — it will not be throttled, it will simply take CPU from its neighbours or push the node into an OOM kill that lands on some <em>other</em> pod. Conversely, a container whose request is far below its real usage will be packed onto a node that cannot actually feed it. Cross-reference this table with Section 1: if the node is saturated and an unbounded container is on it, you have found your culprit.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(k8s.container.cpu_request) as cr latest(k8s.container.cpu_limit) as cl latest(k8s.container.memory_request) as mr latest(k8s.container.memory_limit) as ml WHERE index=k8s_ws_metrics BY k8s.namespace.name k8s.container.name
+| eval "CPU Request"=if(isnull(cr),"none set",tostring(round(cr,3))." cores")
+| eval "CPU Limit"=if(isnull(cl),"UNBOUNDED",tostring(round(cl,3))." cores")
+| eval "Memory Request"=if(isnull(mr),"none set",tostring(round(mr/1024/1024,0))." MiB")
+| eval "Memory Limit"=if(isnull(ml),"UNBOUNDED",tostring(round(ml/1024/1024,0))." MiB")
+| eval Assessment=case(isnull(cl) AND isnull(ml),"Uncapped on both — can starve the whole node",isnull(cl) OR isnull(ml),"Partially uncapped — one resource unbounded",true(),"Fully capped — blast radius contained")
+| rename "k8s.namespace.name" as Namespace, "k8s.container.name" as Container
+| sort Namespace Container
+| table Namespace Container "CPU Request" "CPU Limit" "Memory Request" "Memory Limit" Assessment
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">15</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background:#E8F5E9; border-left:5px solid #375623; padding:14px 20px; border-radius:4px;">
+          <h3 style="margin:0 0 6px 0; color:#1B5E20 !important; font-size:15px;">Section 3 — Collector Pipeline Health: the observability system observing itself</h3>
+          <p style="margin:0; color:#333333 !important; font-size:13px; line-height:1.6;">Every other panel in this workshop is only as trustworthy as the pipeline that delivered its data. A Collector that is silently dropping spans produces a dashboard that looks <em>calmer</em> during an incident, not noisier — which is the most dangerous failure mode an observability stack has. These panels read the Collector's own <code style="background:#C8E6C9 !important; color:#1B5E20 !important; padding:1px 5px; border-radius:3px; font-family:monospace;">otelcol_*</code> counters so you can prove the pipeline is intact before you trust anything above.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Pipeline Throughput by Signal Type (items/sec exported)</title>
+      <description>What the Collector is actually pushing downstream, per second, split by signal. Spans should track your load generator, metrics should be near-constant (scrape intervals do not care how busy you are), and logs should rise with error activity. The line to fear is any series dropping to zero and staying there while the others continue — that is one pipeline broken, not the Collector down, and it is invisible on every other panel in this workshop.</description>
+      <chart>
+        <search>
+          <query>
+| mstats rate(otelcol_exporter_sent_spans) as "Spans/sec" rate(otelcol_exporter_sent_log_records) as "Log Records/sec" rate(otelcol_exporter_sent_metric_points) as "Metric Points/sec" WHERE index=k8s_ws_metrics span=$span_token$
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Items per Second</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.seriesColors">[0x2E75B6,0xF1813F,0x53A051]</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Data Loss Audit — Accepted vs Refused at the Receiver</title>
+      <description>Any non-zero Refused figure is telemetry that was generated, sent, and then thrown away — those spans exist in your application's history but will never appear in any search you run. Zero across all three rows is the only acceptable state, and it is what lets you say "the gap in that chart is real" rather than "the gap in that chart might be us". If Refused starts climbing, look at the queue table below first: backpressure at the exporter is what makes a receiver start refusing.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(otelcol_receiver_accepted_spans) as acc latest(otelcol_receiver_refused_spans) as ref WHERE index=k8s_ws_metrics BY receiver
+| stats sum(acc) as Accepted sum(ref) as Refused
+| eval Signal="Traces (spans)"
+| append [
+| mstats latest(otelcol_receiver_accepted_log_records) as acc latest(otelcol_receiver_refused_log_records) as ref WHERE index=k8s_ws_metrics BY receiver
+| stats sum(acc) as Accepted sum(ref) as Refused
+| eval Signal="Logs (records)"
+]
+| append [
+| mstats latest(otelcol_receiver_accepted_metric_points) as acc latest(otelcol_receiver_refused_metric_points) as ref WHERE index=k8s_ws_metrics BY receiver
+| stats sum(acc) as Accepted sum(ref) as Refused
+| eval Signal="Metrics (points)"
+]
+| fillnull value=0 Accepted Refused
+| eval "Loss Rate %"=if((Accepted+Refused)&gt;0, round(Refused/(Accepted+Refused)*100,4), 0)
+| eval Verdict=if(Refused=0,"No data loss — this signal is complete","DATA LOSS — telemetry discarded at ingest")
+| table Signal Accepted Refused "Loss Rate %" Verdict
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Accepted">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Refused">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Loss Rate %">
+          <option name="precision">4</option>
+          <option name="unit">%</option>
+        </format>
+        <format type="color" field="Refused">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+        <format type="color" field="Accepted">
+          <colorPalette type="list">[#115BAD]</colorPalette>
+          <scale type="threshold"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Exporter Queue Utilization — The Backpressure Early Warning</title>
+      <description>Each exporter buffers in memory between the pipeline and the destination. Near-zero utilization means the backend is keeping up and the queue is draining as fast as it fills. A queue that is climbing is the earliest warning you get that a destination has slowed down — and it is a warning with a deadline, because when utilization hits 100% the Collector has nowhere left to put data and begins refusing it, which turns into non-zero Refused counts in the panel above. Rising numbers here give you minutes of lead time; the Data Loss Audit only tells you after the loss has already happened.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(otelcol_exporter_queue_size) as qsize latest(otelcol_exporter_queue_capacity) as qcap WHERE index=k8s_ws_metrics BY exporter otelcol.service.mode
+| eval "Utilization %"=round(qsize/qcap*100,2)
+| eval Headroom=qcap-qsize
+| eval Assessment=case(qsize/qcap&gt;=0.8,"CRITICAL — refusals imminent",qsize/qcap&gt;=0.3,"Backing up — destination is slowing",true(),"Draining normally")
+| sort - "Utilization %" exporter
+| rename exporter as Exporter, "otelcol.service.mode" as "Collector Role", qsize as "Queue Depth", qcap as "Queue Capacity", Headroom as "Slots Remaining"
+| table Exporter "Collector Role" "Queue Depth" "Queue Capacity" "Utilization %" "Slots Remaining" Assessment
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">15</option>
+        <format type="number" field="Queue Depth">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Queue Capacity">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Slots Remaining">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Utilization %">
+          <option name="precision">2</option>
+          <option name="unit">%</option>
+        </format>
+        <format type="color" field="Utilization %">
+          <colorPalette type="list">[#FFFFFF,#F8BE34,#DC4E41]</colorPalette>
+          <scale type="threshold">50,80</scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+</form>

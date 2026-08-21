@@ -11,7 +11,7 @@
       </default>
     </input>
     <input type="dropdown" token="span_token" searchWhenChanged="true">
-      <label>Time Granularity (Trace Volume Chart)</label>
+      <label>Time Granularity (Time Series Charts)</label>
       <choice value="10s">10 Seconds</choice>
       <choice value="30s">30 Seconds</choice>
       <choice value="1m">1 Minute</choice>
@@ -219,6 +219,274 @@ index=k8s_ws_traces
         </search>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(135deg, #4A148C 0%, #6A1B9A 100%); padding: 22px 32px; border-radius: 6px; margin-top: 8px;">
+          <h2 style="margin:0 0 8px 0; font-size:22px; font-weight:700; color:#FFFFFF !important;">What the Traces Reveal — Beyond the HTTP Routes</h2>
+          <p style="margin:0 0 10px 0; font-size:14px; line-height:1.6; color:#FFFFFF !important;">Everything above this line is built from <b style="color:#FFFFFF !important;">SERVER</b> spans — one span per HTTP request, which is roughly what an access log already tells you. But the Java agent also emits <b style="color:#FFFFFF !important;">CLIENT</b> spans (every database round-trip, with the SQL text attached) and <b style="color:#FFFFFF !important;">INTERNAL</b> spans (individual application methods). That is where tracing stops confirming what you already knew and starts telling you something new.</p>
+          <p style="margin:0; font-size:14px; line-height:1.6; color:#FFFFFF !important;">The panels below find a textbook <b style="color:#FFFFFF !important;">N+1 query pattern</b> in this application: a single page view fires <b style="color:#FFFFFF !important;">four separate database round-trips</b>. No log line and no metric contains that fact — the SQL count per request only exists once spans are correlated by <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">trace_id</code>. This is the reason distributed tracing exists.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Database Round-Trips per Page Request (worst route)</title>
+      <description>Read this as "how many times the database is hit to render one page". A healthy value is 1. This dashboard measures it by grouping every span by trace_id, counting the CLIENT database spans in each trace, and taking the worst route. Anything at 3 or above is the signature of an N+1 query: the code fetches a list, then loops and fetches each child row individually.</description>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_traces
+| rename "attributes.db.system" as dbsys, "attributes.http.route" as route
+| eval is_db=if(isnotnull(dbsys),1,0)
+| stats sum(is_db) as db_calls, values(route) as routes by trace_id
+| eval route=mvindex(routes,0)
+| where isnotnull(route)
+| stats avg(db_calls) as avg_db by route
+| stats max(avg_db) as value
+| eval value=round(value,1)
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="unit">queries / request</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x53A051","0xF8BE34","0xF1813F","0xDC4E41"]</option>
+        <option name="rangeValues">[1,2,3]</option>
+        <option name="refresh.display">progressbar</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Database Queries vs. Page Requests Over Time</title>
+      <description>Two lines that should sit close together, and do not. The upper line counts CLIENT spans (database round-trips), the lower counts SERVER spans (page requests). The persistent gap between them is the N+1 amplification, and it is constant — this is not a traffic spike, it is how the application is written. Flat-lining on both series is the load generator pausing, not an outage.</description>
+      <chart>
+        <search>
+          <query>
+index=k8s_ws_traces
+| rename "attributes.db.system" as dbsys, "attributes.http.route" as route
+| eval series=case(isnotnull(dbsys),"DB Queries (CLIENT spans)", kind=="SPAN_KIND_SERVER" AND isnotnull(route),"Page Requests (SERVER spans)")
+| where isnotnull(series)
+| timechart span=$span_token$ count by series
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Span Count</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.seriesColors">[0xF1813F,0x2E75B6]</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Anatomy of a Request — Database Round-Trips and Where the Time Goes, by Route</title>
+      <description>Each row is one HTTP route, reconstructed by correlating every span in a trace. "DB Round-Trips per Request" is the N+1 evidence: the owner pages issue 3-4 queries each, while the static and error routes issue none. The three timing columns then answer "so does it actually hurt?" — and today the honest answer is no, because this PetClinic runs H2 in memory, so the database costs only a few percent of request time. That is the lesson: the same four round-trips against a networked Postgres at 1-2 ms each would add 4-8 ms of pure network wait to every page view. Tracing lets you find the pattern while it is still cheap to fix.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_traces
+| rename "attributes.db.system" as dbsys, "attributes.http.route" as route
+| eval ms=(end_time-start_time)/1000000
+| eval is_db=if(isnotnull(dbsys),1,0)
+| eval db_ms=if(isnotnull(dbsys),ms,0)
+| eval req_ms=if(kind=="SPAN_KIND_SERVER" AND isnotnull(route),ms,0)
+| stats sum(is_db) as db_calls, sum(db_ms) as db_ms, sum(req_ms) as req_ms, values(route) as routes by trace_id
+| eval route=mvindex(routes,0)
+| where isnotnull(route) AND req_ms&gt;0
+| stats count as requests, avg(db_calls) as rt, avg(req_ms) as avg_req, avg(db_ms) as avg_db by route
+| eval avg_app=avg_req-avg_db
+| eval pct_db=round(100*avg_db/avg_req,1)
+| eval rt=round(rt,2), avg_req=round(avg_req,2), avg_db=round(avg_db,3), avg_app=round(avg_app,2)
+| sort -rt -avg_req
+| rename route as "Route", requests as "Requests", rt as "DB Round-Trips per Request", avg_req as "Avg Request (ms)", avg_db as "Avg DB Time (ms)", avg_app as "Avg App Time (ms)", pct_db as "% Time in DB"
+| table "Route" "Requests" "DB Round-Trips per Request" "Avg Request (ms)" "Avg DB Time (ms)" "Avg App Time (ms)" "% Time in DB"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="number" field="DB Round-Trips per Request">
+          <option name="precision">2</option>
+        </format>
+        <format type="number" field="Avg Request (ms)">
+          <option name="precision">2</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="number" field="Avg DB Time (ms)">
+          <option name="precision">3</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="number" field="Avg App Time (ms)">
+          <option name="precision">2</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="number" field="% Time in DB">
+          <option name="precision">1</option>
+          <option name="unit">%</option>
+        </format>
+        <format type="color" field="DB Round-Trips per Request">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+        <format type="color" field="Avg Request (ms)">
+          <colorPalette type="list">[#115BAD]</colorPalette>
+          <scale type="threshold"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Top SQL Statements by Volume and Latency</title>
+      <description>The actual SQL text, lifted straight off the CLIENT spans by the auto-instrumentation — nobody wrote a line of code to capture this. Sort by "Calls" and the top row is the query to fix first: the visits lookup runs many times more often than any other statement, which is exactly what an N+1 loop looks like from the database side. "Total DB Time" is the column that decides priority — a fast query called tens of thousands of times can cost more than a slow one called once.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_traces
+| rename "attributes.db.statement" as stmt, "attributes.db.sql.table" as tbl, "attributes.db.operation" as op
+| where isnotnull(stmt)
+| eval ms=(end_time-start_time)/1000000
+| eval sql=substr(stmt,1,100)
+| stats count as calls, avg(ms) as avg_ms, perc95(ms) as p95_ms, max(ms) as max_ms, sum(ms) as tot_ms by sql tbl op
+| eval avg_ms=round(avg_ms,3), p95_ms=round(p95_ms,3), max_ms=round(max_ms,2), tot_ms=round(tot_ms,1)
+| sort -calls
+| rename sql as "SQL Statement (first 100 chars)", tbl as "Table", op as "Operation", calls as "Calls", avg_ms as "Avg (ms)", p95_ms as "P95 (ms)", max_ms as "Max (ms)", tot_ms as "Total DB Time (ms)"
+| table "SQL Statement (first 100 chars)" "Table" "Operation" "Calls" "Avg (ms)" "P95 (ms)" "Max (ms)" "Total DB Time (ms)"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="number" field="Avg (ms)">
+          <option name="precision">3</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="number" field="P95 (ms)">
+          <option name="precision">3</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="number" field="Max (ms)">
+          <option name="precision">2</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="number" field="Total DB Time (ms)">
+          <option name="precision">1</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="color" field="Calls">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+        <format type="color" field="Total DB Time (ms)">
+          <colorPalette type="list">[#115BAD]</colorPalette>
+          <scale type="threshold"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Slowest Application Methods — INTERNAL Spans</title>
+      <description>Method-level profiling of a running application, with zero code changes and no profiler attached: these are INTERNAL spans, emitted by the Java agent for Spring Data repository calls, Hibernate session operations and transaction boundaries. Sort by "Avg (ms)" to see which method is slowest per call; sort by "Total Time (ms)" to see which one the application actually spends its life in. Repository methods that appear with very high call counts are the application-side other half of the N+1 pattern the panels above found in the SQL.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_traces
+| search kind=SPAN_KIND_INTERNAL
+| eval ms=(end_time-start_time)/1000000
+| stats count as calls, avg(ms) as avg_ms, perc95(ms) as p95_ms, max(ms) as max_ms, sum(ms) as tot_ms by name
+| eval avg_ms=round(avg_ms,3), p95_ms=round(p95_ms,3), max_ms=round(max_ms,2), tot_ms=round(tot_ms,1)
+| sort -avg_ms
+| head 15
+| rename name as "Application Method (span name)", calls as "Calls", avg_ms as "Avg (ms)", p95_ms as "P95 (ms)", max_ms as "Max (ms)", tot_ms as "Total Time (ms)"
+| table "Application Method (span name)" "Calls" "Avg (ms)" "P95 (ms)" "Max (ms)" "Total Time (ms)"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="number" field="Avg (ms)">
+          <option name="precision">3</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="number" field="P95 (ms)">
+          <option name="precision">3</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="number" field="Max (ms)">
+          <option name="precision">2</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="number" field="Total Time (ms)">
+          <option name="precision">1</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="color" field="Avg (ms)">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>Error Rate by Route — Which Endpoint Is Actually Failing</title>
+      <description>Every span carries a status.code, so failures localise themselves without anyone knowing the application in advance. One route here sits at a 100% error rate while every other route sits at zero — that is a deliberately broken endpoint, not a degradation, and the shape of the result (total failure on exactly one route) is what tells you so. An aggregate error percentage across the whole service would have shown a mild, misleading few percent.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_traces
+| rename "status.code" as sc, "attributes.http.route" as route
+| where kind=="SPAN_KIND_SERVER" AND isnotnull(route)
+| eval err=if(sc=="STATUS_CODE_ERROR",1,0)
+| stats count as requests, sum(err) as errors by route
+| eval err_pct=round(100*errors/requests,1)
+| sort -errors -requests
+| rename route as "Route", requests as "Requests", errors as "Error Spans", err_pct as "Error Rate"
+| table "Route" "Requests" "Error Spans" "Error Rate"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="number" field="Error Rate">
+          <option name="precision">1</option>
+          <option name="unit">%</option>
+        </format>
+        <format type="color" field="Error Rate">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+        <format type="color" field="Error Spans">
+          <colorPalette type="list">[#FFFFFF,#DC4E41]</colorPalette>
+          <scale type="threshold">1</scale>
+        </format>
       </table>
     </panel>
   </row>

@@ -11,7 +11,7 @@
       </default>
     </input>
     <input type="dropdown" token="span_token" searchWhenChanged="true">
-      <label>Time Granularity (Severity Chart)</label>
+      <label>Time Granularity (Timechart Panels)</label>
       <choice value="10s">10 Seconds</choice>
       <choice value="30s">30 Seconds</choice>
       <choice value="1m">1 Minute</choice>
@@ -190,6 +190,246 @@ index=k8s_ws_petclinic_logs
         </search>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>
+      </table>
+    </panel>
+  </row>
+
+
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(135deg, #4A148C 0%, #6A1B9A 100%); padding: 20px 28px; border-radius: 6px; margin-top:10px;">
+          <h2 style="margin:0 0 8px 0; font-size:21px; font-weight:700; color:#FFFFFF !important;">All Three Signals, One Platform — What Correlation Actually Buys You</h2>
+          <p style="margin:0 0 8px 0; font-size:13.5px; line-height:1.6; color:#FFFFFF !important;">Everything above proves the correlating <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">trace_id</code> field exists. The panels below use it. By this point in the workshop your single Collector is shipping <strong style="color:#FFFFFF !important;">logs</strong>, <strong style="color:#FFFFFF !important;">metrics</strong> and <strong style="color:#FFFFFF !important;">traces</strong> into Splunk Enterprise simultaneously — so the same production incident can be counted, timed and dissected three independent ways in one search bar.</p>
+          <p style="margin:0; font-size:13.5px; line-height:1.6; color:#FFFFFF !important;">The recurring lesson: <strong style="color:#FFFFFF !important;">when three lenses agree, you trust the number. When they diverge, the divergence is itself the finding</strong> — it means sampling, dropping, or misrouting somewhere in the pipeline, and it is only visible because all three signals landed in the same place.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>One Incident, Three Signals, One Timeline</title>
+      <description>Log events (blue) and spans (purple) are counted from the event indexes; node CPU load (orange, right-hand axis) comes from the metric index. Three separate pipelines, three separate storage engines, one time axis. Under normal load the log and span curves track each other at a fixed ratio — one request produces a roughly constant number of log lines and spans. Watch for shape changes: if spans flatten while logs keep climbing, the trace pipeline is sampling or dropping; if both drop while CPU stays high, the Collector — not the application — is the thing that stopped. Use the Time Granularity dropdown at the top of the page to change bucket size.</description>
+      <chart>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs OR index=k8s_ws_traces
+| eval signal=if(index=="k8s_ws_traces","Spans","Log Events")
+| timechart span=$span_token$ count by signal
+| append [| mstats avg(_value) as cl WHERE index=k8s_ws_metrics metric_name="system.cpu.load_average.1m" span=$span_token$]
+| stats sum("Log Events") as "Log Events" sum("Spans") as "Spans" avg(cl) as cl by _time
+| eval "Node CPU Load (1m)"=round(cl,2)
+| fields - cl
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Events / Spans per bucket</option>
+        <option name="charting.axisTitleY2.text">CPU load average (1m)</option>
+        <option name="charting.axisY2.enabled">true</option>
+        <option name="charting.chart.overlayFields">Node CPU Load (1m)</option>
+        <option name="charting.seriesColors">[0x2E75B6,0x6A1B9A,0xF1813F]</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>The Same Failures, Counted Three Different Ways</title>
+      <description>Three independent measurements of one underlying population of failed requests: the Tomcat access log counting HTTP 5xx responses, the application log counting ERROR-severity lines emitted by logback, and the trace pipeline counting spans stamped STATUS_CODE_ERROR. Nothing in the pipeline forces these to agree — they are produced by different instrumentation, exported by different Collector pipelines, and stored in different indexes. Reading the result: agreement within a few percent means every pipeline is healthy end to end. A single lens reading materially LOW is the interesting case — it points at that specific pipeline (trace sampling, a dropped log source, a misrouted exporter), not at the application. A lens reading HIGH usually means it counts something broader than the others, for example retries or internal errors that never reached the user.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_petclinic_logs OR index=k8s_ws_traces
+| eval is_app_log=if(match(_raw,"^\d{4}-\d{2}-\d{2}T"),1,0)
+| rename "status.code" as status_code
+| eval lens=case(
+    index=="k8s_ws_petclinic_logs" AND is_app_log=0 AND http_status&gt;=500, "1. Access log — HTTP 5xx responses",
+    index=="k8s_ws_petclinic_logs" AND is_app_log=1 AND severity=="ERROR", "2. Application log — ERROR severity lines",
+    index=="k8s_ws_traces" AND status_code=="STATUS_CODE_ERROR", "3. Traces — spans with STATUS_CODE_ERROR")
+| where isnotnull(lens)
+| stats count as Errors by lens
+| eventstats max(Errors) as m
+| eval divergence=round(((Errors-m)/m)*100,1)
+| fields - m
+| rename lens as "Signal / Lens", divergence as "Divergence vs Highest Lens"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Errors">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Divergence vs Highest Lens">
+          <option name="precision">1</option>
+          <option name="unit">%</option>
+        </format>
+        <format type="color" field="Errors">
+          <colorPalette type="list">[#115BAD]</colorPalette>
+          <scale type="threshold"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Log → Trace Pivot Success Rate (Higher Is Better)</title>
+      <description>Of the log events that carry a trace_id, this is the percentage whose trace_id actually resolves to at least one span in the trace index for the same window. This one DOES have a good/bad direction: high is good. It is the direct measure of whether "click the trace_id in a log line and land on the trace" will work for an on-call engineer. Anything well below 100% means spans are being sampled away, dropped by the Collector, or exported to a destination this Splunk instance cannot see — the log is telling you a trace exists when it does not. A few percent of misses at the window edges is normal: a request that started just before the window can have its log line inside the range and its span outside it.</description>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_traces OR (index=k8s_ws_petclinic_logs trace_id=*)
+| eval src=if(index=="k8s_ws_traces","trace","log")
+| stats count(eval(src=="log")) as logcnt, count(eval(src=="trace")) as trcnt by trace_id
+| stats count(eval(logcnt&gt;0)) as with_log, count(eval(logcnt&gt;0 AND trcnt&gt;0)) as both
+| eval value=round((both/with_log)*100,1)
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="unit">%</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0xDC4E41","0xF1813F","0xF8BE34","0x53A051"]</option>
+        <option name="rangeValues">[80,95,99]</option>
+        <option name="refresh.display">progressbar</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Trace-to-Log Join Proof — Every Distinct trace_id, Classified</title>
+      <description>Every distinct trace_id seen anywhere in the window, bucketed by which signals actually contain it. "Span only" is the expected majority and is NOT a defect — the application emits a log line for a subset of requests, but the agent traces all of them, so most traces legitimately have no matching log. "Log only" is the row that matters: a log line advertising a trace_id with no span behind it is a broken pivot, and this count should stay near zero. "Fully correlated" is the population where a responder can move freely between the log line and the full request waterfall shown below.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_traces OR (index=k8s_ws_petclinic_logs trace_id=*)
+| eval src=if(index=="k8s_ws_traces","trace","log")
+| stats dc(src) as n, values(src) as srcs by trace_id
+| eval class=case(
+    n=2, "Fully correlated — span AND log line both present",
+    srcs=="trace", "Span only — no application log line emitted (expected majority)",
+    srcs=="log", "Log only — advertised trace_id has no span (broken pivot)")
+| stats count as Traces by class
+| eventstats sum(Traces) as tot
+| eval share=round((Traces/tot)*100,1)
+| fields - tot
+| sort 0 -Traces
+| rename class as "Correlation Class", share as "Share of Distinct trace_id"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="number" field="Traces">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Share of Distinct trace_id">
+          <option name="precision">1</option>
+          <option name="unit">%</option>
+        </format>
+        <format type="color" field="Traces">
+          <colorPalette type="list">[#115BAD]</colorPalette>
+          <scale type="threshold"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Ingest Mix — What Each Signal Actually Costs You in Volume</title>
+      <description>Relative volume of everything the Collector delivered to Splunk Enterprise in this window: log events and spans counted from the event indexes, metric data points counted from the metric indexes. This is the practical input to every cost and retention conversation — traces are almost always the largest single contributor because one user request fans out into a dozen spans, and infrastructure metrics scale with cluster size rather than with traffic. No colour scale here on purpose: high volume is neither good nor bad, it is a budget fact. The lever it points at is span sampling and metric collection interval, not turning a signal off.</description>
+      <table>
+        <search>
+          <query>
+| tstats count as items WHERE index=k8s_ws_petclinic_logs OR index=k8s_ws_traces BY index
+| append [| mstats count(_value) as items WHERE index=k8s_ws_petclinic_metrics OR index=k8s_ws_metrics metric_name=* BY index]
+| eval Signal=case(
+    index=="k8s_ws_petclinic_logs", "Logs — application + access",
+    index=="k8s_ws_traces", "Traces — spans",
+    index=="k8s_ws_petclinic_metrics", "Metrics — application (JVM, JDBC)",
+    index=="k8s_ws_metrics", "Metrics — infrastructure + Collector self-telemetry")
+| stats sum(items) as Items by Signal index
+| eventstats sum(Items) as tot
+| eval share=round((Items/tot)*100,1)
+| fields - tot
+| sort 0 -Items
+| rename index as "Splunk Index", Items as "Events / Data Points", share as "Share of Ingest"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Events / Data Points">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Share of Ingest">
+          <option name="precision">1</option>
+          <option name="unit">%</option>
+        </format>
+        <format type="color" field="Events / Data Points">
+          <colorPalette type="minMidMax" maxColor="#115BAD" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>One Request, End to End — The Deepest Live Trace in This Window</title>
+      <description>This panel picks the richest trace in the selected window automatically — no trace_id is hardcoded, so it works for every participant and refreshes with the time picker. Every row shares one trace_id, and parent_span_id chains them into the call tree: the SPAN_KIND_SERVER row is the inbound HTTP request, INTERNAL rows are Spring repository and Hibernate session calls, and CLIENT rows are the actual JDBC round trips with the SQL text attached. Start Offset is measured from the first span of the trace, so reading down the offset column reconstructs the waterfall — this is how you find the one slow database call inside an otherwise fast request. That whole structure is recovered from a single 32-character identifier, the same one printed on the log lines in the panels above.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_traces
+| eventstats count as spans by trace_id
+| eventstats max(spans) as maxspans
+| where spans=maxspans
+| sort 0 -_time
+| eventstats first(trace_id) as pick
+| where trace_id=pick
+| eventstats min(start_time) as t0
+| eval offset_ms=round((start_time-t0)/1000000,2), dur_ms=round((end_time-start_time)/1000000,2)
+| rename "status.code" as status, "attributes.db.statement" as sql
+| eval kind=replace(kind,"SPAN_KIND_",""), status=replace(status,"STATUS_CODE_","")
+| eval sql=if(isnull(sql),"—",if(len(sql)&gt;110,substr(sql,1,110)." …",sql))
+| sort 0 +start_time
+| table trace_id, span_id, parent_span_id, name, kind, status, offset_ms, dur_ms, sql
+| rename trace_id as "Trace ID", span_id as "Span ID", parent_span_id as "Parent Span ID", name as "Span Name", kind as "Kind", status as "Status", offset_ms as "Start Offset (ms)", dur_ms as "Duration (ms)", sql as "SQL Statement"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">20</option>
+        <option name="refresh.display">progressbar</option>
+        <format type="number" field="Start Offset (ms)">
+          <option name="precision">2</option>
+        </format>
+        <format type="number" field="Duration (ms)">
+          <option name="precision">2</option>
+        </format>
+        <format type="color" field="Duration (ms)">
+          <colorPalette type="minMidMax" maxColor="#F1813F" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
       </table>
     </panel>
   </row>

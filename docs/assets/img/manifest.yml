@@ -130,6 +130,11 @@
     section: "Test connectivity using an external web browser to your PetClini"
 
 02-fw2:
+  fw2-dashboard.png:
+    kind: screenshot
+    status: verified
+    bytes: 593085
+    section: "12. Install the dashboard"
   image1.png:
     kind: diagram
     status: review
@@ -367,6 +372,16 @@
     section: "View the new event transformation in Splunk Enterprise / Cloud"
 
 03-aw1:
+  aw1-dashboard.png:
+    kind: screenshot
+    status: verified
+    bytes: 612447
+    section: "8. Install the capstone dashboards — Metrics & traces"
+  aw1-infra-dashboard.png:
+    kind: screenshot
+    status: verified
+    bytes: 559552
+    section: "8. Install the capstone dashboards — Infrastructure & Collector health"
   image1.png:
     kind: diagram
     status: review
@@ -704,6 +719,11 @@
     section: "APPENDIX E: Auto Instrumentation using the Splunk Otel Collector"
 
 04-aw2:
+  aw2-dashboard.png:
+    kind: screenshot
+    status: verified
+    bytes: 622064
+    section: "9. Install the dashboards — Splunk Enterprise correlation"
   image1.png:
     kind: diagram
     status: review

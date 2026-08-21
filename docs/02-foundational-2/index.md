@@ -1092,7 +1092,7 @@ kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
 
 ## 12. Install the dashboard
 
-A capstone dashboard for everything this module built — six panels, self-contained.
+A capstone dashboard for everything this module built — thirteen panels, self-contained.
 
 ```bash
 cd ~/k8s_workshop
@@ -1111,11 +1111,32 @@ then paste the XML into the source editor.
 
 ![FW2 dashboard](../assets/img/02-fw2/fw2-dashboard.png)
 
-Six panels, all backed by queries verified against live workshop data: Total Requests,
-Error Rate %, Distinct Routes, a request-volume timechart splitting 5xx from everything
-else, the severity/status breakdown that proves §11's OTTL transform, a live feed of the
-most recent `RuntimeException` stack traces — now single events instead of the scattered
-lines §9 fixed — and the index-routing proof from §10: one log stream, split in two.
+The first half is the proof of your own pipeline, all backed by queries verified against
+live workshop data: Total Requests, Error Rate %, Distinct Routes, a request-volume
+timechart splitting 5xx from everything else, the severity/status breakdown that proves
+§11's OTTL transform, a live feed of the most recent `RuntimeException` stack traces — now
+single events instead of the scattered lines §9 fixed — and the index-routing proof from
+§10: one log stream, split in two.
+
+The second half asks what all this data is actually *worth*. The same Collector that ships
+your application logs is also shipping the `kube-apiserver` audit stream — a record of every
+call made to your cluster's control plane. Five panels read it: who is talking to the
+Kubernetes API and with which verbs, how much unauthenticated (anonymous) access there is
+and what it is hitting, the verb-against-resource mix, a write-operations audit trail of who
+changed what and when, and access to sensitive resources — secrets, service accounts and
+RBAC objects.
+
+No application log can answer "who deleted that deployment?" or "is anything
+unauthenticated talking to my API server?" These panels can. On this lab cluster the answers
+are reassuringly boring — that is exactly the point: these are the queries whose answers
+matter in production, and you now have the pipeline that feeds them.
+
+!!! note "Distinct Routes counts routes, not URLs"
+    That panel strips `;jsessionid=…` path parameters and numeric IDs before counting. Left
+    raw, every session and every owner ID becomes its own "route" and the number runs into
+    the thousands — on a 30-minute window this lab reports about 12 real routes against
+    roughly 2,000 raw paths. Worth recognising: it is the same high-cardinality trap that
+    inflates metric cardinality, and metric cardinality is what you get billed on.
 
 ---
 
