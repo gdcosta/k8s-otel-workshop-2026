@@ -749,8 +749,21 @@ The equivalent as SPL, if you'd rather stay on the command line:
 
 ```
 | mstats avg(jvm.memory.used) WHERE index=k8s_ws_petclinic_metrics span=10s BY jvm.memory.type
-| timechart avg(jvm.memory.used) span=10s BY jvm.memory.type
+| xyseries _time jvm.memory.type avg(jvm.memory.used)
 ```
+
+!!! danger "Not `timechart` here — it silently returns nothing"
+    The obvious second line is `| timechart avg(jvm.memory.used) span=10s BY jvm.memory.type`.
+    It runs, reports no error, and returns **zero rows** — the exact "looks like broken
+    telemetry but isn't" trap this module keeps warning about. `mstats` already emits its
+    aggregate as a column named `avg(jvm.memory.used)`, one row per `(_time,
+    jvm.memory.type)` pair; `timechart` then tries to re-aggregate a field of that same
+    name that no longer means what it expects, and produces nothing.
+
+    `xyseries` is the right tool for this shape: pivot the long-format rows `mstats`
+    already produced into one wide row per timestamp, with a column per `jvm.memory.type`
+    value — which is exactly what a time chart needs and what `mstats` alone cannot give
+    you directly.
 
 Generate load while watching, and you'll see heap sawtooth as garbage collection runs.
 
