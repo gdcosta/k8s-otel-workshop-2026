@@ -44,7 +44,7 @@ jobs:
           echo "Pinned $OTEL_CHART_VERSION / latest $LATEST"
 
       - name: Does our overlay still render on the latest chart?
-        if: steps.v.outputs.pinned != steps.v.outputs.latest
+        if: steps.v.outputs.pinned != steps.v.outputs.latest || inputs.compare_version != ''
         id: render
         continue-on-error: true
         run: |
@@ -54,7 +54,7 @@ jobs:
             --version "${{ steps.v.outputs.latest }}" -f /tmp/v.yaml > /tmp/rendered.yaml
 
       - name: Assert our settings survived the upgrade
-        if: steps.v.outputs.pinned != steps.v.outputs.latest
+        if: steps.v.outputs.pinned != steps.v.outputs.latest || inputs.compare_version != ''
         id: assert
         continue-on-error: true
         run: |
