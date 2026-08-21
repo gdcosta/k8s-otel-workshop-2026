@@ -3,6 +3,13 @@
   <description>Splunk-side proof that one Collector, two destinations, and one log line carry everything needed to pivot into APM.</description>
 
   <fieldset submitButton="false">
+    <input type="time" token="tr">
+      <label>Time Range</label>
+      <default>
+        <earliest>-15m</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
     <input type="dropdown" token="span_token" searchWhenChanged="true">
       <label>Time Granularity (Severity Chart)</label>
       <choice value="10s">10 Seconds</choice>
@@ -24,7 +31,7 @@
       <html>
         <div style="background: linear-gradient(135deg, #1F3864 0%, #2E75B6 100%); padding: 24px 32px; border-radius: 6px;">
           <h1 style="margin:0 0 8px 0; font-size:26px; font-weight:700; color:#FFFFFF !important;">Advanced Workshop #2 — Correlation</h1>
-          <p style="margin:0; font-size:14px; line-height:1.5; color:#FFFFFF !important;">One OpenTelemetry Collector fans data out to two destinations — Splunk Enterprise and Splunk Observability Cloud. A single log line is pivot-able from APM the moment it carries <code style="color:#FFFFFF !important;">trace_id</code>, <code style="color:#FFFFFF !important;">service.name</code>, and <code style="color:#FFFFFF !important;">deployment.environment</code> together — this dashboard proves that correlation holds, and that severity classification actually works, on the Splunk side.</p>
+          <p style="margin:0; font-size:14px; line-height:1.5; color:#FFFFFF !important;">One OpenTelemetry Collector fans data out to two destinations — Splunk Enterprise and Splunk Observability Cloud. A single log line is pivot-able from APM the moment it carries <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">trace_id</code>, <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">service.name</code>, and <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">deployment.environment</code> together — this dashboard proves that correlation holds, and that severity classification actually works, on the Splunk side.</p>
         </div>
       </html>
     </panel>
@@ -32,7 +39,8 @@
 
   <row>
     <panel>
-      <title>% App Log Events Carrying trace_id (Last 15m)</title>
+      <title>% of ALL Log Events Carrying trace_id — Expected to Be Small</title>
+      <description>This is a traffic-mix ratio, not a health signal — do not read a low number here as broken. Only application log lines carry trace_id (via logback); Tomcat access-log lines never do, and access logs vastly outnumber application logs under normal load. The App Log vs Access Log Split panel below shows the same split with both populations labeled. For the metric that DOES have a "good=high" direction, see "% of Application-Layer Logs Carrying trace_id" elsewhere in this row — same field, filtered to just the application-log population.</description>
       <single>
         <search>
           <query>
@@ -41,17 +49,13 @@ index=k8s_ws_petclinic_logs
 | eval value=round((with_trace/total)*100,1)
 | table value
           </query>
-          <earliest>-15m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0.0</option>
         <option name="unit">%</option>
-        <option name="colorBy">value</option>
-        <option name="colorMode">block</option>
-        <option name="useColors">1</option>
-        <option name="rangeColors">["0xDC4E41","0xF1813F","0xF8BE34","0x53A051"]</option>
-        <option name="rangeValues">[50,75,90]</option>
+        <option name="useColors">0</option>
       </single>
     </panel>
     <panel>
@@ -64,8 +68,8 @@ index=k8s_ws_petclinic_logs
 | eval value=round((classified/total)*100,1)
 | table value
           </query>
-          <earliest>-15m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0.0</option>
@@ -78,21 +82,29 @@ index=k8s_ws_petclinic_logs
       </single>
     </panel>
     <panel>
-      <title>Distinct App Metrics Flowing</title>
+      <title>% of Application-Layer Logs Carrying trace_id</title>
+      <description>Same field, different denominator: this filters to application log lines only (identified by the ISO-8601 logback timestamp, excluding Tomcat access-log lines) before computing coverage. Unlike the all-events figure to the left, this one SHOULD read close to 100% — a drop here means the correlation transform itself has stopped working, not that access-log traffic changed shape.</description>
       <single>
         <search>
           <query>
-| mcatalog values(metric_name) WHERE index=k8s_ws_petclinic_metrics
-| mvexpand values(metric_name)
-| stats count
-| rename count as value
+index=k8s_ws_petclinic_logs
+| eval is_app_log=if(match(_raw,"^\d{4}-\d{2}-\d{2}T"),1,0)
+| where is_app_log=1
+| stats count as total, count(eval(isnotnull(trace_id) AND trace_id!="")) as with_trace
+| eval value=round((with_trace/total)*100,1)
 | table value
           </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
-        <option name="numberPrecision">0</option>
-        <option name="unit">metrics</option>
-        <option name="useColors">0</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="unit">%</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0xDC4E41","0xF1813F","0xF8BE34","0x53A051"]</option>
+        <option name="rangeValues">[50,75,90]</option>
       </single>
     </panel>
     <panel>
@@ -104,8 +116,8 @@ index=k8s_ws_petclinic_logs trace_id=* severity=*
 | stats count as value
 | table value
           </query>
-          <earliest>-15m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0</option>
@@ -125,6 +137,8 @@ index=k8s_ws_petclinic_logs
 | eval s=if(isnull(severity),"UNKNOWN","classified")
 | timechart span=$span_token$ count by s
           </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="charting.chart">line</option>
         <option name="charting.drilldown">none</option>
@@ -150,6 +164,8 @@ index=k8s_ws_petclinic_logs trace_id=*
 | head 15
 | table trace_id, severity, svc, env, host
           </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>
@@ -169,6 +185,8 @@ index=k8s_ws_petclinic_logs
 | eval has_trace=if(isnotnull(trace_id) AND trace_id!="","app log (has trace_id)","access log (no trace_id)")
 | stats count by has_trace
           </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>

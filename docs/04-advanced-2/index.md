@@ -1329,6 +1329,8 @@ Create New Dashboard → Classic Dashboards**, paste the XML in.
       -d "name=k8s_ws_aw2_dashboard" --data-urlencode "eai:data@aw2-dashboard.xml"
     ```
 
+![AW2 Splunk correlation dashboard](../assets/img/04-aw2/aw2-dashboard.png)
+
 Five panels answering one question — *does a log line actually carry what APM needs to
 pivot to it?* — all verified against live data: the percentage of app events carrying
 `trace_id`, the percentage with severity classified, a severity-coverage timechart proving

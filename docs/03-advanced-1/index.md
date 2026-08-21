@@ -795,6 +795,8 @@ then paste the XML into the source editor.
     `-k` skips certificate validation — the management port uses Splunk's self-signed
     certificate, which is expected on a workshop host.
 
+![AW1 dashboard](../assets/img/03-aw1/aw1-dashboard.png)
+
 Seven panels, all backed by queries verified against live workshop data: Total Traces,
 P90 Latency, current JVM Heap Used, a trace-volume-and-errors timechart (span-adjustable),
 the JVM heap sawtooth from step 7 — the same `mstats`/`xyseries` query, now as a permanent

@@ -1109,6 +1109,8 @@ then paste the XML into the source editor.
       -d "name=k8s_ws_fw2_dashboard" --data-urlencode "eai:data@fw2-dashboard.xml"
     ```
 
+![FW2 dashboard](../assets/img/02-fw2/fw2-dashboard.png)
+
 Six panels, all backed by queries verified against live workshop data: Total Requests,
 Error Rate %, Distinct Routes, a request-volume timechart splitting 5xx from everything
 else, the severity/status breakdown that proves §11's OTTL transform, a live feed of the

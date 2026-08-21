@@ -2,6 +2,13 @@
   <label>Foundational Workshop 2 - What You Built</label>
   <description>Capstone dashboard for Foundational Workshop #2: Petclinic request traffic, OTTL-derived severity, and the log-to-two-indexes routing pattern.</description>
   <fieldset submitButton="false">
+    <input type="time" token="tr">
+      <label>Time Range</label>
+      <default>
+        <earliest>-60m</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
     <input type="dropdown" token="span_token" searchWhenChanged="true">
       <label>Time Granularity</label>
       <choice value="10s">10 Seconds</choice>
@@ -39,8 +46,8 @@ index=k8s_ws_petclinic_logs http_status=*
 | stats count as value
 | table value
           </query>
-          <earliest>-60m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0</option>
@@ -59,8 +66,8 @@ index=k8s_ws_petclinic_logs http_status=*
 | eval value=round((errors/total)*100,1)
 | table value
           </query>
-          <earliest>-60m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0.0</option>
@@ -80,8 +87,8 @@ index=k8s_ws_petclinic_logs http_status=*
 | stats dc(http_path) as value
 | table value
           </query>
-          <earliest>-60m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0</option>
@@ -102,8 +109,8 @@ index=k8s_ws_petclinic_logs http_status=*
 | eval status_class=if(http_status&gt;=500,"5xx (error)","Other")
 | timechart span=$span_token$ count by status_class
           </query>
-          <earliest>-60m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="charting.chart">column</option>
         <option name="charting.drilldown">none</option>
@@ -126,8 +133,8 @@ index=k8s_ws_petclinic_logs
 | stats count by http_status "otel.log.severity.text"
 | sort -count
           </query>
-          <earliest>-60m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>
@@ -149,8 +156,8 @@ index=k8s_ws_petclinic_logs RuntimeException
 | head 15
 | table _time severity trace_id "service.name"
           </query>
-          <earliest>-24h</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>
@@ -168,8 +175,8 @@ index=k8s_ws_petclinic_logs RuntimeException
 | stats count by index sourcetype
 | sort -count
           </query>
-          <earliest>-60m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>

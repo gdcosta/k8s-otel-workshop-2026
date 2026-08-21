@@ -3,6 +3,13 @@
   <description>Self-contained capstone: auto-instrumented trace latency and JVM/HikariCP metrics, entirely inside Splunk Enterprise — no external Splunkbase app required.</description>
 
   <fieldset submitButton="false">
+    <input type="time" token="tr">
+      <label>Time Range</label>
+      <default>
+        <earliest>-30m</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
     <input type="dropdown" token="span_token" searchWhenChanged="true">
       <label>Time Granularity (Trace Volume Chart)</label>
       <choice value="10s">10 Seconds</choice>
@@ -24,7 +31,7 @@
       <html>
         <div style="background: linear-gradient(135deg, #1F3864 0%, #2E75B6 100%); padding: 24px 32px; border-radius: 6px;">
           <h1 style="margin:0 0 8px 0; font-size:26px; font-weight:700; color:#FFFFFF !important;">Advanced Workshop #1 — Metrics &amp; Traces</h1>
-          <p style="margin:0; font-size:14px; line-height:1.5; color:#FFFFFF !important;">Auto-instrumentation (the Java agent, zero code changes) generates traces and JVM metrics that the Collector routes by index — <code style="color:#FFFFFF !important;">k8s_ws_traces</code> for spans, <code style="color:#FFFFFF !important;">k8s_ws_petclinic_metrics</code> for JVM/HikariCP — and every panel below is built from that data with plain SPL, no external app required.</p>
+          <p style="margin:0; font-size:14px; line-height:1.5; color:#FFFFFF !important;">Auto-instrumentation (the Java agent, zero code changes) generates traces and JVM metrics that the Collector routes by index — <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">k8s_ws_traces</code> for spans, <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">k8s_ws_petclinic_metrics</code> for JVM/HikariCP — and every panel below is built from that data with plain SPL, no external app required.</p>
         </div>
       </html>
     </panel>
@@ -40,8 +47,8 @@ index=k8s_ws_traces
 | stats count as value
 | table value
           </query>
-          <earliest>-30m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0</option>
@@ -60,8 +67,8 @@ index=k8s_ws_traces
 | eval value=round(value,2)
 | table value
           </query>
-          <earliest>-30m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0.00</option>
@@ -84,8 +91,8 @@ index=k8s_ws_traces
 | eval value=round(value/1024/1024,2)
 | table value
           </query>
-          <earliest>-30m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="numberPrecision">0.00</option>
@@ -106,8 +113,8 @@ index=k8s_ws_traces
 | eval is_error=if(status_code=="STATUS_CODE_ERROR",1,0)
 | timechart span=$span_token$ count as "Total Spans" sum(is_error) as "Error Spans"
           </query>
-          <earliest>-30m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="charting.chart">line</option>
         <option name="charting.drilldown">none</option>
@@ -130,8 +137,8 @@ index=k8s_ws_traces
 | mstats avg(jvm.memory.used) WHERE index=k8s_ws_petclinic_metrics span=10s BY jvm.memory.type
 | xyseries _time jvm.memory.type avg(jvm.memory.used)
           </query>
-          <earliest>-30m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="charting.chart">line</option>
         <option name="charting.drilldown">none</option>
@@ -160,8 +167,8 @@ index=k8s_ws_traces
 | sort -avg_ms
 | rename route as "Route", count as "Span Count", avg_ms as "Avg Latency (ms)", max_ms as "Max Latency (ms)"
           </query>
-          <earliest>-30m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>
@@ -207,8 +214,8 @@ index=k8s_ws_traces
 ]
 | rename metric as "Metric", value as "Value"
           </query>
-          <earliest>-30m</earliest>
-          <latest>now</latest>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>
