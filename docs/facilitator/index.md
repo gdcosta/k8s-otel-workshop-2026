@@ -255,7 +255,7 @@ The single quotes around the password matter — `!` is history expansion in an 
 `bash` shell. `verify-fw2.sh`, `verify-aw1.sh` and `verify-aw2.sh` all hard-require
 `SPLUNK_AUTH` and exit immediately without it.
 
-**55 assertions across the five scripts.** They're also what the CI canary runs against new
+**55 assertions across the five scripts.** They're also the check to run against a new
 Collector releases.
 
 ---
@@ -549,10 +549,30 @@ workshop.
 
 ## Keeping the material working
 
-**Watch the chart canary.** The Collector chart ships breaking changes on most minor
-releases. `.github/workflows/chart-canary.yml` tests the next version weekly and opens an
-issue when it breaks. Check for open `chart-drift` issues before committing to a delivery
-date.
+**Check the Collector chart before bumping it.** The chart ships breaking changes on most
+minor releases, and they are *silent* — the config renders, pods stay healthy, and no data
+arrives. Before changing `OTEL_CHART_VERSION` in `versions.env`, render the overlay against
+the new version and confirm the settings that have vanished in past releases are still
+there:
+
+```bash
+source versions.env
+helm repo add splunk-otel-collector-chart "$OTEL_CHART_REPO" && helm repo update
+helm search repo splunk-otel-collector-chart/splunk-otel-collector -o json | jq -r '.[0].version'
+
+export WS_USER=check LOCAL_IP=10.0.0.1 HEC_TOKEN=00000000-0000-0000-0000-000000000000
+envsubst < labs/collector/values-workshop.yaml > /tmp/v.yaml
+helm template t splunk-otel-collector-chart/splunk-otel-collector \
+  --version <new-version> -f /tmp/v.yaml > /tmp/rendered.yaml
+
+for k in splunk_hec docker_image_author 'recombine\|is_first_entry' k8s_objects; do
+  grep -q "$k" /tmp/rendered.yaml || echo "MISSING: $k"
+done
+```
+
+Each of those four has silently disappeared in a past chart release. A clean render is not
+enough on its own — finish by running `verify-fw2.sh` against a live cluster, because that
+is what proves data still arrives.
 
 **Re-run the verification suite** against a fresh instance before each event. It takes
 minutes and catches upstream drift that would otherwise surface mid-session.

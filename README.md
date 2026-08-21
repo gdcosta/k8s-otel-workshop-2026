@@ -28,7 +28,7 @@ See [`versions.env`](versions.env) for every pinned version.
 
 ## Verifying your progress
 
-Each module ships an assertion script. They're also what the CI canary runs against new
+Each module ships an assertion script. They're also the check to run against new
 Collector chart releases.
 
 ```bash

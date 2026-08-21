@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Asserts the end state of Foundational Workshop #1.
-# Exit 0 = module complete. Used by participants and by the CI canary.
+# Exit 0 = module complete. Used by participants and when validating a chart bump.
 # NOTE: no `pipefail` here. `cmd | grep -q` makes cmd exit 141 (SIGPIPE)
 # when grep matches early, which pipefail would report as a failed check.
 set -u
