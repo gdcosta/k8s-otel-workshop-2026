@@ -16,6 +16,46 @@ toolchain, and a local Splunk Enterprise instance.
 
 ## Before you start
 
+!!! tip "Running this on your own, with your own AWS account?"
+    **This page is all you need.** The [facilitator guide](../facilitator/index.md) is about
+    running the workshop *for a group* — provisioning many instances, distributing keys,
+    session timing — and you can ignore it. The two links to it from later modules are
+    optional bonus material, not steps.
+
+    Three things are worth knowing up front, because with no facilitator you are playing
+    both roles:
+
+    - **You create your own key pair** at launch, and it is yours alone. The "one key per
+      event" advice in the facilitator guide is about distributing keys to a room; it does
+      not apply to you.
+    - **Scope the security group to your own IP** — ports 22 and 8000 both. The Splunk
+      credentials in this guide are published, so that rule is what keeps your instance
+      yours.
+    - **This costs real money while it runs.** A `t3.xlarge` is roughly **$0.17/hour**
+      on-demand — about **$120/month** if you leave it up. **Stop** the instance when you
+      finish for the day and **terminate** it when you finish the workshop. See
+      [Finishing up](#finishing-up) at the end of this page.
+
+??? example "Launch settings, if you want them in one block"
+    These are the exact settings this workshop is tested on. Any launch route works —
+    console, CLI, Terraform — as long as the result matches:
+
+    | Setting | Value |
+    |---|---|
+    | AMI | Ubuntu Server **24.04 LTS**, **64-bit (x86)** — not ARM |
+    | Instance type | `t3.xlarge` (4 vCPU / 16 GB) |
+    | Storage | **100 GB** gp3 root volume — the 8 GB default is nowhere near enough |
+    | Key pair | create one, download the `.pem`, keep it |
+    | Security group | inbound 22 and 8000 **from your IP only**; outbound all |
+    | Region | anywhere — nothing here is region-specific |
+
+    Port 8089 is only needed for Advanced Workshop #2 and can be added later. Port 8080 is
+    not needed at all — see the tunnel note below.
+
+    On the CLI the AMI id differs per region, so look it up rather than hardcoding it —
+    Canonical publishes it as an SSM public parameter:
+    `/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id`.
+
 ### Instance requirements
 
 | | |
@@ -640,6 +680,63 @@ in `ubuntu`'s home instead of `splunk`'s — re-run the clone from step 6.
 7. Splunk Enterprise installed and startable
 8. Enough free disk
 </details>
+
+---
+
+## Finishing up
+
+The instance costs money for as long as it exists, whether or not you are using it.
+
+**Between sessions — stop it.** A stopped instance bills only for its 100 GB of storage
+(roughly $8/month) instead of ~$0.17/hour. Everything you built survives a stop/start:
+minikube, Splunk, your indexes, your images.
+
+```bash
+# from your laptop, or the EC2 console
+aws ec2 stop-instances --instance-ids <your-instance-id>
+```
+
+!!! warning "Your public address changes on restart"
+    Unless you attached an Elastic IP, stopping and starting gives the instance a **new
+    public DNS name and IP**. Two consequences: your `ssh` command changes, and the
+    security-group rules scoped to your own IP still work, but `PUB_DNS` in
+    `~/.workshop-env` is now stale. It re-evaluates on next login, so just reconnect and
+    check:
+
+    ```bash
+    echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
+    ```
+
+    If you got as far as Advanced Workshop #2, the Log Observer Connect entry in
+    Observability Cloud points at the old name and needs updating too.
+
+**When you're done — terminate it.** Nothing here is worth keeping; the whole environment
+rebuilds from this guide in under an hour.
+
+```bash
+aws ec2 terminate-instances --instance-ids <your-instance-id>
+```
+
+If you completed Advanced Workshop #2, **revoke the Observability Cloud tokens** as well.
+The ingest and RUM tokens are organisation-level credentials and should not outlive the
+workshop — Settings → Access Tokens.
+
+??? tip "Resetting without rebuilding, if you want another run"
+    Cheaper than a fresh instance and quicker than a rebuild:
+
+    ```bash
+    helm uninstall ${WS_USER}-k8s-ws
+    kubectl delete -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
+    minikube delete
+    docker system prune -af
+    ```
+
+    Splunk's indexes keep growing — the Kubernetes audit log is deliberately verbose — so
+    reclaim that too:
+
+    ```bash
+    /opt/splunk/bin/splunk clean eventdata -index k8s_ws_logs -f
+    ```
 
 ---
 
