@@ -15,7 +15,26 @@ Usage:
     playwright-venv/bin/python petclinic_browser_test.py \
         --url http://minikube:30000 --iterations 5
 
-    --headed   watch it run (needs a display; normally leave it off)
+    --headed     watch it run (needs a display; normally leave it off)
+    --duration   run for this many seconds instead of a fixed count — see below
+
+A handful of iterations proves the mechanism, but it is nowhere near enough RUM
+data to actually explore the Observability Cloud RUM UI: session lists, page-load
+waterfalls, JS-error grouping all want more than a minute of traffic behind them.
+For that, pass --duration instead of relying on the default --iterations 5:
+
+    playwright-venv/bin/python petclinic_browser_test.py \
+        --url http://minikube:30000 --duration 900     # ~15 minutes
+
+Same "whichever comes first" rule as JMeter's -Jloops/-Jduration: if you pass
+both, the run stops at whichever limit it hits first. --duration alone runs
+until time is up, with no separate iteration cap to also satisfy.
+
+Ctrl-C is caught between iterations and closes the browser before exiting,
+rather than leaving a headless Chromium process behind. It is not guaranteed
+instant — if the interrupt lands mid-navigation, inside Playwright's own
+network wait, it finishes that step first. If you need it gone immediately,
+`pkill -f petclinic_browser_test.py` is the blunt fallback.
 """
 import argparse
 import random
@@ -141,11 +160,28 @@ def report_rum_status(page, base, js_errors):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://minikube:30000")
-    ap.add_argument("--iterations", type=int, default=5)
+    ap.add_argument("--iterations", type=int, default=None,
+                     help="number of journeys to run. Default 5, unless --duration is "
+                          "given with no explicit --iterations, in which case duration "
+                          "alone governs.")
+    ap.add_argument("--duration", type=int, default=0,
+                     help="run for this many seconds instead of (or in addition to) a "
+                          "fixed --iterations count. Whichever limit is hit first stops "
+                          "the run — same rule as JMeter's -Jloops/-Jduration.")
     ap.add_argument("--headed", action="store_true")
     args = ap.parse_args()
 
-    print(f"RUM browser test -> {args.url}   ({args.iterations} iterations)")
+    if args.iterations is None:
+        # --duration alone should mean "run until time is up," not "run 5 times
+        # then stop early." Only fall back to the original default of 5 when
+        # neither flag was given at all.
+        args.iterations = 10**9 if args.duration else 5
+
+    if args.duration:
+        print(f"RUM browser test -> {args.url}   "
+              f"(up to {args.duration}s, or {args.iterations} iterations, whichever first)")
+    else:
+        print(f"RUM browser test -> {args.url}   ({args.iterations} iterations)")
     started = time.time()
 
     with sync_playwright() as p:
@@ -167,15 +203,28 @@ def main():
             browser.close()
             return rum_status
 
-        for i in range(args.iterations):
-            journey(page, args.url, i)
-            print(f"  iteration {i + 1}/{args.iterations} complete")
+        completed = 0
+        try:
+            for i in range(args.iterations):
+                if args.duration and (time.time() - started) >= args.duration:
+                    break
+                journey(page, args.url, i)
+                completed += 1
+                elapsed = time.time() - started
+                if args.duration:
+                    print(f"  iteration {completed} complete "
+                          f"({elapsed:.0f}s / {args.duration}s)")
+                else:
+                    print(f"  iteration {completed}/{args.iterations} complete")
+        except KeyboardInterrupt:
+            print(f"\n  stopped by Ctrl-C after {completed} iterations "
+                  f"({time.time() - started:.0f}s) — closing the browser cleanly")
 
         # Give the last beacons time to leave before tearing the browser down.
         page.wait_for_timeout(4000)
         browser.close()
 
-    print(f"Done in {time.time() - started:.0f}s. "
+    print(f"Done in {time.time() - started:.0f}s, {completed} iterations. "
           f"RUM data appears in Observability Cloud within a minute or two.")
     return 0
 

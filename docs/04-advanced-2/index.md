@@ -1197,6 +1197,34 @@ loudly if the snippet is missing *or* if it is present but didn't parse.
     brace. Load the page in a real browser and read the console; the parse error names the
     line.
 
+### Run it long enough to actually explore the RUM UI
+
+Six iterations proves the mechanism works — it is nowhere near enough to look around
+**Digital Experience → RUM**. A session list with one entry, a page-load waterfall with one
+data point, and JS-error grouping with nothing to group aren't worth clicking into. Run it
+for real:
+
+```bash
+~/playwright-venv/bin/python petclinic_browser_test.py \
+  --url http://minikube:30000 --duration 900     # ~15 minutes
+```
+
+Same "whichever comes first" rule as JMeter's `-Jloops`/`-Jduration` in FW #2: pass both
+flags and the run stops at whichever limit it hits first; `--duration` alone runs until
+time is up. Fifteen minutes is enough for a real session list, several page-load
+waterfalls, and a run of `/oups` failures to look at — go longer if you want more.
+
+This blocks the terminal it runs in, same as JMeter. Open a second terminal for it, exactly
+as FW #2 §7 has you do for the load generator:
+
+```bash
+tmux new -s rum       # or a second SSH session — either works
+```
+
+Ctrl-C stops it early and closes the browser — it doesn't leave a headless Chromium process
+running after you disconnect. It isn't necessarily instant: an interrupt that lands
+mid-navigation finishes that one step first.
+
 ### Browse it yourself
 
 Playwright gives you repeatable volume from one headless browser on a data-centre IP. It
