@@ -178,13 +178,25 @@ HEC is the HTTP endpoint the Collector will push events to.
       -d enableSSL=0 -d disabled=0 -d port=8088
 
     # New Token
-    $SPLUNK http create k8s-ws-hec -index k8s_ws_logs \
-      -indexes k8s_ws_logs,k8s_ws_petclinic_logs,k8s_ws_traces,k8s_ws_metrics,k8s_ws_petclinic_metrics $AUTH
+    $SPLUNK http-event-collector create k8s-ws-hec -index k8s_ws_logs \
+      -indexes k8s_ws_logs,k8s_ws_petclinic_logs,k8s_ws_traces,k8s_ws_metrics,k8s_ws_petclinic_metrics \
+      -uri https://localhost:8089 $AUTH
     ```
 
-    The token value is printed in the output of the `http create` command. As in step 2,
-    each `$SPLUNK` call also prints the `Server Certificate Hostname Validation is disabled`
-    warning — expected, ignore it.
+    !!! warning "The subcommand is `http-event-collector`, and `-uri` is required"
+        `splunk http create` — the shorter, more guessable form — **is not a valid command**
+        on this Splunk version:
+        ```
+        Command error: 'http' is not a valid command.
+        ```
+        The real subcommand is `http-event-collector`, and unlike `add index` in step 2 it
+        does not infer the management URI from context — omit `-uri https://localhost:8089`
+        and it fails with `Splunk server uri is missing`, not an error you'd think to search
+        for.
+
+    The token value is printed in the output of the `http-event-collector create` command.
+    As in step 2, each `$SPLUNK` call also prints the `Server Certificate Hostname
+    Validation is disabled` warning — expected, ignore it.
 
 Then confirm the whole path works before going further:
 
@@ -416,42 +428,39 @@ container output. Add to the container's `env:` block in your manifest:
 ```
 
 ??? example "What your manifest should look like around here"
-    The access-log variables sit inside the container's existing `env:` list, after the two
-    OTel entries FW #1 put there. Indentation matters — they're list items at the same level
-    as the others.
+    Your manifest has **no `env:` key at all** at this point — FW #1's file doesn't create
+    one, and nothing before this step has needed it. This is the first env entry in the
+    whole workshop, so add `env:` as a new sibling of `ports:` inside the container spec,
+    then the seven access-log variables under it as its first list items.
 
-    At this point in the sequence those two are the *only* env entries you have. The
-    profiler variables and `LOGGING_PATTERN_LEVEL` you'll see in the reference manifest at
-    the bottom of this page are added in AW #2 — don't go looking for them now.
+    The OTel telemetry variables (`SPLUNK_OTEL_AGENT`, `OTEL_EXPORTER_OTLP_ENDPOINT`) you'll
+    see in the reference manifest at the bottom of this page don't exist yet — those are
+    added in **AW #1**. The profiler variables and `LOGGING_PATTERN_LEVEL` come later still,
+    in **AW #2**. Don't go looking for either now; access logging is genuinely alone here.
 
     ```yaml
-            # Already present from FW #1 — shown so you can see where the new block goes.
-            - name: SPLUNK_OTEL_AGENT
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.hostIP
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://$(SPLUNK_OTEL_AGENT):4317"
-
-            # --- FW2: access logging -----------------------------------------------
-            # PetClinic logs nothing for successful requests — only startup and
-            # exceptions. One line per request is what makes the log exercises work.
-            # directory=/dev + prefix=stdout + empty suffix resolves to /dev/stdout.
-            - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
-              value: "true"
-            - name: SERVER_TOMCAT_ACCESSLOG_DIRECTORY
-              value: "/dev"
-            - name: SERVER_TOMCAT_ACCESSLOG_PREFIX
-              value: "stdout"
-            - name: SERVER_TOMCAT_ACCESSLOG_SUFFIX
-              value: ""
-            - name: SERVER_TOMCAT_ACCESSLOG_FILE_DATE_FORMAT
-              value: ""
-            - name: SERVER_TOMCAT_ACCESSLOG_BUFFERED
-              value: "false"
-            # Single quotes: the pattern contains double quotes.
-            - name: SERVER_TOMCAT_ACCESSLOG_PATTERN
-              value: '%h %l %u %t "%r" %s %b %D'
+          ports:
+          - containerPort: 8080
+          env:
+          # --- FW2: access logging -----------------------------------------------
+          # PetClinic logs nothing for successful requests — only startup and
+          # exceptions. One line per request is what makes the log exercises work.
+          # directory=/dev + prefix=stdout + empty suffix resolves to /dev/stdout.
+          - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
+            value: "true"
+          - name: SERVER_TOMCAT_ACCESSLOG_DIRECTORY
+            value: "/dev"
+          - name: SERVER_TOMCAT_ACCESSLOG_PREFIX
+            value: "stdout"
+          - name: SERVER_TOMCAT_ACCESSLOG_SUFFIX
+            value: ""
+          - name: SERVER_TOMCAT_ACCESSLOG_FILE_DATE_FORMAT
+            value: ""
+          - name: SERVER_TOMCAT_ACCESSLOG_BUFFERED
+            value: "false"
+          # Single quotes: the pattern contains double quotes.
+          - name: SERVER_TOMCAT_ACCESSLOG_PATTERN
+            value: '%h %l %u %t "%r" %s %b %D'
     ```
 
 ??? abstract "Full command sequence — manifest change (no image rebuild)"
