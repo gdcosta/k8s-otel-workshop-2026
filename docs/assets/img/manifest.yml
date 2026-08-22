@@ -133,7 +133,7 @@
   fw2-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 593085
+    bytes: 589761
     section: "12. Install the dashboard"
   image1.png:
     kind: diagram

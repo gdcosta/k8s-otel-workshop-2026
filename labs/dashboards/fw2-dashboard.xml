@@ -111,6 +111,7 @@ index=k8s_ws_petclinic_logs http_status=*
           <latest>$tr.latest$</latest>
         </search>
         <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
         <option name="charting.drilldown">none</option>
         <option name="charting.legend.placement">bottom</option>
         <option name="charting.axisTitleX.text">Time</option>
