@@ -1090,24 +1090,66 @@ kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
 
 ---
 
-## 12. Install the dashboard
+## 12. Install the workshop dashboard app
 
-A capstone dashboard for everything this module built — thirteen panels, self-contained.
+Every capstone dashboard in this series ships as one Splunk app, installed once, here.
+You will not download a dashboard again — AW #1 and AW #2 just point you at the ones you
+already have.
 
 ```bash
 cd ~/k8s_workshop
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/fw2-dashboard.xml
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.0.tgz
+sudo -i -u splunk /opt/splunk/bin/splunk install app \
+  "$PWD/k8s-ws-dashboards-1.0.0.tgz" -auth admin:Workshop2026!
 ```
 
-In Splunk Web: **Search & Reporting → Dashboards → Create New Dashboard → Classic Dashboards**,
-then paste the XML into the source editor.
+!!! success "No restart needed"
+    The app contains only dashboards, so Splunk picks them up immediately — this was tested,
+    not assumed: install, then open a dashboard, with no restart in between. If you have
+    installed Splunk apps before and are expecting a restart prompt, you are not missing a
+    step — there isn't one.
 
-??? abstract "Command-line alternative — install it over REST"
-    ```bash
-    curl -sk -u admin:Workshop2026! -X POST \
-      https://localhost:8089/servicesNS/admin/search/data/ui/views \
-      -d "name=k8s_ws_fw2_dashboard" --data-urlencode "eai:data@fw2-dashboard.xml"
-    ```
+    The command prints a TLS warning about certificate hostname validation before the
+    success line. That is unrelated boilerplate about the CLI talking to the management
+    port, and it appears on this instance for every `splunk` CLI call.
+
+The dashboards appear two ways, and both work:
+
+- **K8s + OTel Workshop** — a new app in the app menu, with the dashboards ordered by module
+- **Search & Reporting → Dashboards** — where you have been working all along
+
+That second one is not an accident. The app exports its views to the system, which is also
+the fix for a subtler problem: a dashboard pasted into the UI by hand lands in *your private
+namespace* and is invisible to every other user on the instance. An app shares it properly.
+
+??? abstract "What's in the app, and what deliberately isn't"
+    Five dashboards:
+
+    | Dashboard | Filled in by |
+    |---|---|
+    | Foundational Workshop 2 — What You Built | this module |
+    | Advanced Workshop #1 — Metrics & Traces | AW #1 |
+    | Advanced Workshop #1 — Infrastructure & Collector Health | AW #1 |
+    | Advanced Workshop #2 — Correlation | AW #2 |
+    | Application Trace Information v4.0.0 | AW #1 |
+
+    The four you have not earned yet will open to empty panels. That is expected — treat
+    them as a preview of what you are about to build. The three AW dashboards say so in an
+    orange banner at the top; *Application Trace Information v4.0.0* does not, because it is
+    kept byte-for-byte as released, and it also needs you to pick a trace index by hand
+    before it shows anything.
+
+    The app carries **dashboards and nav only**. It does not create your indexes, your HEC
+    token, or the OTTL transform from §11 — you built those by hand in this module on
+    purpose, and shipping them in an app would have deleted the lesson.
+
+??? abstract "Alternative — install from the Splunk Web UI"
+    If you would rather not use the CLI: **Apps ⚙ → Manage Apps → Install app from file**,
+    choose the `.tgz`, and upload. The web installer may offer a restart; you can decline it.
+
+### The dashboard for this module
+
+Open **Foundational Workshop 2 — What You Built**.
 
 ![FW2 dashboard](../assets/img/02-fw2/fw2-dashboard.png)
 

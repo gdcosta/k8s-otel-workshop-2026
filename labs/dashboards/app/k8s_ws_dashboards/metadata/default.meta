@@ -1,0 +1,11 @@
+# Exported to system so the dashboards also appear under Search & Reporting,
+# not only inside this app. Without this they would land in the installing
+# user's private namespace and be invisible to everyone else — which is what
+# happened when each dashboard was pasted in by hand.
+[]
+access = read : [ * ], write : [ admin, power ]
+export = system
+
+[views]
+access = read : [ * ], write : [ admin, power ]
+export = system

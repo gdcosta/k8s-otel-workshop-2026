@@ -769,34 +769,28 @@ Generate load while watching, and you'll see heap sawtooth as garbage collection
 
 ---
 
-## 8. Install the capstone dashboards
+## 8. The capstone dashboards
 
-Two dashboards for everything this module built — thirteen panels each, self-contained, no
-Splunkbase app required. The first asks *how is my application behaving?*; the second asks
-*is the platform underneath it at fault?*
+Nothing to download here. You installed the workshop app in
+[FW #2 §12](../02-foundational-2/index.md#12-install-the-workshop-dashboard-app), and the
+three dashboards below have been sitting there empty, waiting for the data this module just
+produced. Open them from **Search & Reporting → Dashboards**, or from the **K8s + OTel
+Workshop** app.
+
+??? question "Skipped FW #2, or starting fresh here?"
+    Install the app now — one command, no restart:
+
+    ```bash
+    cd ~/k8s_workshop
+    curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.0.tgz
+    sudo -i -u splunk /opt/splunk/bin/splunk install app \
+      "$PWD/k8s-ws-dashboards-1.0.0.tgz" -auth admin:Workshop2026!
+    ```
 
 ### Metrics & traces
 
-```bash
-cd ~/k8s_workshop
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/aw1-dashboard.xml
-```
-
-In Splunk Web: **Search & Reporting → Dashboards → Create New Dashboard → Classic Dashboards**,
-then paste the XML into the source editor.
-
-??? abstract "Command-line alternative — install it over REST"
-    Same result without leaving SSH. Run it from the directory you downloaded the XML into:
-
-    ```bash
-    curl -sk -u admin:Workshop2026! -X POST \
-      https://localhost:8089/servicesNS/admin/search/data/ui/views \
-      -d "name=k8s_ws_aw1_dashboard" --data-urlencode "eai:data@aw1-dashboard.xml"
-    ```
-
-    The dashboard then appears under **Search & Reporting → Dashboards**.
-    `-k` skips certificate validation — the management port uses Splunk's self-signed
-    certificate, which is expected on a workshop host.
+Open **Advanced Workshop #1 — Metrics & Traces**. Thirteen panels, self-contained, no
+Splunkbase app required.
 
 ![AW1 dashboard](../assets/img/03-aw1/aw1-dashboard.png)
 
@@ -832,24 +826,10 @@ methods, and show error rate by route.
 
 ### Infrastructure & Collector health
 
-The companion capstone. When the application looks wrong, the next question is whether the
-platform underneath it is at fault — and the last question is whether you can trust the
-telemetry telling you any of this.
-
-```bash
-cd ~/k8s_workshop
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/aw1-infra-dashboard.xml
-```
-
-Same install path: **Search & Reporting → Dashboards → Create New Dashboard → Classic
-Dashboards**, then paste the XML into the source editor.
-
-??? abstract "Command-line alternative — install it over REST"
-    ```bash
-    curl -sk -u admin:Workshop2026! -X POST \
-      https://localhost:8089/servicesNS/admin/search/data/ui/views \
-      -d "name=k8s_ws_infra_dashboard" --data-urlencode "eai:data@aw1-infra-dashboard.xml"
-    ```
+Open **Advanced Workshop #1 — Infrastructure & Collector Health**. The companion capstone:
+when the application looks wrong, the next question is whether the platform underneath it is
+at fault — and the last question is whether you can trust the telemetry telling you any of
+this.
 
 ![AW1 infrastructure dashboard](../assets/img/03-aw1/aw1-infra-dashboard.png)
 
@@ -875,7 +855,49 @@ dropping spans produces a dashboard that looks *calmer* during an incident, not 
 which is the most dangerous failure mode an observability stack has. Prove the pipeline is
 intact before you trust anything above it.
 
----
+### Application Trace Information v4.0.0
+
+The third dashboard in the app is the one this workshop has carried the longest. Open
+**Application Trace Information v4.0.0**, then set its two inputs at the top:
+
+1. **Select your trace index** — choose `k8s_ws_traces`
+2. **Please search traces by time period** — it defaults to the last 15 minutes
+
+!!! warning "It looks broken before you pick an index — it isn't"
+    On first load, every panel reads **"Search is waiting for input…"** and the service
+    dropdown shows **"Could not create search."** That is the normal unpopulated-token
+    state: the searches reference an index token that has no value yet. Choose your trace
+    index and it all populates. Nothing is wrong.
+
+It is a trace *explorer* rather than a capstone: pick a service, set your own latency
+warning and poor thresholds, and drill from a trace list into a single trace's spans. Where
+the two AW #1 dashboards above answer fixed questions about the whole system, this one lets
+you chase one request.
+
+![Application Trace Information v4.0.0](../assets/img/03-aw1/apm-traces-dashboard.png)
+
+Click a row in **Trace Information** to load that trace's spans underneath, then click a
+span for its detail. The screenshot above is drilled all the way in — the bottom pane is the
+PetClinic `/oups` `RuntimeException`, full stack trace, reached from a latency table.
+
+!!! warning "One panel needs a Splunkbase app — the rest do not"
+    The **Span Tree** panel renders with `link_analysis_app.link_analysis`, a custom
+    visualisation from the [Link Analysis App for
+    Splunk](https://splunkbase.splunk.com/app/3985). That app is not part of this workshop,
+    so where the graph would draw you get a red box reading:
+
+    ```
+    No matching visualization found for type: link_analysis, in app: link_analysis_app
+    ```
+
+    That is the whole blast radius. The panel's *search* still completes, the "Number of
+    Spans" value beside it still renders, and every other panel on the dashboard works —
+    trace counts, latency percentiles, the trace table, span details and the stack trace
+    above were all captured with Link Analysis absent.
+
+    You do not need it. The **Correlation** dashboard in AW #2 renders a full parent/child
+    span waterfall — kind, offset, duration and SQL text — in plain SPL with no add-on at
+    all. Install Link Analysis only if you specifically want the graph visualisation.
 
 ---
 

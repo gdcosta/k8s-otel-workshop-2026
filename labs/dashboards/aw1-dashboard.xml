@@ -33,6 +33,7 @@
           <h1 style="margin:0 0 8px 0; font-size:26px; font-weight:700; color:#FFFFFF !important;">Advanced Workshop #1 — Metrics &amp; Traces</h1>
           <p style="margin:0; font-size:14px; line-height:1.5; color:#FFFFFF !important;">Auto-instrumentation (the Java agent, zero code changes) generates traces and JVM metrics that the Collector routes by index — <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">k8s_ws_traces</code> for spans, <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">k8s_ws_petclinic_metrics</code> for JVM/HikariCP — and every panel below is built from that data with plain SPL, no external app required.</p>
         </div>
+        <div style="background:#FFF8E1; border-left:5px solid #F1813F; padding:10px 18px; border-radius:4px; margin-top:8px;"><p style="margin:0; font-size:13px; line-height:1.5; color:#7B3F00 !important;"><b style="color:#7B3F00 !important;">Fills in during Advanced Workshop #1.</b> The workshop app installs every dashboard at once in Foundational Workshop #2, so this one is here early. Until you deploy the Java agent and start sending spans, its panels are empty &#8212; that is expected, not a fault.</p></div>
       </html>
     </panel>
   </row>

@@ -1306,28 +1306,18 @@ dropped, or misrouted, and FW #2 §8 showed you exactly what that looks like.
 
 ---
 
-## 9. Install the dashboards
+## 9. The capstone dashboards
 
-Two capstone dashboards — one per destination, because they can't show the same things.
-Splunk Enterprise has the correlation story; Observability Cloud has APM, RUM and Profiling
-natively, which Splunk simply doesn't have.
+Two dashboards, and only one of them is an install — because they live in different
+products. The Splunk Enterprise one is already on your instance; the Observability Cloud one
+has to be imported separately, since Splunk apps cannot carry Observability Cloud content.
 
 ### Splunk Enterprise — correlation
 
-```bash
-cd ~/k8s_workshop
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/aw2-dashboard.xml
-```
-
-Same install path as FW #2 and AW #1's dashboards: **Search & Reporting → Dashboards →
-Create New Dashboard → Classic Dashboards**, paste the XML in.
-
-??? abstract "Command-line alternative — install it over REST"
-    ```bash
-    curl -sk -u admin:Workshop2026! -X POST \
-      https://localhost:8089/servicesNS/admin/search/data/ui/views \
-      -d "name=k8s_ws_aw2_dashboard" --data-urlencode "eai:data@aw2-dashboard.xml"
-    ```
+Nothing to download. Open **Advanced Workshop #2 — Correlation** from **Search & Reporting →
+Dashboards** (or the **K8s + OTel Workshop** app) — it came with the app you installed in
+[FW #2 §12](../02-foundational-2/index.md#12-install-the-workshop-dashboard-app) and has been
+waiting for the second destination you just configured.
 
 ![AW2 Splunk correlation dashboard](../assets/img/04-aw2/aw2-dashboard.png)
 
@@ -1357,9 +1347,11 @@ kind, offset, duration and SQL text, picked live from the deepest trace in the w
 
 ### Observability Cloud — APM, RUM, Profiling
 
-This one is a `.json` **export package**, not classic XML — a different import path.
+This one *is* a download: a `.json` **export package**, imported into Observability Cloud.
+A Splunk app can only carry Splunk Enterprise views, so this cannot ride along with the rest.
 
 ```bash
+cd ~/k8s_workshop
 curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/aw2-o11y-dashboard.json
 ```
 
@@ -1376,8 +1368,6 @@ so rather than force a fake chart, that panel is explanatory and points at **APM
 service → AlwaysOn Profiling** for the real flame-graph view. The other three are real
 charts on real data: APM error rate (color-banded), request-and-error volume over time, and
 RUM page views — genuine browser sessions, bursty in a way synthetic APM load never is.
-
----
 
 ---
 

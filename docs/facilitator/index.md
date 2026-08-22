@@ -578,3 +578,23 @@ is what proves data still arrives.
 minutes and catches upstream drift that would otherwise surface mid-session.
 
 **Version pins** all live in `versions.env`. Change them there and nowhere else.
+
+**Rebuild the dashboard app after editing any dashboard.** The five capstone dashboards are
+authored in `labs/dashboards/*.xml`, and that is the single source of truth — the installable
+app is a *build artifact* generated from them:
+
+```bash
+bash scripts/build-dashboard-app.sh     # -> labs/dashboards/dist/k8s-ws-dashboards-<ver>.tgz
+```
+
+The build copies the XML in fresh and parses every view, so a malformed edit fails the build
+rather than shipping. **Edit an XML and forget this step and participants install the old
+dashboard** — the guides link to the `.tgz` on `raw.githubusercontent.com`, not to the XML.
+Bump `WORKSHOP_APP_VERSION` in `versions.env` when the contents change; the build stamps it
+into `app.conf` and into the filename, so the FW #2 §12 `curl` URL changes with it — search
+the docs for the old version string and update it.
+
+!!! warning "The app deliberately carries dashboards only"
+    No indexes, no HEC token, no OTTL transform. Participants build those by hand in FW #2,
+    and bundling them would remove the lesson. If you are tempted to add them to smooth out a
+    session, add a troubleshooting note instead.
