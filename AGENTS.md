@@ -55,6 +55,31 @@ here's where things stand:
   actually consuming CPU before concluding the app is at fault.
 - Remaining phases (Collector rework, load-generator rewrite, AW1/AW2, dashboards,
   Cilium) are unstarted. See the migration plan for the full phase breakdown and gates.
+- **Considered and rejected: switching FW1 to Splunk's own reference PetClinic
+  microservices deployment** (`splunk/observability-workshop`, "Ninja Workshops" ->
+  `automatic-discovery` -> `petclinic-kubernetes`). Its images
+  (`quay.io/phagen/spring-petclinic-*`) are stale — most untouched since December 2023
+  — versus the actively-maintained upstream `springcommunity/*` images already used
+  here. Their reference architecture also adds MySQL, `admin-server`, an in-cluster
+  load generator, and public unauthenticated HTTP exposure on ports 80/81/443 — the
+  last of which contradicts this repo's deliberate security-group + SSH-tunnel
+  posture and would need rejecting regardless of the rest. **One idea from it is
+  worth revisiting separately, later:** the OTel Operator's annotation-based
+  auto-instrumentation (`kubectl patch` adding
+  `instrumentation.opentelemetry.io/inject-java`) instead of a hand-built
+  `-javaagent` Dockerfile — genuinely simpler for an audience with little app-dev
+  background, and worth evaluating properly before Phase 4 (AW1, "attach the Java
+  agent"), independent of the app/image decision above.
+- **In-cluster load generation — deliberately deferred, not rejected.** Considered
+  moving JMeter into the cluster as a Deployment (mirroring Splunk's reference
+  workshop) to remove participant setup. Decided against making it FW2's primary
+  path: bundling it into the same `kubectl apply` as the six app services would
+  reintroduce exactly the concurrent-cold-start pressure Phase 0 spent real effort
+  de-risking, and a dead in-cluster pod is a much less legible failure for a
+  facilitator watching many participants than "is your second terminal still
+  running" is today. External JMeter (already the design) stays primary. If it gets
+  built later, it must be introduced *after* the app is already confirmed healthy —
+  never in the initial deploy — the same timing FW2 §7 already uses for JMeter.
 
 ---
 
