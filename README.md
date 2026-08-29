@@ -31,10 +31,17 @@ Supporting pages, not part of the timed sequence:
 
 ## Requirements
 
-- One EC2 instance per participant: **Ubuntu 24.04 LTS, x86-64**, 4 vCPU / 16 GB, 100 GB gp3
+- One EC2 instance per participant: **Ubuntu 24.04 LTS, x86-64**, **8 vCPU / 32 GB**, 100 GB gp3
 - ARM is not an option — Splunk Enterprise has no Linux ARM64 build
 - Inbound: 22, 8000, 8080 (plus 8089 for Log Observer Connect in AW #2)
 - Roughly 3 GB of downloads during host setup, mostly Splunk Enterprise
+
+The 8 vCPU / 32 GB spec is not a margin-of-safety guess. FW #1 deploys PetClinic as six
+cold-starting Spring Boot services instead of one; tested on 4 vCPU / 16 GB, that startup
+drove load average to 66, the kubelet missed its node-lease renewal, and Kubernetes
+evicted every pod on the node. 8 vCPU / 32 GB held stable through a three-minute traffic
+soak with the node `Ready` throughout — see [`versions.env`](versions.env)'s
+`PETCLINIC_MICROSVC_MINIMUM_VCPU`.
 
 See [`versions.env`](versions.env) for every pinned version. Nothing in this workshop
 resolves "latest" at install time — two participants on different days must get

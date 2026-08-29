@@ -20,5 +20,5 @@ Each module ends with a script that asserts you finished it correctly.
 
 ## Requirements
 
-Ubuntu 24.04 LTS **x86-64**, 4 vCPU / 16 GB / 100 GB. ARM is not supported — Splunk
+Ubuntu 24.04 LTS **x86-64**, 8 vCPU / 32 GB / 100 GB. ARM is not supported — Splunk
 Enterprise has no Linux ARM64 build.

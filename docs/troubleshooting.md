@@ -143,6 +143,7 @@ The hardest class of problem here. Three real examples, all of which report succ
 | A `sed` against the chart's `values.yaml` | The anchor string no longer exists in the current chart. `sed` matched nothing, changed nothing, exited 0. |
 | An OTTL `transform` processor | Paths weren't context-prefixed, or targeted the wrong attribute context. Config parses, pods stay healthy, no data changes. |
 | A pod annotation | Applied to the Deployment's metadata rather than the **pod template**. The pod never gets it. |
+| A hand-built Spring Boot image, missing `ENV SPRING_PROFILES_ACTIVE=docker` | The application starts, logs nothing alarming, and binds to a **random port** instead of the one the rest of the manifest expects — see FW #1 §5. No crash, no error, just silence. |
 
 **The diagnostic that resolves most of them** — read the configuration the Collector is
 actually running, rather than the values you think you supplied:
@@ -287,6 +288,19 @@ helm template t splunk-otel-collector-chart/splunk-otel-collector \
 ---
 
 ## Resource exhaustion
+
+??? failure "`kubectl get nodes` shows `NotReady`, or every pod restarts at once, during FW #1 §6"
+    Tested, not assumed: on 4 vCPU / 16 GB, six services cold-starting simultaneously
+    drives load average past 60, the kubelet misses its node-lease renewal, and
+    Kubernetes marks the node `NotReady` — evicting **every** pod on it, this workshop's
+    application included. It self-recovers in under a minute, but in a room of twenty
+    people it reads as "the lab broke," all at once.
+
+    This is why the instance spec is 8 vCPU / 32 GB, not smaller — see FW #1 §6. If you
+    see this on the correct spec, check for anything else competing for CPU on the host
+    (an antivirus or vulnerability scanner on a hardened corporate AMI is the usual
+    culprit, not the workshop itself — check `ps -eo pcpu,comm --sort=-pcpu | head` for
+    anything unrelated to Splunk, Kubernetes, or PetClinic consuming double-digit CPU).
 
 ??? failure "Pods evicted, or minikube becomes unresponsive during AW #1/#2"
     By the advanced modules the host is running a Kubernetes cluster, Splunk Enterprise,

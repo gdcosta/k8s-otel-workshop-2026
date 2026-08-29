@@ -9,9 +9,9 @@ audit log — the security trail that Foundational Workshop #2 will start collec
 By the end you will have:
 
 - [x] A running single-node Kubernetes cluster with API auditing enabled
-- [x] The Spring PetClinic application built from source
-- [x] That application packaged as a container image
-- [x] The image deployed to Kubernetes and reachable from your browser
+- [x] One of PetClinic's six services built from source, the rest pulled pre-built
+- [x] That service packaged as a container image
+- [x] All six services deployed to Kubernetes, reachable from your browser through one gateway
 
 ## Session variables
 
@@ -194,44 +194,72 @@ reach the node — re-check the path in the `--extra-config` flag.
 
 ---
 
-## 4. Build the PetClinic application
+## 4. Build one service — and pull the rest
+
+!!! abstract "Learning moment — six services, not one"
+    PetClinic ships two ways upstream: a single Spring Boot monolith, and
+    `spring-petclinic-microservices` — six independent Spring Boot services (a config
+    server, a Eureka discovery server, an API gateway, and three business services)
+    that together are one application. We're using the second, because a monolith gives
+    Advanced Workshop #1's service map and Advanced Workshop #2's APM correlation almost
+    nothing to show — a single box on a diagram. Six services talking to each other is
+    what those tools are actually for.
+
+    You'll build **one** of the six by hand — `customers-service` — for the same reason
+    FW #1 has always built PetClinic from source: so you've done it once, and know what's
+    inside the image. The other five are pulled pre-built. Building all seven Maven
+    modules on every participant's instance buys nothing pedagogically and costs real
+    minutes against this module's clock.
 
 ```bash
 mkdir -p ~/k8s_workshop/petclinic
 cd ~/k8s_workshop/petclinic
-git clone --depth 1 https://github.com/spring-projects/spring-petclinic.git
-cd spring-petclinic
+git clone --branch v3.2.0 --depth 1 \
+  https://github.com/spring-petclinic/spring-petclinic-microservices.git
+cd spring-petclinic-microservices
 ```
 
-Build it. The first run downloads the Maven dependency tree and takes a few minutes.
+!!! warning "v3.2.0, not the newest tag"
+    v3.4.1 adds a seventh service, `genai-service`, that calls out to OpenAI and needs an
+    `OPENAI_API_KEY` — a credential this workshop has no way to hand every participant.
+    v3.2.0 is the newest tag without it, on the same Java 17 / Spring Boot 3.x runtime.
+
+Build just `customers-service`. `-am` ("also make") pulls in the shared parent POM it
+depends on, without building the other five modules:
 
 ```bash
 export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
-./mvnw -B -DskipTests package
+./mvnw -B -DskipTests -pl spring-petclinic-customers-service -am package
 ```
 
-Find the jar that was produced:
+Recorded: a clean build, dependencies included, took 21 seconds.
+
+Find the jar that was produced, the same way as always:
 
 ```bash
-JAR=$(ls -1 target/*.jar | grep -v 'sources\|javadoc\|original' | head -1)
+cd spring-petclinic-customers-service/target
+JAR=$(ls -1 *.jar | grep -v 'sources\|javadoc\|original' | head -1)
 echo "$JAR"
 ```
 
-!!! danger "Don't hardcode the jar name"
-    PetClinic's version changes upstream — it has already moved from `3.0.0-SNAPSHOT` to
-    `4.0.0-SNAPSHOT`. Always detect the filename as above. Every later step, including the
-    `Dockerfile`, refers to `$JAR` rather than a literal name.
+!!! danger "Don't skip straight to running this jar"
+    Unlike the old monolith, `customers-service` is a **Spring Cloud Config Client** — at
+    startup it tries to fetch its configuration (including which port to listen on) from
+    `config-server`, which doesn't exist yet at this point in the module. Run it standalone
+    now and it either hangs retrying or fails outright, depending on what's reachable at
+    `localhost:8888`. That isn't a build problem — it's the price of six services that
+    genuinely depend on each other instead of one that doesn't. The checkpoint below tests
+    what's actually testable at this point: that the jar exists and is a real archive.
 
-### ✅ Checkpoint — run it directly
+### ✅ Checkpoint — the jar exists
 
 ```bash
-java -jar "$JAR" &
-sleep 25
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8080/
-kill %1
+unzip -l "$JAR" | grep -c 'BOOT-INF/classes/'
 ```
 
-`200` means the application is good. Anything else, check the build output above.
+A number greater than zero means Maven produced a real, populated Spring Boot fat jar.
+The first genuine "does this thing work" test comes after §6, once `config-server` and
+`discovery-server` are actually running for it to talk to.
 
 ---
 
@@ -240,11 +268,8 @@ kill %1
 !!! abstract "Learning moment — why the base image is a JRE"
     A container image should carry only what it needs at runtime. We compiled with a full
     JDK, but running the jar needs only a **Java runtime**, so the image is based on
-    `eclipse-temurin:21-jre-noble`.
-
-    That single choice takes the image from roughly 514 MB to 360 MB. In a microservice
-    architecture with dozens of services and frequent redeploys, that difference compounds
-    into real bandwidth, storage, and start-up time.
+    `eclipse-temurin:17-jre-noble` — matching the Java version this application targets,
+    the same way the monolith's image matched its own.
 
 Point your shell at minikube's Docker daemon. This is the step that makes the image land
 where Kubernetes can see it:
@@ -257,49 +282,66 @@ echo "$DOCKER_HOST"          # should print tcp://192.168.49.2:2376
 Create the `Dockerfile` in the build output directory:
 
 ```bash
-cd ~/k8s_workshop/petclinic/spring-petclinic/target
 JARNAME=$(basename "$JAR")
 
 cat > Dockerfile <<EOF
 # syntax=docker/dockerfile:1
-FROM eclipse-temurin:21-jre-noble
+FROM eclipse-temurin:17-jre-noble
 WORKDIR /app
 COPY ${JARNAME} ./app.jar
+ENV SPRING_PROFILES_ACTIVE=docker
 CMD ["java", "-jar", "app.jar"]
 EOF
 
 cat Dockerfile
 ```
 
+!!! danger "The `ENV SPRING_PROFILES_ACTIVE=docker` line is not optional"
+    This bit us during testing, and it's worth knowing why. Without it, the application
+    starts, logs nothing alarming, and then never becomes reachable — no crash, no error,
+    just silence. `customers-service`'s configuration only pins its port to `8081` and
+    points it at `discovery-server` under a profile named `docker`. Skip this line and the
+    application binds to a **random port** instead, which nothing in the manifest below
+    knows to look for. The five pre-built images you're about to pull already bake this in
+    — check their upstream `Dockerfile` and you'll find the identical line. This one you
+    write yourself, so it's easy to leave out.
+
 Build it:
 
 ```bash
-docker build --tag ${WS_USER}/petclinic-otel:v1 .
-docker images | grep petclinic
+docker build --tag ${WS_USER}/petclinic-customers:v1 .
+docker images | grep petclinic-customers
 ```
 
 ### ✅ Checkpoint
 
 ```bash
-docker images --format '{{.Repository}}:{{.Tag}}' | grep "^${WS_USER}/petclinic-otel:v1$"
+docker images --format '{{.Repository}}:{{.Tag}}' | grep "^${WS_USER}/petclinic-customers:v1$"
 ```
 
-The tag echoing back means the image exists inside minikube's store.
+The tag echoing back means the image exists inside minikube's store. Recorded size:
+348 MB, against 491 MB for the equivalent pre-built image upstream ships — the same
+JRE-vs-JDK saving as before, this time without a layered/extracted jar.
 
 ---
 
 ## 6. Deploy to Kubernetes
 
-!!! abstract "Learning moment — Deployments and Services"
-    Two objects do the work here:
+!!! abstract "Learning moment — six Deployments, one namespace, one entry point"
+    Each service gets its own **Deployment** — its own restart policy, its own
+    readiness check — and its own **Service** for the others to find it by name.
+    Only `api-gateway`'s Service is a `NodePort`; the other five stay `ClusterIP`,
+    reachable inside the cluster but not from outside it. That mirrors how you'd run this
+    in production: one ingress point, everything else internal.
 
-    - A **Deployment** tells Kubernetes what to run and how many copies. It watches the
-      pods and replaces any that die.
-    - A **Service** gives those pods a stable network identity. Pods come and go with
-      changing IPs; the Service does not.
-
-    We use a `NodePort` Service, which publishes the application on a fixed port on the
-    cluster node — the simplest option for a single-node lab.
+    All six live in their own **`petclinic` namespace**, not `default`. The application
+    is one unit — being able to `kubectl get all -n petclinic` or
+    `kubectl delete namespace petclinic` as a single step is worth having, the same way
+    you'd want it in a cluster shared with other workloads. This module still uses
+    `kubectl ... -n petclinic` explicitly on every command below rather than switching
+    your shell's default namespace — later modules assume `default` for things unrelated
+    to PetClinic, and a silently-changed default would make those commands fail for a
+    reason that isn't obvious from the error.
 
 Download the manifest and substitute your username:
 
@@ -308,44 +350,61 @@ mkdir -p ~/k8s_workshop/petclinic/k8s_deploy
 cd ~/k8s_workshop/petclinic/k8s_deploy
 
 curl -fsSL -o petclinic.yml.tmpl \
-  https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/manifests/petclinic.yml
+  https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/manifests/petclinic-microservices.yml
 
 WS_USER=$WS_USER envsubst < petclinic.yml.tmpl > ${WS_USER}-petclinic-k8s-manifest.yml
-cat ${WS_USER}-petclinic-k8s-manifest.yml
 ```
 
-!!! note "The manifest may carry settings this module doesn't use"
-    Read what you just printed. Alongside the Deployment and the Service you may find
-    configuration that FW #1 never mentions — environment variables pointing at an
-    OpenTelemetry endpoint, for instance. That's deliberate: the same file serves every
-    module, and the later ones explain and switch on what they need. Nothing in this module
-    depends on it, and an unresolved endpoint costs the application nothing.
-
-!!! tip "Why a file instead of a long command"
-    Earlier versions of this workshop generated manifests with chained `sed` commands,
-    because copying indented YAML out of a Word document mangled the whitespace. In a
-    web page, the copy button preserves it exactly — so we ship the real file. It's also
-    the file you'd commit to a Git repository in production.
+!!! note "Skim it before applying — four things are worth spotting"
+    - A **`Namespace`** object, `petclinic`, first in the file. One `kubectl apply -f`
+      creates it and everything inside it together — nothing extra to run beforehand.
+    - A **`ConfigMap`** holding six small YAML files, copied from
+      `spring-petclinic-microservices-config` upstream. Without it, `config-server` would
+      default to fetching this same configuration live from GitHub on every restart — an
+      external, unpinned dependency this workshop otherwise never has. The manifest bakes
+      the files in instead; see its header comment for the full reasoning.
+    - Five of six Deployments carry an **`initContainer`** that polls
+      `config-server:8888/actuator/health` in a loop before the real container starts.
+      `customers-service` and its four siblings are Config Clients — they fail fast if
+      `config-server` isn't answering yet, and without this gate you'd see every one of
+      them crash-restart twice in the first two minutes before settling. The gate makes
+      that invisible instead of alarming.
+    - The six internal Service names (`config-server`, `discovery-server`, and so on)
+      are **not** prefixed with your username, unlike everything else in this workshop.
+      They never leave your own cluster, and the pre-built images have those exact
+      hostnames baked into their configuration — renaming them would mean overriding
+      that wiring for no real benefit.
 
 Apply it:
 
 ```bash
 kubectl apply -f ${WS_USER}-petclinic-k8s-manifest.yml
-kubectl rollout status deployment/${WS_USER}-petclinic-otel-deployment --timeout=300s
+kubectl rollout status deployment/config-server     -n petclinic --timeout=180s
+kubectl rollout status deployment/discovery-server   -n petclinic --timeout=180s
+kubectl rollout status deployment/customers-service  -n petclinic --timeout=180s
+kubectl rollout status deployment/visits-service     -n petclinic --timeout=180s
+kubectl rollout status deployment/vets-service       -n petclinic --timeout=180s
+kubectl rollout status deployment/api-gateway        -n petclinic --timeout=180s
 ```
 
-!!! note "`rollout status` is a real gate here"
-    The manifest defines a `readinessProbe` against `/actuator/health`, so `rollout status`
-    only returns once the application is genuinely serving traffic — not merely once the
-    container has started. Without a probe it returns roughly 15 seconds early, and the
-    next command appears to fail for no reason.
+!!! note "Recorded timing"
+    Tested end to end on an 8 vCPU / 32 GB instance: all six `Ready`, zero restarts, in
+    72 seconds. `config-server` first is deliberate — everything else waits on it, so if
+    a `rollout status` call above it hangs, that's where to look.
+
+!!! danger "4 vCPU is not enough for this module, full stop"
+    This was tested, not assumed: on a 4 vCPU / 16 GB instance, six services cold-starting
+    at once drove load average to 66 and the **kubelet missed its node-lease renewal**.
+    Kubernetes marked the node `NotReady` and evicted every pod on it — this application
+    included, not just the new services. It recovered on its own in under a minute, but in
+    a room of twenty people it reads as "the lab broke," all at once. If `minikube status`
+    or `kubectl get nodes` shows anything but `Ready` during this step, that's what's
+    happening — it is not a sign anything is misconfigured.
 
 Inspect what you created:
 
 ```bash
-kubectl get deployments
-kubectl get pods -o wide
-kubectl get services
+kubectl get all -n petclinic
 ```
 
 ---
@@ -362,6 +421,15 @@ The hostname `minikube` was mapped to that IP during host setup, so this also wo
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://minikube:30000/
 ```
+
+!!! note "A 503 here that clears on retry is not a bug"
+    `api-gateway` routes requests by asking `discovery-server` who's currently running —
+    but it caches that answer for up to 30 seconds after it first asks. Reach it in the
+    few seconds between "all pods Ready" and that first cache fill, and you'll see
+    `HTTP 503` on an API route even though everything registered correctly. Retry once,
+    a few seconds later. `curl http://minikube:30000/` (the root path, serving the SPA
+    directly rather than through a routed API call) is unaffected and is what the
+    checkpoint above actually tests.
 
 ### Now open it in a browser
 
@@ -405,7 +473,7 @@ and the same command works in PowerShell or Windows Terminal.
 
     ```bash
     # on the instance, as splunk — leave it running
-    kubectl port-forward svc/${WS_USER}-petclinic-srv 8080:8080
+    kubectl port-forward -n petclinic svc/${WS_USER}-petclinic-srv 8080:8080
     ```
 
     ```bash
@@ -447,9 +515,12 @@ Run the verification script:
 1. minikube node is `Ready`
 2. API server is emitting audit events
 3. `minikube` resolves via `/etc/hosts`
-4. The PetClinic image exists in minikube's Docker store
-5. The Deployment has an available replica
-6. The NodePort Service answers `HTTP 200`
+4. The `customers-service` image exists in minikube's Docker store
+5. Each of the six Deployments has an available replica
+6. At least four services are registered in Eureka
+7. `config-server` is serving from the local ConfigMap, not reaching out to GitHub
+8. The gateway answers `HTTP 200` on NodePort 30000
+9. A request routed through the gateway reaches `vets-service`
 </details>
 
 ---
@@ -457,17 +528,32 @@ Run the verification script:
 ## Troubleshooting
 
 ??? failure "`kubectl get nodes` says `NotReady`"
-    The CNI plugin needs a moment after start. Wait 30 seconds. If it persists:
-    `minikube delete && minikube start ...` with the flags from step 2.
+    Usually the CNI plugin needing a moment after start — wait 30 seconds. But if this
+    happens **during or right after §6** on anything smaller than 8 vCPU / 32 GB,
+    it's the six-service cold start hitting the instance's ceiling, not a transient
+    blip — see the warning in §6. Give it a minute to self-recover before assuming
+    anything is broken; if it doesn't, `minikube delete && minikube start ...` with the
+    flags from step 2.
 
 ??? failure "`docker build` can't find the jar"
     You're probably in the wrong directory. The `Dockerfile` and the jar must both be in
-    `~/k8s_workshop/petclinic/spring-petclinic/target`.
+    `~/k8s_workshop/petclinic/spring-petclinic-microservices/spring-petclinic-customers-service/target`.
 
-??? failure "Pod status is `ErrImageNeverPull` or `ImagePullBackOff`"
+??? failure "Pod status is `ErrImageNeverPull` or `ImagePullBackOff` (for `customers-service`)"
     The image wasn't built into minikube's Docker daemon. Re-run
     `eval $(minikube -p minikube docker-env)` and rebuild — `docker images` must list
-    `${WS_USER}/petclinic-otel:v1` *after* that eval.
+    `${WS_USER}/petclinic-customers:v1` *after* that eval. The other five services pull
+    from Docker Hub and don't hit this — if one of *those* shows `ImagePullBackOff`
+    instead, it's a network problem reaching `hub.docker.com`, not a local build issue.
+
+??? failure "A service (not `customers-service`) is stuck `0/1 Running`, never `1/1`"
+    Check its `initContainer` first — `kubectl describe pod -n petclinic <name>` shows
+    whether it's still stuck in `Init:0/1`, waiting on `config-server`. If `config-server`
+    itself never became `Ready`, every other service waits on it forever; that's the one
+    deployment worth checking before any other. If the init container finished but the
+    main container's readiness probe is still failing, `kubectl logs -n petclinic <pod>`
+    — a `ConnectException` there usually means `SPRING_PROFILES_ACTIVE=docker` didn't
+    reach the container (only possible for your hand-built `customers-service` image).
 
 ??? failure "`http://localhost:8080` refuses the connection in your browser"
     The tunnel isn't up, or it's pointed at the wrong place. Check, in order: the `ssh -L`

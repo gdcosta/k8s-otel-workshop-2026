@@ -11,6 +11,53 @@ trace — it strands twenty people at once.
 
 ---
 
+## In progress: migrating PetClinic from a monolith to six microservices
+
+`main` is fully consistent and works end to end — this migration lives on
+`migrate/petclinic-microservices` until it's finished, specifically so a partial,
+inconsistent state never lands on `main`. If you're reading this on that branch,
+here's where things stand:
+
+- **Phase 0 (feasibility) and Phase 1 (FW #1) are done and tested.** FW #1 now builds
+  `customers-service` by hand and deploys all six services, in their own `petclinic`
+  namespace (not `default`), via `labs/manifests/petclinic-microservices.yml`.
+  `versions.env`, `scripts/verify-fw1.sh`, and the instance-size requirement (bumped to
+  8 vCPU / 32 GB — see below) are updated and consistent with FW #1's new content. If
+  FW #2/AW1/AW2 get their own migration pass later, their `kubectl` commands need
+  `-n petclinic` added too — grep those docs for bare `kubectl get/logs/exec` touching
+  PetClinic before assuming `default` still works.
+- **FW #2, AW #1, and AW #2 have NOT been touched yet.** They still reference the old
+  single-pod Deployment name (`${WS_USER}-petclinic-otel-deployment`) and container name
+  (`${WS_USER}-petclinic-otel-container01`) throughout — in the Collector's OTTL
+  predicates, the dashboards, JMeter, and the RUM script. **Do not run FW #1 through to
+  FW #2 on a live instance right now and expect it to work** — that inconsistency is
+  expected mid-migration, not a bug to chase.
+- **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
+  the manifest again:** Config Server defaults to a live, unpinned `git pull` from
+  GitHub on every restart (fixed via the `native` profile + a baked-in ConfigMap — see
+  the manifest's header comment); and a hand-built service that's missing
+  `ENV SPRING_PROFILES_ACTIVE=docker` binds to a random port with no error message at
+  all. Both are documented as `!!! danger` callouts in FW #1 §5–6 — read those before
+  assuming a service that "just isn't reachable" is a network problem.
+- **The instance-size requirement genuinely changed, confirmed by testing, not
+  padding.** 4 vCPU / 16 GB was tested and failed: the kubelet missed its node-lease
+  renewal under six simultaneous cold starts and Kubernetes evicted every pod on the
+  node. 8 vCPU / 32 GB held stable through a soak. `README.md`, `docs/index.md`,
+  `docs/facilitator/index.md`, and `docs/00-setup/index.md` are all updated to match —
+  if you touch instance sizing anywhere, grep for `4 vCPU` and `t3.xlarge` first to
+  catch what you missed; that grep is how two stale references were caught here.
+- **A corporate security agent (Nessus) on the validation EC2 instances is not part of
+  the documented workshop AMI.** It caused a control-plane thrashing episode during
+  Phase 1 testing that looked alarming but was an artifact of that specific test box,
+  not the architecture — the clean, isolated validation run (six services, single
+  `kubectl apply`, zero restarts, 72 seconds to ready) is the number that went in the
+  guide. Don't mistake a noisy validation instance for a real defect; check what's
+  actually consuming CPU before concluding the app is at fault.
+- Remaining phases (Collector rework, load-generator rewrite, AW1/AW2, dashboards,
+  Cilium) are unstarted. See the migration plan for the full phase breakdown and gates.
+
+---
+
 ## The prime directive: tested, not transcribed
 
 **Every command, flag, path, SPL query and expected output in `docs/` was executed on

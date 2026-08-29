@@ -31,8 +31,8 @@ toolchain, and a local Splunk Enterprise instance.
     - **Scope the security group to your own IP** — ports 22 and 8000 both. The Splunk
       credentials in this guide are published, so that rule is what keeps your instance
       yours.
-    - **This costs real money while it runs.** A `t3.xlarge` is roughly **$0.17/hour**
-      on-demand — about **$120/month** if you leave it up. **Stop** the instance when you
+    - **This costs real money while it runs.** A `t3.2xlarge` is roughly **$0.33/hour**
+      on-demand — about **$240/month** if you leave it up. **Stop** the instance when you
       finish for the day and **terminate** it when you finish the workshop. See
       [Finishing up](#finishing-up) at the end of this page.
 
@@ -43,7 +43,7 @@ toolchain, and a local Splunk Enterprise instance.
     | Setting | Value |
     |---|---|
     | AMI | Ubuntu Server **24.04 LTS**, **64-bit (x86)** — not ARM |
-    | Instance type | `t3.xlarge` (4 vCPU / 16 GB) |
+    | Instance type | `t3.2xlarge` (8 vCPU / 32 GB) |
     | Storage | **100 GB** gp3 root volume — the 8 GB default is nowhere near enough |
     | Key pair | create one, download the `.pem`, keep it |
     | Security group | inbound 22 and 8000 **from your IP only**; outbound all |
@@ -62,7 +62,7 @@ toolchain, and a local Splunk Enterprise instance.
 |---|---|
 | **OS** | Ubuntu 24.04 LTS |
 | **Architecture** | **x86-64 / amd64** |
-| **Size** | 4 vCPU, 16 GB RAM (AWS `t3.xlarge` or equivalent) |
+| **Size** | 8 vCPU, 32 GB RAM (AWS `t3.2xlarge` or equivalent) |
 | **Disk** | 100 GB |
 | **Access** | SSH key pair — no password authentication |
 

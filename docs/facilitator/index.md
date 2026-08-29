@@ -32,9 +32,16 @@ Maven download the internet.
 | | |
 |---|---|
 | OS | Ubuntu 24.04 LTS, **x86-64** |
-| Size | 4 vCPU / 16 GB — AWS `t3.xlarge` |
+| Size | 8 vCPU / 32 GB — AWS `t3.2xlarge` |
 | Disk | 100 GB gp3 |
-| Cost | roughly $0.17/hour on-demand |
+| Cost | roughly $0.33/hour on-demand |
+
+!!! warning "This doubled from 4 vCPU / 16 GB — not a margin-of-safety bump"
+    FW #1 now deploys PetClinic as six cold-starting Spring Boot services. Tested on
+    4 vCPU / 16 GB: six simultaneous cold starts drove load average to 66, the kubelet
+    missed its node-lease renewal, and Kubernetes evicted every pod on the node — the
+    workshop application included. 8 vCPU / 32 GB held stable through a three-minute
+    traffic soak with the node `Ready` throughout. Do not provision smaller to save cost.
 
 !!! danger "ARM will not work"
     Splunk Enterprise has no Linux ARM64 build. This is not a preference.
