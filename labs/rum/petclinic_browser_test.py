@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Browser-based load for Splunk RUM.
 
-Replaces the JMeter WebDriver Set plan used in earlier versions of this workshop.
-RUM data only exists if a *real browser* executes the page's JavaScript, so this
-drives Chromium through the same journey a user would take.
+Drives the same AngularJS SPA a real user would, through api-gateway's
+NodePort. RUM data only exists if a *real browser* executes the page's
+JavaScript, so this is Chromium under Playwright, not an HTTP client.
 
-Why Playwright instead of JMeter + WebDriver:
-  - Browser and driver are installed as a matched pair, so there is no
-    Chrome/chromedriver/Selenium version triangle to keep aligned.
-  - No 111 MB custom JMeter build to host and maintain.
-  - Ordinary Python, so the journey is readable and easy to extend.
+The SPA uses AngularJS 1.x with ui-router's hash-based routing
+(`#!/owners`, not `/owners`) — every route below was captured from a live
+browser session against the deployed app, not read out of the source, and
+the exact routes matter: `#!/owners/details/1` is the real owner-detail
+route; `#!/owners/1` looks plausible and silently falls through to the
+`otherwise('/welcome')` catch-all instead, with no error at all.
 
 Usage:
     playwright-venv/bin/python petclinic_browser_test.py \
@@ -43,13 +44,16 @@ import time
 
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-# Owner -> pet pairs that exist in PetClinic's seed data. Owner and pet IDs do
-# NOT run in parallel: owner 3 has two pets, so everything after it is offset.
+# Owner -> pet pairs that exist in the seed data. Owner and pet IDs do NOT run
+# in parallel: owner 3 has two pets, so everything after it is offset.
 OWNER_PETS = [(1, 1), (2, 2), (3, 3), (3, 4), (4, 5), (5, 6),
               (6, 7), (6, 8), (7, 9), (8, 10), (9, 11), (10, 12), (10, 13)]
 
-PHONES = ["6085551023", "6085552847", "6085559182", "6085553365"]
-PET_SUFFIX = ["Rex", "Bella", "Milo", "Luna", "Ziggy"]
+# telephone must match customers-service's validation pattern exactly —
+# [0-9]{12}, no more, no fewer. A 10-digit US-shaped number here fails HTML5
+# validation silently: the form just never submits, and nothing in the
+# console says why.
+PHONES = ["608555102312", "608555284712", "608555918212", "608555336512"]
 
 
 def journey(page, base, n):
@@ -61,35 +65,42 @@ def journey(page, base, n):
     page.goto(f"{base}/", wait_until="networkidle")
     page.wait_for_timeout(1500)
 
-    page.goto(f"{base}/owners/find", wait_until="networkidle")
-    page.goto(f"{base}/owners?lastName=", wait_until="networkidle")
-    page.goto(f"{base}/vets.html", wait_until="networkidle")
+    # Every route from here on is a hash change within the same page, not a
+    # fresh document load — matching how the app is actually navigated,
+    # rather than a full page.goto() per screen.
+    page.goto(f"{base}/#!/owners", wait_until="networkidle")
+    page.goto(f"{base}/#!/vets", wait_until="networkidle")
 
-    # Owner detail, then a real form submission — a POST is more interesting to
-    # RUM and APM than another GET.
-    page.goto(f"{base}/owners/{owner_id}", wait_until="networkidle")
-    page.goto(f"{base}/owners/{owner_id}/edit", wait_until="networkidle")
+    # Owner detail — the composite view the app's own "Owners" list links to.
+    page.goto(f"{base}/#!/owners/details/{owner_id}", wait_until="networkidle")
+
+    # Edit the owner, then a real form submission — a PUT is more interesting
+    # to RUM and APM than another GET. Fields have real `name` attributes
+    # (AngularJS still sets them alongside ng-model), so this matches what a
+    # participant would find inspecting the page themselves.
+    page.goto(f"{base}/#!/owners/{owner_id}/edit", wait_until="networkidle")
     try:
-        page.fill("#telephone", random.choice(PHONES))
+        page.fill("input[name=telephone]", random.choice(PHONES))
         page.click("button[type=submit]")
-        page.wait_for_load_state("networkidle")
+        # The form's own success handler redirects to the owner-details route
+        # AFTER the PUT resolves — that redirect lands some time after
+        # networkidle fires on the click itself. Wait for the URL to actually
+        # change, not just for the network to go quiet, or the next
+        # navigation below races it and silently loses.
+        page.wait_for_url(f"**/#!/owners/details/{owner_id}", timeout=5000)
     except PWTimeout:
         print(f"    [{n}] owner form timed out — continuing")
 
-    # Rename a pet.
-    page.goto(f"{base}/owners/{owner_id}/pets/{pet_id}/edit", wait_until="networkidle")
+    # Add a visit for the pet. The description textarea has no name/id in
+    # this template — only an AngularJS ng-model — so it has to be found by
+    # its position in the form, not by name.
+    page.goto(f"{base}/#!/owners/{owner_id}/pets/{pet_id}/visits", wait_until="networkidle")
     try:
-        page.fill("#name", f"{random.choice(PET_SUFFIX)}{random.randint(1, 99)}")
-        page.click("button[type=submit]")
+        page.fill("form textarea", f"Routine checkup, visit {n}")
+        page.click("form button[type=submit]")
         page.wait_for_load_state("networkidle")
     except PWTimeout:
-        print(f"    [{n}] pet form timed out — continuing")
-
-    # Deliberate error. This surfaces as a front-end error in RUM, a 500 in APM,
-    # and a RuntimeException stack trace in Splunk Enterprise — the same event
-    # seen from three angles.
-    page.goto(f"{base}/oups", wait_until="networkidle")
-    page.wait_for_timeout(1000)
+        print(f"    [{n}] visit form timed out — continuing")
 
 
 def report_rum_status(page, base, js_errors):

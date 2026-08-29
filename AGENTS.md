@@ -45,18 +45,32 @@ here's where things stand:
   `labs/manifests/petclinic-microservices-fw2.yml` captures the FW2 end state (adds
   Tomcat access logging to `customers-service` only — see FW2 §6 for why one service is
   enough).
-- **AW #1 and AW #2 have NOT been touched yet.** They still reference the old single-pod
-  Deployment name (`${WS_USER}-petclinic-otel-deployment`) and container name
-  (`${WS_USER}-petclinic-otel-container01`) throughout — the dashboards, JMeter, and the
-  RUM script. **Do not run FW #2 through to AW #1 on a live instance right now and expect
-  it to work** — that inconsistency is expected mid-migration, not a bug to chase.
-- **FW #2's access-logging and error-rate-reconciliation content (§7–8) is partially
-  blocked on Phase 3.** There is no `/oups` equivalent in the microservices topology yet
-  — the deliberate fault is Phase 3's job (most likely scaling a backend to zero to trip
-  the gateway's circuit breaker, decided against a public-HTTP or in-cluster-loadgen
-  reference design that was evaluated and rejected — see below). §8's reconciliation
-  numbers are deliberately left unfilled rather than invented; do not add plausible-
-  looking numbers there without a real JMeter run behind them.
+- **Phase 3 (load-generator rewrite) is done and tested.** `labs/jmeter/petclinic_test_plan.jmx`
+  now hits the real gateway REST routes — every path, method, and POST/PUT body was
+  captured from a real browser session against the deployed app with Playwright request
+  interception, not inferred from source (`/api/gateway/owners/{id}`, a composite
+  endpoint the gateway itself implements, would have been easy to miss guessing).
+  `labs/rum/petclinic_browser_test.py` is rewritten for the SPA's AngularJS hash routing
+  (`#!/owners/details/1`, not `#!/owners/1` — the wrong guess silently falls through to
+  the app's `otherwise('/welcome')` catch-all with no error at all). There is no `/oups`
+  equivalent and none was added — the fault is external: `kubectl scale
+  deployment/visits-service -n petclinic --replicas=0`, documented in FW #2 §8, which the
+  gateway answers with a real, fast `503`. FW #2 §7–8 are rewritten with real numbers
+  from that exact run: JMeter's own rate is a clean **28.57%** (2 of 7 samplers touch
+  `visits-service`); Splunk-side, `api-gateway`'s own logs show 242 events (222 `WARN`
+  "no servers available", 20 multi-line `ERROR` `NoRouteToHostException`) for those same
+  90 failed requests — genuinely more than one log line per failure, not a bug, and
+  written up as a second, deeper instance of the module's own "what you count decides
+  whether you agree" lesson. `PUT /api/customer/owners/{id}` requires the **full** owner
+  object including its `pets` array back, or it looks destructive — the test plan
+  round-trips a captured JSON body via a JSR223 PostProcessor rather than risk corrupting
+  seed data other exercises depend on.
+- **AW #1 and AW #2 doc prose has NOT been touched yet.** They still reference the old
+  single-pod Deployment name (`${WS_USER}-petclinic-otel-deployment`) and container name
+  (`${WS_USER}-petclinic-otel-container01`) throughout, and AW2's RUM section still
+  describes the OLD script's Thymeleaf-form journey, not the rewritten one. **Do not run
+  FW #2 through to AW #1 on a live instance right now and expect it to work** — that
+  inconsistency is expected mid-migration, not a bug to chase.
 - **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
   the manifest again:** Config Server defaults to a live, unpinned `git pull` from
   GitHub on every restart (fixed via the `native` profile + a baked-in ConfigMap — see
@@ -78,8 +92,8 @@ here's where things stand:
   `kubectl apply`, zero restarts, 72 seconds to ready) is the number that went in the
   guide. Don't mistake a noisy validation instance for a real defect; check what's
   actually consuming CPU before concluding the app is at fault.
-- Remaining phases (load-generator rewrite, AW1/AW2, dashboards, Cilium) are unstarted.
-  See the migration plan for the full phase breakdown and gates.
+- Remaining phases (AW1/AW2 doc rewrite, dashboards, Cilium) are unstarted. See the
+  migration plan for the full phase breakdown and gates.
 - **Considered and rejected: switching FW1 to Splunk's own reference PetClinic
   microservices deployment** (`splunk/observability-workshop`, "Ninja Workshops" ->
   `automatic-discovery` -> `petclinic-kubernetes`). Its images

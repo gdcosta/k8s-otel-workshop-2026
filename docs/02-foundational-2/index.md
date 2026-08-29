@@ -544,9 +544,11 @@ once and reuse it for the rest of the series.
     Observability tooling only shows you what actually happened. With no traffic there are
     no application logs to transform, no error rates to read, and no traces to follow.
 
-    The test plan below walks the PetClinic application the way a user would — find an
-    owner, edit them, add a visit, browse vets — and deliberately triggers the app's error
-    page on every pass, so you always have real exceptions to find.
+    The test plan below hits the same REST endpoints the Angular SPA calls — list owners,
+    browse vets, view an owner, edit them, add a visit — captured from a real browser
+    session against this exact deployment, not guessed from source. There is no built-in
+    error sampler this time: the microservices topology has no `/oups`, and the fault
+    you'll use instead lives outside the test plan entirely — see step 8.
 
 ### Open a second terminal
 
@@ -616,26 +618,22 @@ Both files must sit in the same directory — the plan reads the CSV by relative
   -l results.jtl
 ```
 
-`-n` means non-GUI mode. 5 threads × 50 loops takes roughly **5 minutes**.
+`-n` means non-GUI mode. 5 threads × 50 loops takes roughly **2 minutes** — the test plan
+is shorter now, seven samplers against REST endpoints rather than eleven against
+server-rendered pages and static assets.
 
 <details>
 <summary>Expected output</summary>
 
 ```
-summary =    971 in 00:01:06 = 14.8/s ... Err:  72 (7.42%)
-summary =   1457 in 00:01:36 = 15.2/s ... Err: 110 (7.55%)
+summary =    140 in 00:00:27 =    5.1/s Avg:    59 Min:    13 Max:   427 Err:     0 (0.00%)
 ```
 
-(The `Avg`/`Min`/`Max` columns are trimmed above for width; you'll see them.)
-
-**The ~7.7% error rate is deliberate.** One sampler in thirteen calls the application's
-`/oups` endpoint, which throws a `RuntimeException` on purpose. One in thirteen is **7.69%**,
-which is the ceiling — early iterations run slightly under it, so a healthy run settles
-somewhere around 7.4–7.7%. You'll go looking for those exceptions in a moment, and in the
-Advanced workshops that same rate appears as the service error rate in APM.
-
-Only worry if you're materially above **~10%** — then check that PetClinic is healthy with
-`kubectl get pods`.
+Recorded 2026-08-29, all six services healthy. **Zero errors is correct here** — unlike the
+old single-pod plan, nothing in this run deliberately fails. Every sampler talks to a
+healthy service, so a clean run is the expected outcome, not a fluke. Worry if you see
+errors at this point — check `kubectl get pods -n petclinic` before continuing, since it
+means something is unhealthy, not that the test plan is working as designed.
 </details>
 
 Stop early with ++ctrl+c++ if you need to. To run longer, raise the loop count:
@@ -653,77 +651,100 @@ Stop early with ++ctrl+c++ if you need to. To run longer, raise the loop count:
 
 ---
 
-## 8. Find the error in Splunk
+## 8. Cause a real failure, and find it in Splunk
 
-!!! warning "This section is incomplete — waiting on the load-generator rewrite"
-    Everything below the query itself depends on JMeter hitting a deliberate fault path
-    the way the old single-pod test plan hit `/oups` — and the microservices topology has
-    no equivalent yet. That's separate work (rewriting `petclinic_test_plan.jmx` against
-    the gateway's real routes, and choosing a fault to replace `/oups` — most likely
-    scaling a backing service to zero to trip the gateway's circuit breaker, which is a
-    genuinely more realistic failure than a hardcoded exception endpoint). Until that
-    lands, the reconciliation numbers below are **not filled in**, on purpose, rather than
-    invented to look plausible — see `AGENTS.md`'s "tested, not transcribed" rule. The
-    query itself is correct today; only the expected output is pending.
+!!! abstract "Learning moment — the fault lives outside the test plan now"
+    The old single-pod version baked its error into the test plan itself: one sampler in
+    thirteen called `/oups`, a dead-simple endpoint that throws on purpose. Six independent
+    services don't have — and don't need — an equivalent. A far more realistic fault is
+    already sitting there: **take one of them down** and watch what happens to the ones
+    that depend on it. That's an infrastructure action, not an HTTP request, so it happens
+    in a second terminal while JMeter keeps running in the first.
 
-With load running, go to Splunk and search the last 15 minutes:
+With JMeter running continuously (start it again now if the earlier run finished), open a
+second terminal and take `visits-service` down for a minute:
+
+```bash
+kubectl scale deployment/visits-service -n petclinic --replicas=0
+sleep 60
+kubectl scale deployment/visits-service -n petclinic --replicas=1
+kubectl wait --for=condition=available deployment/visits-service -n petclinic --timeout=90s
+```
+
+!!! danger "Don't skip the last two lines"
+    Same rule as step 9's `discovery-server` demo: leaving `visits-service` at zero
+    replicas means every visit-related request keeps failing until you scale it back up.
+    The `wait` confirms it's genuinely healthy again, not just that the scale command was
+    accepted.
+
+### ✅ Checkpoint — JMeter's own number
+
+Look at the terminal running JMeter. Two of this test plan's seven samplers touch
+`visits-service` — "Visits for pet" and "New visit" — so **2/7 of all traffic fails while
+it's down**, a clean **28.57%**:
 
 ```
-index=k8s_ws_petclinic_logs service.name="customers-service" RuntimeException
+summary =    315 in 00:01:10 = 4.5/s ... Err:    90 (28.57%)
 ```
 
-!!! note "Scoped to `customers-service`, not the whole application"
-    Every service in `k8s_ws_petclinic_logs` reports its own `service.name` — see step 9.
-    The old single-pod version searched everything, because there was only one thing to
-    search. Six services means deciding *which one* you're asking about, the same way you'd
-    scope a query in a real microservices system rather than grep everything at once.
+Recorded 2026-08-29, real run. JMeter knows this precisely because it knows, for every
+request it made, whether that request succeeded — no log parsing required. That's the
+baseline every other view has to reconcile against.
+
+### What Splunk sees
+
+```
+index=k8s_ws_petclinic_logs service.name="api-gateway" earliest=-10m
+| stats count by severity
+```
+
+`api-gateway` is the right place to look, not `visits-service` — a service at zero
+replicas produces no logs of its own, but the gateway trying to reach it very much does:
+
+```
+severity  count
+WARN        222
+ERROR        20
+```
+
+!!! abstract "Learning moment — one failed request, more than one log line"
+    242 log lines against 90 failed requests is not a discrepancy to fix — it's what
+    actually happens when a load balancer discovers a dependency is gone. Read the raw
+    events and two genuinely different things are being logged, at two different
+    severities, for what a user experiences as one failure:
+
+    ```
+    WARN  ... RoundRobinLoadBalancer : No servers available for service: visits-service
+    ERROR ... AbstractErrorWebExceptionHandler : 500 Server Error for HTTP GET "/api/visit/..."
+        io.netty.channel.AbstractChannel$AnnotatedNoRouteToHostException: ...
+    ```
+
+    The `WARN` is the steady-state, fast-fail path: the load balancer already knows there's
+    no instance and returns `503` immediately, without attempting a connection — often more
+    than one `WARN` line per request, from different components reaching the same
+    conclusion. The `ERROR` is a second, transient failure mode: for the first few seconds
+    right after a service goes to zero, some in-flight requests still hit a **stale**
+    registry entry, attempt a real connection, and fail at the OS level with an actual
+    stack trace (`NoRouteToHostException`) — that's the multi-line event step 9 already
+    taught you to recombine.
+
+    This is the same lesson the single-pod version taught with stack-trace line counts —
+    *what you count decides whether you agree* — one level deeper. There, the fix was
+    counting requests instead of log lines. Here, even after multiline recombine has done
+    its job, one user-facing failure can still legitimately produce several log events,
+    because a distributed system's own internal retries and fallbacks are themselves
+    observable events. Neither JMeter's 90 nor Splunk's 242 is wrong. They're answering
+    different questions: "how many of my requests failed" and "how many things did the
+    system log while that was happening." Both matter, and conflating them is the mistake.
 
 !!! tip "Trigger one yourself and find it"
     Open **http://localhost:8080/api/customer/owners/abc** through your tunnel — a
     non-numeric ID `customers-service` can't parse — then note the time and search for
     that event. Following one failure you caused by hand, from click to log line, is a far
     better rehearsal for the Advanced workshops than reading a stream of machine-generated
-    ones. This particular request returns a handled `400`, not a raw exception with a
-    stack trace — see the severity note in step 11 for why that's a meaningfully different
-    case from `RuntimeException` above, and both matter.
-
-### ✅ Checkpoint — do the two systems agree?
-
-*(Depends on the load-generator rewrite — see the warning above. Once JMeter reports a
-real failure rate against the new routes, this checkpoint reconciles it against the
-access log the same way the original did: same query shape, `service.name="customers-service"`
-in place of the old container-name predicate, scoped to whichever routes actually reach
-this service.)*
-
-!!! abstract "Learning moment — what you count decides whether you agree"
-    The obvious version of that query counts every event in the index:
-
-    ```
-    | stats count(eval(searchmatch("RuntimeException"))) as errors, count as total
-    ```
-
-    Run it and you get roughly **3.7%** against JMeter's 7.55%. Nothing is broken.
-
-    `total` counts **log events, not requests**. At this point in the module a 100-line Java
-    stack trace is 100 separate events, because nothing has reassembled it yet. Break the
-    denominator down and it is 93% stack-trace continuation lines:
-
-    ```
-    stack-trace continuation  7821
-    access-log line            451
-    exception header           310
-    other app log               60
-    ```
-
-    Neither side of that ratio corresponds to a request, so the percentage means nothing —
-    and it drifts with stack depth, so you can't fix it by adjusting the expected number.
-
-    Two systems appearing to disagree is far more often a difference in *what is being
-    counted* than a sign that data was dropped. It is also the concrete reason for the next
-    step: the denominator is polluted precisely because stack traces aren't reassembled yet.
-
-Now look closely at **how** the exception arrived. The stack trace is **split across many
-separate events**, one line each. That's the next problem to solve.
+    ones. This particular request returns a handled `400`, not a raw exception — a third,
+    still-different case from the `WARN`/`ERROR` pair above, and the severity note in step
+    11 covers why all three are classified correctly.
 
 ---
 
