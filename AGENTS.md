@@ -65,11 +65,43 @@ here's where things stand:
   object including its `pets` array back, or it looks destructive — the test plan
   round-trips a captured JSON body via a JSR223 PostProcessor rather than risk corrupting
   seed data other exercises depend on.
-- **AW #1 and AW #2 doc prose has NOT been touched yet.** They still reference the old
-  single-pod Deployment name (`${WS_USER}-petclinic-otel-deployment`) and container name
-  (`${WS_USER}-petclinic-otel-container01`) throughout, and AW2's RUM section still
+- **Phase 4 (AW #1 doc rewrite) is done and tested for the sections it touches.**
+  `docs/03-advanced-1/index.md` §3–4 replace the old hand-built `-javaagent` + Dockerfile
+  approach with the OpenTelemetry Operator's admission webhook
+  (`operator.enabled`/`instrumentation.enabled` in `labs/collector/values-aw1.yaml`,
+  patching each Deployment with `instrumentation.opentelemetry.io/inject-java`) — chosen
+  because five of the six services are pulled images with no Dockerfile to edit, so the
+  old approach could not generalize past `customers-service`. Verified live end to end on
+  the spike instance 2026-08-29: identical init container and env wiring on both a
+  hand-built (`customers-service`) and a pulled (`vets-service`) image; JVM metrics and
+  traces both confirmed flowing with real numbers. Two real, non-obvious findings from
+  that spike, both now in the doc and in `values-aw1.yaml`'s comments: (1) `helm upgrade
+  --install` needs a top-level `environment:` string once `operator.enabled` +
+  `tracesEnabled` + `agent.enabled` are all true — a real schema guard; (2) a fresh
+  install can lose a one-time race against the operator's own webhook on the very first
+  `helm upgrade`, self-resolved by waiting for the operator pod Ready and re-running the
+  same command; (3) traces silently land in `k8s_ws_petclinic_logs` instead of
+  `k8s_ws_traces` unless `transform/traces_index` is present — the namespace's own
+  `splunk.com/index` log-routing annotation gets picked up by the shared
+  `k8s_attributes` processor for every signal, not just logs, with zero export error
+  either way. §1's `/oups`-based fault framing (obsolete since Phase 3 removed it) is
+  corrected to point at FW #2 §8's `kubectl scale visits-service --replicas=0` instead.
+  §6's trace example and SPL were captured and verified live, including one caught wrong
+  guess (`resource.attributes{}.value.stringValue` for `service.name` — wrong;
+  `service.name` is its own top-level indexed field, confirmed via `fieldsummary` before
+  it shipped). `scripts/verify-aw1.sh` is rewritten (operator health, per-service
+  injection check on both a built and pulled image, signal-flow checks) and passes
+  10/10 live. **NOT yet done in this pass:** §2/§7/§8's numeric checkpoints (JVM metric
+  family counts, per-route latency tables, dashboard panel counts/screenshots) —
+  believed still accurate (they catalog metric *names*, not per-service instance counts,
+  so six services shouldn't change them) but not independently re-verified against the
+  live six-service topology, and `labs/dashboards/*.xml` themselves are untouched pending
+  the separate dashboards-rework phase. AW #2 doc prose is still fully untouched — it
+  still references the old single-pod Deployment name
+  (`${WS_USER}-petclinic-otel-deployment`) and container name
+  (`${WS_USER}-petclinic-otel-container01}`) throughout, and its RUM section still
   describes the OLD script's Thymeleaf-form journey, not the rewritten one. **Do not run
-  FW #2 through to AW #1 on a live instance right now and expect it to work** — that
+  FW #2 through to AW #2 on a live instance right now and expect it to work** — that
   inconsistency is expected mid-migration, not a bug to chase.
 - **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
   the manifest again:** Config Server defaults to a live, unpinned `git pull` from
@@ -92,7 +124,7 @@ here's where things stand:
   `kubectl apply`, zero restarts, 72 seconds to ready) is the number that went in the
   guide. Don't mistake a noisy validation instance for a real defect; check what's
   actually consuming CPU before concluding the app is at fault.
-- Remaining phases (AW1/AW2 doc rewrite, dashboards, Cilium) are unstarted. See the
+- Remaining phases (AW2 doc rewrite, dashboards rework, Cilium) are unstarted. See the
   migration plan for the full phase breakdown and gates.
 - **Considered and rejected: switching FW1 to Splunk's own reference PetClinic
   microservices deployment** (`splunk/observability-workshop`, "Ninja Workshops" ->
@@ -102,13 +134,14 @@ here's where things stand:
   here. Their reference architecture also adds MySQL, `admin-server`, an in-cluster
   load generator, and public unauthenticated HTTP exposure on ports 80/81/443 — the
   last of which contradicts this repo's deliberate security-group + SSH-tunnel
-  posture and would need rejecting regardless of the rest. **One idea from it is
-  worth revisiting separately, later:** the OTel Operator's annotation-based
+  posture and would need rejecting regardless of the rest. **One idea from it WAS
+  adopted separately, in Phase 4:** the OTel Operator's annotation-based
   auto-instrumentation (`kubectl patch` adding
   `instrumentation.opentelemetry.io/inject-java`) instead of a hand-built
-  `-javaagent` Dockerfile — genuinely simpler for an audience with little app-dev
-  background, and worth evaluating properly before Phase 4 (AW1, "attach the Java
-  agent"), independent of the app/image decision above.
+  `-javaagent` Dockerfile — not just simpler, but the only approach that generalizes
+  once five of the six services are pulled images with no Dockerfile, independent of
+  the app/image decision above. See the Phase 4 bullet for the live-verification
+  details.
 - **In-cluster load generation — deliberately deferred, not rejected.** Considered
   moving JMeter into the cluster as a Deployment (mirroring Splunk's reference
   workshop) to remove participant setup. Decided against making it FW2's primary

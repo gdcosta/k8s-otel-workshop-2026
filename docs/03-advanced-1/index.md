@@ -92,16 +92,10 @@ That's the same plan you set up in
 [FW #2, step 7](../02-foundational-2/index.md#7-set-up-the-load-generator).
 
 !!! note "Why both `-Jloops` and `-Jduration`"
-    One loop is 13 samplers with a 300 ms pause between each, so a loop costs about
-    **4.9 seconds** per thread — FW #2's default run of 50 loops measured `00:04:03`.
-    Scaling from that, 1500 loops is roughly **two hours**, which covers this whole module
-    in one run so you never have to notice it stopped.
-
     The thread group has **two independent ceilings** and stops at whichever is reached
     first: the loop count running out, or `-Jduration` elapsing. The duration is measured
-    from test start, not per thread, so it caps the whole run. Its default is 3600 s —
-    which means `-Jloops` above ~750 buys nothing on its own. Raise both together or
-    neither.
+    from test start, not per thread, so it caps the whole run. Raise both together or
+    neither, so one flag doesn't silently become a no-op.
 
     | Flag | Default | Sets |
     |---|---|---|
@@ -114,10 +108,6 @@ That's the same plan you set up in
 
     On a smaller instance, drop `-Jthreads` to 2 or 3. What the charts need is *sustained*
     traffic, not volume.
-
-    Earlier revisions of this guide claimed `-Jloops=500` lasted "roughly 50 minutes". It
-    lasts about 40, and before the plan was parameterised the flag did nothing at all —
-    every run was 50 loops and about four minutes.
 
 !!! danger "If load stops, the rest of this module looks like broken telemetry"
     When JMeter finishes, the only traffic left is kube-probe hitting `/actuator/health`
@@ -136,16 +126,23 @@ That's the same plan you set up in
     On hardened hosts an idle prompt logs you out after ~15 minutes, which would kill the
     run halfway through the module.
 
-!!! note "Expect roughly 7.7% errors — they're deliberate"
-    One sampler in thirteen calls `/oups`, so 1/13 = **7.69%** is the ceiling and a healthy
-    run sits around 7.4–7.7%. That error rate is the thing you'll go looking for in APM
-    later, so don't try to make it zero. A run that ends on the `-Jduration` cap stops
-    mid-iteration rather than on a clean loop boundary, so the final figure can land
-    slightly either side — that's the arithmetic, not a fault.
+!!! note "This plan has no built-in errors — that's deliberate, and different from earlier revisions"
+    Earlier revisions of this workshop hit a single monolith's `/oups` endpoint on purpose,
+    for a steady 1-in-13 error rate. The current plan targets [FW #2's seven REST
+    samplers](../02-foundational-2/index.md#7-set-up-the-load-generator) across the real
+    microservice API — list/detail/edit/visit flows — and a clean run against a healthy
+    cluster is expected to complete at or near **0% errors**. There is no equivalent of
+    `/oups` baked into this plan.
 
-    APM will report a slightly *lower* figure than the JMeter console (around 6.9%), and
-    Splunk lower still (around 7.1%). They are not disagreeing — each counts a different
-    denominator. That is the whole point of AW #2's closing exercise.
+    If you want the failure case AW #2's closing exercise needs — a real error rate to chase
+    through APM, logs, and JMeter's own console, and to watch three tools disagree on the
+    exact percentage for legitimate reasons — see [FW #2 §8, "Cause a real failure, and find
+    it in Splunk"](../02-foundational-2/index.md#8-cause-a-real-failure-and-find-it-in-splunk):
+    scaling `visits-service` to zero replicas produces a real, reproducible ~28% failure
+    rate from Spring Cloud LoadBalancer's own fast-fail path, with the discrepancy between
+    JMeter's, api-gateway's, and Splunk's counts already walked through there. Re-run that
+    scale-to-zero here if you want AW1's traces and dashboards to show the same failure
+    mode this module's screenshots do.
 
 `curl` still has its place for a quick "is it up?" check:
 
@@ -283,191 +280,176 @@ otelcol      5     ← the Collector's own health
 
 ---
 
-## 3. Attach the Java agent
+## 3. Attach the Java agent — without touching a Dockerfile
 
-!!! abstract "Learning moment — auto-instrumentation"
-    You're about to get detailed traces and JVM metrics out of PetClinic **without changing
-    a line of its code**.
+!!! abstract "Learning moment — auto-instrumentation, and why *this* mechanism"
+    You're about to get detailed traces and JVM metrics out of all six PetClinic services
+    **without changing a line of code, and without rebuilding a single image**.
 
-    The Splunk OpenTelemetry Java agent attaches through the JVM's `-javaagent` mechanism
-    and rewrites bytecode as classes load, wrapping known frameworks — Spring MVC, JDBC,
-    HikariCP — with instrumentation. Because it recognises the framework rather than your
-    code, you get spans for HTTP requests and database calls for free.
+    Earlier revisions of this workshop downloaded `splunk-otel-javaagent.jar` by hand and
+    baked a `-javaagent` flag into a `Dockerfile`. That worked for a single hand-built
+    monolith image. It cannot work here: `customers-service` is the only one of the six
+    PetClinic services built from source in this workshop — `vets-service`,
+    `visits-service`, `api-gateway`, `discovery-server` and `config-server` are pulled
+    prebuilt images (see [FW #1](../01-foundational-1/index.md)), and there is no
+    Dockerfile to edit for any of them.
 
-    That's why it's the usual starting point: broad coverage immediately, with manual
-    instrumentation added later only where you need business-specific detail.
+    Instead this module uses the **OpenTelemetry Operator**, built into the same
+    `splunk-otel-collector` chart you already installed. It runs as a small controller with
+    an admission webhook: when a pod is *created*, the webhook checks for one annotation and,
+    if present, rewrites the pod on the fly — adding an init container that drops the Java
+    agent jar into the pod, and setting `JAVA_TOOL_OPTIONS` plus a full set of `OTEL_*`
+    environment variables before the container ever starts. The agent still attaches through
+    the same JVM `-javaagent` mechanism and instruments the same frameworks — Spring MVC,
+    JDBC, HikariCP — for the same reason: it recognises the framework rather than your code,
+    so spans for HTTP requests and database calls come for free. What's different is *how it
+    gets there*: a one-line annotation on a Deployment, applied identically whether that
+    Deployment's image was built here or pulled from a registry.
 
-```bash
-cd ~/k8s_workshop/petclinic/spring-petclinic/target
-mkdir -p splunk
-curl -fsSL -o splunk/splunk-otel-javaagent.jar \
-  https://github.com/signalfx/splunk-otel-java/releases/download/v2.30.2/splunk-otel-javaagent.jar
-ls -lh splunk/
-```
+### Turn the operator on
 
-Rewrite the `Dockerfile`:
-
-```bash
-JAR=$(ls -1 *.jar | grep -v 'sources\|javadoc\|original\|otel-javaagent' | head -1)
-
-cat > Dockerfile <<EOF
-# syntax=docker/dockerfile:1
-FROM eclipse-temurin:21-jre-noble
-WORKDIR /app
-COPY ${JAR} ./app.jar
-COPY ./splunk/splunk-otel-javaagent.jar ./
-
-ENV OTEL_SERVICE_NAME="${WS_USER}-k8s-petclinic-service"
-ENV OTEL_RESOURCE_ATTRIBUTES="deployment.environment=${WS_USER}-k8s-petclinic-env"
-ENV OTEL_EXPORTER_OTLP_PROTOCOL="grpc"
-ENV OTEL_METRICS_EXPORTER="otlp"
-ENV OTEL_TRACES_EXPORTER="otlp"
-ENV OTEL_LOGS_EXPORTER="none"
-
-CMD ["java", "-javaagent:./splunk-otel-javaagent.jar", "-jar", "app.jar"]
-EOF
-cat Dockerfile
-```
-
-!!! danger "The old `splunk.metrics` flags no longer exist"
-    Earlier revisions of this workshop passed:
-    ```
-    -Dsplunk.metrics.enabled=true -Dsplunk.metrics.endpoint=http://minikube:9943
-    ```
-    **Port 9943 appears nowhere in splunk-otel-java 2.x.** That SignalFx metrics exporter
-    was removed; metrics now travel over OTLP alongside traces.
-
-    The JVM ignores unrecognised `-D` properties **without complaint**, so this fails in the
-    worst possible way: the application starts, traces work, and metrics silently never
-    arrive. If you're adapting an older copy of this guide, delete those flags.
-
-Rebuild. Delete the old image first — you're reusing the `v1` tag:
-
-```bash
-eval $(minikube -p minikube docker-env)
-docker rmi -f ${WS_USER}/petclinic-otel:v1
-docker build --tag ${WS_USER}/petclinic-otel:v1 .
-docker images | grep petclinic
-```
-
-!!! tip "Why delete first"
-    Rebuilding onto an existing tag leaves the previous image untagged and orphaned —
-    it shows as `<none>` in `docker images` and keeps consuming disk. In a lab that means
-    wasted space; in a cluster it means ambiguity about what's actually running.
-
----
-
-## 4. Point the agent at the Collector
-
-The agent needs to know where to send telemetry. The Collector agent runs as a
-**DaemonSet** — one pod per node — so the right target is the node your pod happens to be
-on.
-
-Add these two entries to the container's `env:` list in your manifest — the list you
-already started in [FW #2, step 6](../02-foundational-2/index.md#6-make-the-application-actually-log)
-for the Tomcat access log:
+Add these blocks to `values-workshop.yaml`:
 
 ```yaml
-        - name: SPLUNK_OTEL_AGENT
-          valueFrom:
-            fieldRef:
-              fieldPath: status.hostIP
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: "http://$(SPLUNK_OTEL_AGENT):4317"
+# Required once operator.enabled + tracesEnabled + agent.enabled are all true — the
+# chart refuses to render without it. Becomes the deployment.environment.name
+# resource attribute.
+environment: "${WS_USER}-k8s-petclinic-env"
+
+# CRDs go through this separate key, not operator.crds.create — the chart's own
+# values.yaml warns that flipping operator.crds.create races Helm's own resource
+# ordering.
+operatorcrds:
+  install: true
+
+operator:
+  enabled: true
+
+instrumentation:
+  enabled: true
 ```
 
-??? example "What your manifest should look like around here"
-    `env:` is a sibling of `ports:` inside the container definition — not nested under it.
-    Order within the list doesn't matter; putting the telemetry pair first keeps it
-    readable.
-
-    ```yaml
-          containers:
-          - name: ${WS_USER}-petclinic-otel-container01
-            image: ${WS_USER}/petclinic-otel:v1
-            imagePullPolicy: Never
-            ports:
-            - containerPort: 8080
-            env:
-            # --- AW1: where to send telemetry -------------------------------------
-            # The collector agent is a DaemonSet, so the right target is whichever
-            # node this pod landed on. A pod cannot resolve the `minikube` hosts
-            # entry — that exists only on the host.
-            - name: SPLUNK_OTEL_AGENT
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.hostIP
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://$(SPLUNK_OTEL_AGENT):4317"
-            # --- FW2: access logging, already present ------------------------------
-            - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
-              value: "true"
-            # ... the rest of the SERVER_TOMCAT_ACCESSLOG_* entries
-    ```
-
-??? abstract "Full command sequence — manifest change (no image rebuild)"
+??? abstract "Full command sequence — collector change"
     ```bash
-    cd ~/k8s_workshop/petclinic/k8s_deploy
-    ne ${WS_USER}-petclinic-k8s-manifest.yml     # or: vi
+    cd ~/k8s_workshop/k8s_otel
+    ne values-workshop.yaml          # or: vi values-workshop.yaml
+    sed -i "s|\${WS_USER}|$WS_USER|g" values-workshop.yaml
 
-    # A text editor writes ${WS_USER} literally. Resolve it to your username:
-    sed -i "s|\${WS_USER}|$WS_USER|g" ${WS_USER}-petclinic-k8s-manifest.yml
+    # Validate first. The chart schema is the only check in this workshop that
+    # fails loudly instead of silently doing nothing — this is where a missing
+    # `environment:` key gets caught, before it becomes a confusing runtime gap.
+    helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+      --version 0.158.0 -f values-workshop.yaml --dry-run=client
 
-    kubectl apply -f ${WS_USER}-petclinic-k8s-manifest.yml
-    kubectl rollout status deployment/${WS_USER}-petclinic-otel-deployment --timeout=300s
+    helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+      --version 0.158.0 -f values-workshop.yaml
 
-    # Confirm the pod picked it up
-    kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- env | grep -E '^OTEL|^SPLUNK|^SERVER|^LOGGING'
+    # The operator's admission webhook must be serving before anything gets
+    # patched to use it — a fresh install can lose this race by a few seconds.
+    kubectl wait --for=condition=ready pod \
+      -l app.kubernetes.io/name=operator -n default --timeout=120s
     ```
 
-    Environment and annotation changes do **not** need a new image — they live in the
-    Deployment. Only changes inside the jar require a rebuild.
+!!! danger "A brand-new install can hit the webhook before it's ready"
+    On the very first `helm upgrade --install` with the operator enabled, you may see:
+    ```
+    Error: unable to build kubernetes objects from release manifest: ...
+    failed calling webhook "minstrumentation.kb.io": ... connection refused
+    ```
+    This is Helm applying the `Instrumentation` custom resource — which itself must pass
+    through the operator's admission webhook — before that webhook's pod has finished
+    starting. It is a one-time race on first install, not a config error. Wait for the
+    operator pod to report Ready (the `kubectl wait` above) and re-run the same
+    `helm upgrade` command; it is safe to repeat.
 
-!!! danger "Don't hardcode `http://minikube:4317`"
-    `minikube` is an entry in the **host's** `/etc/hosts`. Cluster DNS knows nothing about
-    it, so a pod cannot resolve that name — the agent fails to export and you get no
-    telemetry with no obvious cause.
+### Tell the operator which services to instrument
 
-    The downward API asks Kubernetes for the IP of the node the pod is scheduled on. It's
-    Splunk's documented pattern, and unlike a hardcoded address it still works when the
-    cluster has more than one node.
+The operator only touches a pod that carries a specific annotation, naming which
+`Instrumentation` resource to use. Nothing is instrumented automatically — you opt each
+service in:
 
 ```bash
-kubectl delete -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
-kubectl apply  -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
-kubectl rollout status deployment/${WS_USER}-petclinic-otel-deployment --timeout=300s
+kubectl patch deployment customers-service -n petclinic -p \
+  '{"spec":{"template":{"metadata":{"annotations":
+    {"instrumentation.opentelemetry.io/inject-java":
+     "default/${WS_USER}-k8s-ws-splunk-otel-collector"}}}}}'
+
+kubectl patch deployment vets-service -n petclinic -p \
+  '{"spec":{"template":{"metadata":{"annotations":
+    {"instrumentation.opentelemetry.io/inject-java":
+     "default/${WS_USER}-k8s-ws-splunk-otel-collector"}}}}}'
 ```
 
-### ✅ Checkpoint — is the agent attached and aimed correctly?
+The annotation's value is `<namespace>/<release-name>-splunk-otel-collector` — the
+`Instrumentation` resource lives in the `default` namespace alongside the Collector itself,
+not in `petclinic` alongside the app. Patching a Deployment's pod template changes the pods
+it produces, so this triggers a real rollout — Kubernetes replaces the running pod with one
+that carries the new annotation, and *that* creation event is what the webhook intercepts.
+
+!!! tip "Two services here, not all six"
+    `customers-service` and `vets-service` are enough to prove the point that matters: one
+    is built from source, the other is a pulled image, and the same annotation instruments
+    both identically. Repeat the same `kubectl patch` for `visits-service`, `api-gateway`,
+    `discovery-server` and `config-server` if you want traces from all six — nothing about
+    the mechanism changes per service.
+
+??? abstract "Full command sequence — patch and confirm"
+    ```bash
+    kubectl patch deployment customers-service -n petclinic -p \
+      '{"spec":{"template":{"metadata":{"annotations":
+        {"instrumentation.opentelemetry.io/inject-java":
+         "default/'"$WS_USER"'-k8s-ws-splunk-otel-collector"}}}}}'
+    kubectl patch deployment vets-service -n petclinic -p \
+      '{"spec":{"template":{"metadata":{"annotations":
+        {"instrumentation.opentelemetry.io/inject-java":
+         "default/'"$WS_USER"'-k8s-ws-splunk-otel-collector"}}}}}'
+
+    kubectl rollout status deployment/customers-service -n petclinic --timeout=120s
+    kubectl rollout status deployment/vets-service -n petclinic --timeout=120s
+    ```
+
+### ✅ Checkpoint — is the agent attached, on both a built and a pulled image?
 
 ```bash
-kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- env | grep -E '^OTEL|^SPLUNK' | sort
-kubectl logs deploy/${WS_USER}-petclinic-otel-deployment | grep -i VersionLogger
+for svc in customers-service vets-service; do
+  echo "--- $svc ---"
+  POD=$(kubectl get pod -n petclinic -l app.kubernetes.io/name=$svc -o jsonpath='{.items[0].metadata.name}')
+  kubectl get pod -n petclinic "$POD" -o jsonpath='{.spec.initContainers[*].name}'; echo
+  kubectl get pod -n petclinic "$POD" -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' \
+    | grep -E '^JAVA_TOOL_OPTIONS|^OTEL_SERVICE_NAME|^OTEL_EXPORTER_OTLP_ENDPOINT'
+done
 ```
 
 <details>
-<summary>Expected output</summary>
+<summary>Expected output — same shape for both services</summary>
 
 ```
-OTEL_EXPORTER_OTLP_ENDPOINT=http://192.168.49.2:4317
-OTEL_EXPORTER_OTLP_PROTOCOL=grpc
-OTEL_LOGS_EXPORTER=none
-OTEL_METRICS_EXPORTER=otlp
-OTEL_RESOURCE_ATTRIBUTES=deployment.environment=${WS_USER}-k8s-petclinic-env
-OTEL_SERVICE_NAME=${WS_USER}-k8s-petclinic-service
-OTEL_TRACES_EXPORTER=otlp
-SPLUNK_OTEL_AGENT=192.168.49.2
+--- customers-service ---
+wait-for-config-server opentelemetry-auto-instrumentation-java
+JAVA_TOOL_OPTIONS= -javaagent:/otel-auto-instrumentation-java-customers-service/javaagent.jar
+OTEL_SERVICE_NAME=customers-service
+OTEL_EXPORTER_OTLP_ENDPOINT=http://${WS_USER}-k8s-ws-splunk-otel-collector-agent.default.svc.cluster.local:4318
 
-[otel.javaagent] INFO ... VersionLogger - opentelemetry-javaagent - version: splunk-2.30.2-otel-2.30.0
+--- vets-service ---
+wait-for-config-server opentelemetry-auto-instrumentation-java
+JAVA_TOOL_OPTIONS= -javaagent:/otel-auto-instrumentation-java-vets-service/javaagent.jar
+OTEL_SERVICE_NAME=vets-service
+OTEL_EXPORTER_OTLP_ENDPOINT=http://${WS_USER}-k8s-ws-splunk-otel-collector-agent.default.svc.cluster.local:4318
 ```
 
-Eight variables, not six. Six of them — including `OTEL_LOGS_EXPORTER` and
-`OTEL_RESOURCE_ATTRIBUTES` — come from the `Dockerfile` you wrote in step 3. Only
-`SPLUNK_OTEL_AGENT` and `OTEL_EXPORTER_OTLP_ENDPOINT` come from the manifest you just
-edited.
-
-`SPLUNK_OTEL_AGENT` resolved to the node IP — that's the downward API working.
+`opentelemetry-auto-instrumentation-java` is a **second** init container, added by the
+webhook alongside FW #1's own `wait-for-config-server` — the operator did not replace
+anything, it inserted itself. `OTEL_SERVICE_NAME` and the OTLP endpoint were derived and
+set automatically; nothing in the Deployment manifest names either value. This is the
+webhook doing exactly what a hand-written Dockerfile did before, generated per-service
+instead of typed once per image.
 </details>
+
+There is no more `SPLUNK_OTEL_AGENT` downward-API dance to wire up by hand — the operator's
+default `Instrumentation` exporter endpoint already resolves to the Collector agent's
+in-cluster Service DNS name, which every pod on every node can reach the same way,
+regardless of which node it lands on. That removes an entire failure mode earlier revisions
+of this module had to troubleshoot around.
 
 Check your load generator from step 1 is still running — the next checkpoint needs live
 traffic. If it has finished, start it again.
@@ -480,7 +462,7 @@ traffic. If it has finished, start it again.
 ```
 
 <details>
-<summary>Expected — 14 JVM metrics</summary>
+<summary>Expected — 14 JVM metrics, times two services</summary>
 
 ```
 jvm.class.count             jvm.gc.duration_sum
@@ -493,8 +475,11 @@ jvm.gc.duration_bucket
 jvm.gc.duration_count
 ```
 
-Plus `db.client.connections.*` from HikariCP — 13 series, and the agent instrumented the
-connection pool without being told about it.
+Plus `db.client.connections.*` from HikariCP on `customers-service` — the agent
+instrumented the connection pool without being told about it. `vets-service` reads
+read-only reference data through Spring Data JPA rather than HikariCP directly, so its
+connection-pool series may differ slightly; the `jvm.*` family is the one to expect
+identically from every instrumented service.
 </details>
 
 !!! warning "There is no metric called `jvm.gc.duration`"
@@ -508,9 +493,9 @@ connection pool without being told about it.
     AW #2.
 
 !!! warning "Searching for `runtime.jvm.threads.states` returns nothing"
-    That was the metric name under the old SignalFx exporter. Agent 2.x emits
-    OpenTelemetry semantic-convention names, all prefixed `jvm.`. If you're following an
-    older guide, this is why its verification query looks like a failure.
+    That was the metric name under the old SignalFx exporter. The agent this operator
+    injects emits OpenTelemetry semantic-convention names, all prefixed `jvm.`. If you're
+    adapting an older guide, this is why its verification query looks like a failure.
 
 ---
 
@@ -548,12 +533,14 @@ Add to `values-workshop.yaml`:
 agent:
   config:
     processors:
-      # Application metrics -> their own index, keyed on the service name
-      # the Java agent reports.
+      # Application metrics -> their own index. Namespace, not service.name —
+      # six services now report six different names (FW #2's label promotion
+      # gives each its own), so namespace membership is the single predicate
+      # that still catches all of them, instrumented or not.
       transform/app_metrics_index:
         metric_statements:
           - set(resource.attributes["com.splunk.index"], "k8s_ws_petclinic_metrics")
-              where resource.attributes["service.name"] == "${WS_USER}-k8s-petclinic-service"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
       # Traces inherit splunk.com/index from the pod. Override it.
       transform/traces_index:
         trace_statements:
@@ -651,7 +638,7 @@ index=k8s_ws_traces | head 1
 ```
 
 <details>
-<summary>What a span looks like (abridged)</summary>
+<summary>What a span looks like (abridged, captured live from `vets-service`)</summary>
 
 A real span carries far more than this — `start_time`, `end_time`, resource attributes for
 the pod and cluster, and a dozen more `attributes.*` keys. The fields below are the ones
@@ -659,28 +646,43 @@ that matter for reading a trace:
 
 ```json
 {
-  "trace_id": "492cb7e438e75c8e6af61681a3ae3e3d",
-  "span_id": "7a2f89de924b5cdb",
+  "trace_id": "49e76ed705113ee14bc8076fbdc9bf99",
+  "span_id": "d93be5d9d83b2e15",
   "parent_span_id": "",
   "name": "GET /actuator/health",
   "attributes": {
     "http.request.method": "GET",
     "http.response.status_code": 200,
     "http.route": "/actuator/health",
-    "client.address": "10.244.0.1"
+    "server.address": "10.244.0.61",
+    "server.port": 8083
   }
 }
 ```
 
 `parent_span_id` is empty, so this is a **root span** — the entry point of a request.
 Spans sharing a `trace_id` form one request's journey; `parent_span_id` links them into a
-tree.
+tree. This one happens to be a `kube-probe` health check rather than user traffic — with six
+independently-probed services now in the cluster, expect a much larger share of root spans
+to be `/actuator/health` than a single-pod deployment ever produced.
+
+Two more span shapes you'll see once you look past the first few: `SPAN_KIND_CLIENT` spans
+named after the HTTP verb (`PUT`, `POST`) for every outbound call the agent didn't
+recognise a route for — Eureka's own heartbeat (`PUT /eureka/apps/<SERVICE>/<instance>`)
+being the most frequent — and, if a service's Zipkin auto-config finds nothing listening on
+`localhost:9411`, a `STATUS_CODE_ERROR` client span for the failed Zipkin export itself. That
+last one is Spring Boot's own bundled tracing trying to also self-export, unrelated to the
+Splunk agent; it's noise, not a sign anything is broken.
 </details>
 
-Find the slowest endpoints:
+`service.name`, `k8s.deployment.name`, `k8s.namespace.name` and the rest of the resource
+attributes arrive as their own top-level indexed fields, separate from the span body's own
+`attributes.*` — no `spath` or manual flattening needed to filter by service:
+
+Find the slowest endpoints for one service:
 
 ```
-index=k8s_ws_traces
+index=k8s_ws_traces "service.name"="customers-service"
 | rename "attributes.http.route" as route
 | where isnotnull(route)
 | eval ms=(end_time-start_time)/1000000
@@ -689,23 +691,49 @@ index=k8s_ws_traces
 | sort -avg_ms
 ```
 
+Or across every instrumented service at once, to compare them side by side:
+
+```
+index=k8s_ws_traces
+| rename "attributes.http.route" as route
+| where isnotnull(route)
+| eval ms=(end_time-start_time)/1000000
+| stats count, avg(ms) as avg_ms, max(ms) as max_ms by "service.name", route
+| eval avg_ms=round(avg_ms,2), max_ms=round(max_ms,2)
+| sort -avg_ms
+```
+
 <details>
-<summary>Expected — slowest routes</summary>
+<summary>Real output, two services instrumented, brief run</summary>
 
 ```
-route                                     count avg_ms max_ms
-/owners                                     132  21.77  61.13
-/owners/{ownerId}                           393  12.32  55.48
-/owners/{ownerId}/pets/{petId}/visits/new   262  11.86  42.08
-/owners/{ownerId}/edit                      262  11.07  72.15
-/vets.html                                  133  10.10  49.59
-/owners/find                                133   8.75  44.15
-/oups                                       130   6.43  33.13
+  service.name         route       count avg_ms max_ms
+----------------- ---------------- ----- ------ ------
+customers-service /owners             15  22.38  26.73
+vets-service      /vets               15  18.22  24.15
+vets-service      /actuator/health    99   5.03  24.41
+customers-service /actuator/health    99   4.77  18.89
 ```
 
-Routes are **templated** — `/owners/{ownerId}`, not `/owners/7` — because the agent reads
-the Spring MVC mapping rather than the raw URL. That's what makes them aggregatable.
+`/owners`, not `/api/customer/owners` — the route the agent reports is the Spring MVC
+mapping **inside** `customers-service` itself, after api-gateway's `StripPrefix=2` has
+already removed the `/api/customer` prefix ([FW #1](../01-foundational-1/index.md)
+covers the gateway's routing rules). Routes are also **templated** —
+`/owners/{ownerId}`, not `/owners/7` — because the agent reads the mapping annotation
+rather than the raw URL, which is what makes them aggregatable across every request to
+the same endpoint regardless of which owner the request happened to be about.
+
+`/actuator/health` dominates the count here because kube-probe hits it every five seconds
+on every pod, all the time — that's expected, not a sign load isn't reaching the app; look
+for the routes JMeter actually drives (`/owners`, `/vets`, and so on) to judge real traffic.
 </details>
+
+!!! note "Exact numbers depend on how many services you instrumented and how long load ran"
+    Step 3 instrumented two services as a minimum proof; the table above will only show
+    routes from whichever Deployments actually carry the injection annotation. Extend the
+    `kubectl patch` from step 3 to `visits-service` and `api-gateway` if you want their
+    routes in this table too — `service.name` is exactly the `OTEL_SERVICE_NAME` each one
+    reports, so nothing else about either query needs to change as you add more.
 
 !!! warning "If the only row is `/actuator/health`, your load generator has stopped"
     kube-probe hits `/actuator/health` every five seconds, so that one route keeps arriving
@@ -907,37 +935,61 @@ If something isn't behaving, compare your files against these rather than re-rea
 steps. They're the exact files this module was tested with.
 
 
-??? example "values-workshop.yaml (collector overlay)"
+The petclinic manifest itself is **unchanged** from FW #2 — the operator instruments pods
+by intercepting their creation, not by adding anything to the Deployment spec, so there is
+no new manifest reference here. See [FW #2's own reference
+section](../02-foundational-2/index.md#reference-complete-files-at-the-end-of-this-module)
+for that file; the six-service topology and the `splunk.com/index` annotation on the
+`petclinic` namespace's pods are exactly as this module found them.
+
+??? example "values-aw1.yaml (collector overlay, end of this module)"
     Placeholders are rendered with `envsubst`; substitute your own values by hand if you prefer.
     ```yaml
-    # Splunk OTel Collector — final workshop overlay (FW2 + AW1 + AW2).
-    # TESTED end to end on 2026-08-19 against chart 0.158.0.
+    # Splunk OTel Collector — Advanced Workshop #1 overlay (logs + metrics + traces).
+    # Snapshot of values-workshop.yaml as it stands at the END of AW #1.
+    # Observability Cloud arrives in AW #2.
     #
-    # Render:  WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) \
-    #          HEC_TOKEN=<hec> \
-    #          envsubst < values-final.yaml > my-values.yaml
-    #
-    # The Observability Cloud ingest token is NOT rendered into the file. It is
-    # passed at install time, straight out of ~/.o11y-token:
+    # Render:  WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) HEC_TOKEN=<hec> \
+    #          envsubst < values-aw1.yaml > my-values.yaml
     # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-    #            --version 0.158.0 -f my-values.yaml \
-    #            --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
+    #            --version 0.158.0 -f my-values.yaml
     #
     # Validate first — the chart schema is the only check that fails loudly:
     #          helm upgrade ... --dry-run=client
+
     # [FW2] Identifies this cluster on every metric, trace and log.
     clusterName: ${WS_USER}-minikube-cluster
 
-    # [AW2] Second destination. Added without changing how anything is collected.
-    splunkObservability:
-      realm: "us1"
-      # accessToken is deliberately absent. It is supplied at install time with
-      #   --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
-      # so the ingest token never lands in a file that gets compared, pasted or
-      # published — which is what makes this reference file safe to share.
-      metricsEnabled: true
-      tracesEnabled: true
-      profilingEnabled: true     # enabled in step 6
+    # [AW1] Required once operator.enabled=true + tracesEnabled=true + agent.enabled=true —
+    # the chart's schema refuses to render without it (a real dry-run error, not a
+    # guess). Sets the newer deployment.environment.name resource attribute.
+    # NOTE this is a DIFFERENT attribute from the deployment.environment (no
+    # ".name") the transform/petclinic_logs block below sets by hand on logs —
+    # that one predates this key and still runs, so logs and traces currently
+    # carry the environment under two different attribute names. Left as-is for
+    # AW1; worth reconciling onto one name if Related Content correlation across
+    # signals turns out to need it.
+    environment: "${WS_USER}-k8s-petclinic-env"
+
+    # [AW1] Auto-instrumentation via the OpenTelemetry Operator's admission
+    # webhook, instead of a hand-built -javaagent + Dockerfile. Chosen because
+    # only customers-service is built from source here — the other five are
+    # pulled prebuilt images with no Dockerfile to edit. The operator injects the
+    # Java agent at pod-creation time regardless of where the image came from;
+    # verified live 2026-08-29 on both customers-service (hand-built) and
+    # vets-service (pulled) — identical init container, identical env wiring.
+    # operator.crds.create must stay false (chart default) — CRD install goes
+    # through the separate operatorcrds.install key below instead, to avoid a
+    # race with Helm's own resource ordering (the chart's own values.yaml docs
+    # this explicitly).
+    operatorcrds:
+      install: true
+
+    operator:
+      enabled: true
+
+    instrumentation:
+      enabled: true
 
     # [FW2] Splunk Enterprise via HEC.  [AW1] adds metricsIndex / tracesIndex.
     splunkPlatform:
@@ -956,20 +1008,32 @@ steps. They're the exact files this module was tested with.
         excludeAgentLogs: false
         # FW2: recombine Java stack traces into a single event.
         # A new event starts at a line beginning with a non-whitespace char.
+        # Scoped to the petclinic namespace only, not a single container — six
+        # services now share this namespace and all of them are Spring Boot, so one
+        # broad rule recombines stack traces from any of them without narrowing by
+        # pod or container name. Nothing else lives in this namespace.
         multilineConfigs:
           - namespaceName:
-              value: default
+              value: petclinic
             podName:
-              value: ${WS_USER}-petclinic-.*
+              value: .*
               useRegexp: true
-            containerName:
-              value: ${WS_USER}-petclinic-otel-container01
             firstEntryRegex: ^[^\s].*
 
-    # FW2: promote pod annotations to event attributes.
-    # tag_name gives a clean field name directly — no regex prefix-stripping needed.
     # [FW2] Promote pod annotations onto events.
+    # tag_name gives a clean field name directly — no regex prefix-stripping needed.
     extraAttributes:
+      # Promotes each pod's app.kubernetes.io/name label to service.name. Scraped
+      # container logs carry no service.name of their own, so this gives each of
+      # the six services a distinct name — customers-service, api-gateway, and so
+      # on — automatically, with no per-service OTTL statement. It does NOT
+      # overwrite service.name on traces: k8sattributes only sets an attribute
+      # that isn't already present, and the Java agent already supplies traces'
+      # service.name. Verified live 2026-08-29.
+      fromLabels:
+        - key: app.kubernetes.io/name
+          from: pod
+          tag_name: service.name
       fromAnnotations:
         - key: docker_image_author
           from: pod
@@ -985,42 +1049,47 @@ steps. They're the exact files this module was tested with.
         - name: events
           mode: watch
 
-    # FW2: OTTL transform.
+    # [FW2] OTTL transforms.  [AW1] metric/trace index routing.
     # NOTE: modern OTTL requires context-prefixed paths (log.* / resource.*).
     # sourcetype and k8s.* are RESOURCE attributes, not log-record attributes.
-    # [FW2] OTTL transforms.  [AW1] metric/trace index routing.
-    # [AW2] service.name + deployment.environment for Related Content.
     agent:
       config:
         processors:
-          # There is no splunk.com/tracesIndex annotation, so traces inherit
-          # splunk.com/index from the pod. Override it for traces only.
-          # Route this application's metrics to their own index, keyed on the
-          # service name the Java agent reports. Same mechanism as traces.
+          # [AW1] App metrics -> their own index. Namespace, not service.name — six
+          # services now report six different names (see extraAttributes.fromLabels
+          # below), so namespace membership is the simpler, single predicate that
+          # still catches all of them. The splunk.com/metricsIndex annotation does
+          # NOT cover OTLP metrics from the app — it only moves cluster-receiver
+          # metrics (k8s.container.*, k8s.pod.phase).
+          # k8s.namespace.name comes from the same k8s_attributes processor
+          # regardless of signal type.
           transform/app_metrics_index:
             metric_statements:
               - set(resource.attributes["com.splunk.index"], "k8s_ws_petclinic_metrics")
-                  where resource.attributes["service.name"] == "${WS_USER}-k8s-petclinic-service"
+                  where resource.attributes["k8s.namespace.name"] == "petclinic"
+
+          # [AW1] There is no splunk.com/tracesIndex annotation, so traces inherit
+          # splunk.com/index from the pod, which overrides splunkPlatform.tracesIndex.
+          # Override it for traces only. Verified live 2026-08-29 on the operator
+          # spike: without this override, every span from the auto-instrumented
+          # Java agent landed silently in k8s_ws_petclinic_logs instead — same
+          # com.splunk.index resource attribute, same k8s_attributes processor,
+          # shared across all three signal pipelines. No exporter error either
+          # way; the only tell was an empty k8s_ws_traces despite the collector's
+          # own otelcol_exporter_sent_spans counter climbing normally.
           transform/traces_index:
             trace_statements:
               - set(resource.attributes["com.splunk.index"], "k8s_ws_traces")
+
           transform/petclinic_logs:
             log_statements:
               - set(resource.attributes["com.splunk.sourcetype"], "petclinic:app:log")
-                  where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
-
-              # Related Content correlates on host.name, service.name and trace_id.
-              # host.name arrives from resource detection; trace_id is printed by the
-              # app and auto-extracted by Splunk. service.name has to be set here.
-              - set(resource.attributes["service.name"], "${WS_USER}-k8s-petclinic-service")
-                  where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
-              - set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
-                  where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+                  where resource.attributes["k8s.namespace.name"] == "petclinic"
 
               - merge_maps(log.attributes,
                   ExtractPatterns(log.body, "(?P<log_level>INFO|WARN|ERROR|DEBUG|TRACE)"),
                   "upsert")
-                  where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+                  where resource.attributes["k8s.namespace.name"] == "petclinic"
 
               # Log Observer's Severity column reads the record's severity_text, NOT a
               # custom attribute. An attribute named "severity" leaves it UNKNOWN.
@@ -1044,7 +1113,7 @@ steps. They're the exact files this module was tested with.
                   ExtractPatterns(log.body,
                     "^\\S+ \\S+ \\S+ \\[[^\\]]+\\] \"(?P<http_method>[A-Z]+) (?P<http_path>\\S+)[^\"]*\" (?P<http_status>\\d{3}) (?P<http_bytes>\\S+) (?P<http_duration_us>\\d+)"),
                   "upsert")
-                  where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+                  where resource.attributes["k8s.namespace.name"] == "petclinic"
               - set(log.severity_text, "INFO")  where log.attributes["http_status"] != nil
               - set(log.severity_text, "WARN")  where IsMatch(log.attributes["http_status"], "^4")
               - set(log.severity_text, "ERROR") where IsMatch(log.attributes["http_status"], "^5")
@@ -1083,114 +1152,14 @@ steps. They're the exact files this module was tested with.
                 - resource/logs
     ```
 
-??? example "petclinic manifest"
-    
-    ```yaml
-    # PetClinic Deployment + NodePort Service — final workshop state.
-    # TESTED 2026-08-19. Render with: WS_USER=<you> envsubst < petclinic-final.yml
-    apiVersion: v1
-    kind: Service
-    metadata:
-      name: ${WS_USER}-petclinic-srv
-    spec:
-      type: NodePort
-      selector:
-        app: ${WS_USER}-petclinic-otel-app
-      ports:
-      - protocol: TCP
-        port: 8080
-        targetPort: 8080
-        nodePort: 30000
-    ---
-    apiVersion: apps/v1
-    kind: Deployment
-    metadata:
-      name: ${WS_USER}-petclinic-otel-deployment
-      labels:
-        app: ${WS_USER}-petclinic-otel-app
-    spec:
-      selector:
-        matchLabels:
-          app: ${WS_USER}-petclinic-otel-app
-      template:
-        metadata:
-          labels:
-            app: ${WS_USER}-petclinic-otel-app
-          annotations:
-            docker_image_author: "${WS_USER}"
-            splunk.com/index: "k8s_ws_petclinic_logs"
-        spec:
-          containers:
-          - name: ${WS_USER}-petclinic-otel-container01
-            image: ${WS_USER}/petclinic-otel:v1
-            imagePullPolicy: Never
-            ports:
-            - containerPort: 8080
-            env:
-            # --- AW1: where to send telemetry -------------------------------------
-            # The collector agent is a DaemonSet, so the right target is whichever
-            # node this pod landed on. A pod cannot resolve the `minikube` hosts
-            # entry — that exists only on the host.
-            - name: SPLUNK_OTEL_AGENT
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.hostIP
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://$(SPLUNK_OTEL_AGENT):4317"
-
-            # --- AW2: AlwaysOn Profiling ------------------------------------------
-            - name: SPLUNK_PROFILER_ENABLED
-              value: "true"
-            - name: SPLUNK_PROFILER_MEMORY_ENABLED
-              value: "true"
-            # Defaults to http/protobuf on :4318, but our endpoint above is gRPC on
-            # :4317. Mismatched, the profiler starts and sends nothing, with no error.
-            - name: SPLUNK_PROFILER_OTLP_PROTOCOL
-              value: "grpc"
-
-            # --- AW2: trace context in the log line --------------------------------
-            # The agent already puts trace_id/span_id in the MDC; Spring Boot's
-            # default pattern just never prints them. Without this there is no
-            # trace_id on the logs and APM <-> Logs correlation cannot work.
-            - name: LOGGING_PATTERN_LEVEL
-              value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
-
-            # --- FW2: access logging -----------------------------------------------
-            # PetClinic logs nothing for successful requests — only startup and
-            # exceptions. One line per request is what makes the log exercises work.
-            # directory=/dev + prefix=stdout + empty suffix resolves to /dev/stdout.
-            - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
-              value: "true"
-            - name: SERVER_TOMCAT_ACCESSLOG_DIRECTORY
-              value: "/dev"
-            - name: SERVER_TOMCAT_ACCESSLOG_PREFIX
-              value: "stdout"
-            - name: SERVER_TOMCAT_ACCESSLOG_SUFFIX
-              value: ""
-            - name: SERVER_TOMCAT_ACCESSLOG_FILE_DATE_FORMAT
-              value: ""
-            - name: SERVER_TOMCAT_ACCESSLOG_BUFFERED
-              value: "false"
-            # Single quotes: the pattern contains double quotes.
-            - name: SERVER_TOMCAT_ACCESSLOG_PATTERN
-              value: '%h %l %u %t "%r" %s %b %D'
-            readinessProbe:
-              httpGet:
-                path: /actuator/health
-                port: 8080
-              initialDelaySeconds: 10
-              periodSeconds: 5
-              failureThreshold: 30
-    ```
-
 !!! tip "Diff instead of re-reading"
     ```bash
     curl -fsSL -o /tmp/reference.yaml \
-      https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/collector/values-final.yaml
+      https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/collector/values-aw1.yaml
     diff <(sed 's/[[:space:]]*$//' ~/k8s_workshop/k8s_otel/values-workshop.yaml) \
          <(sed 's/[[:space:]]*$//' /tmp/reference.yaml)
     ```
-    The reference is the **final** state after AW #2. Each top-level section is tagged
+    Each top-level section is tagged
     `[FW2]`, `[AW1]` or `[AW2]` with the module that introduces it, so ignore anything
     tagged for a module you haven't reached yet.
 
@@ -1204,17 +1173,52 @@ steps. They're the exact files this module was tested with.
 
 ## Troubleshooting
 
+??? failure "`helm upgrade` fails with `environment must be a non-empty string`"
+    ```
+    Error: execution error at (splunk-otel-collector/templates/operator/instrumentation.yaml:2:4):
+    When operator.enabled=true, (splunkPlatform.tracesEnabled=true ...), (agent.enabled=true ...),
+    then environment must be a non-empty string
+    ```
+    The top-level `environment:` key from step 3 is missing or empty. Add it — this is a real
+    chart-schema guard, not something you can work around another way.
+
+??? failure "`helm upgrade` fails with `no matches for kind Instrumentation` or a webhook connection refused"
+    Two different first-install races, both one-time:
+    - `no matches for kind "Instrumentation"` means the CRDs aren't installed yet — check
+      `operatorcrds.install: true` is set (not `operator.crds.create`, which must stay
+      `false`).
+    - `failed calling webhook "minstrumentation.kb.io": ... connection refused` means Helm
+      applied the `Instrumentation` resource before the operator pod's webhook was ready.
+      `kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=operator -n default
+      --timeout=120s`, then re-run the same `helm upgrade` command.
+
+??? failure "A patched Deployment's pods show no `opentelemetry-auto-instrumentation-java` init container"
+    Confirm the annotation actually landed and the pod actually rolled:
+    ```bash
+    kubectl get deployment <service> -n petclinic \
+      -o jsonpath='{.spec.template.metadata.annotations}'
+    kubectl get pods -n petclinic -l app.kubernetes.io/name=<service>
+    ```
+    The annotation value must be `<namespace>/<release-name>-splunk-otel-collector` — the
+    `Instrumentation` resource lives in `default` next to the Collector itself, not in
+    `petclinic`. A typo there (or the release name, if you didn't install with
+    `${WS_USER}-k8s-ws`) fails silently: the pod rolls, but the webhook finds no matching
+    resource to inject and leaves the pod alone.
+
 ??? failure "No `jvm.*` metrics anywhere"
-    Work outward. Is the agent attached?
+    Work outward. Is the agent attached to this pod at all?
     ```bash
-    kubectl logs deploy/${WS_USER}-petclinic-otel-deployment | grep -i VersionLogger
+    kubectl get pod -n petclinic <pod-name> -o jsonpath='{.spec.initContainers[*].name}'
     ```
-    Is it aimed at a reachable endpoint?
+    Look for `opentelemetry-auto-instrumentation-java` in the list. If it's missing, see the
+    annotation failure above. If it's present, check the endpoint it was given:
     ```bash
-    kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- env | grep OTLP
+    kubectl get pod -n petclinic <pod-name> \
+      -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' \
+      | grep OTEL_EXPORTER_OTLP_ENDPOINT
     ```
-    `OTEL_EXPORTER_OTLP_ENDPOINT` must be an **IP**, not `minikube`. If you see a hostname,
-    the downward API env block from step 4 isn't applied.
+    It should resolve to the Collector agent's in-cluster Service DNS name — no downward-API
+    IP substitution to check here, unlike the old Dockerfile approach.
 
 ??? failure "Traces exported but `k8s_ws_traces` is empty"
     The `splunk.com/index` annotation is overriding the index — see the warning in step 5.
@@ -1223,17 +1227,20 @@ steps. They're the exact files this module was tested with.
     | mstats sum(otelcol_exporter_sent_spans) WHERE index=k8s_ws_metrics by exporter
     ```
     A large number there with an empty index means routing, not collection, is the problem.
+    This is exactly the failure mode this module's own `transform/traces_index` override
+    exists to prevent — confirm it's actually in your values file and reached the running
+    config (next item).
 
-??? failure "App metrics still in `k8s_ws_metrics`"
-    The OTTL condition isn't matching. Confirm the service name the agent actually reports:
-    ```bash
-    kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- env | grep OTEL_SERVICE_NAME
-    ```
-    It must match the `where` clause exactly. Then confirm the transform reached the
-    running config:
+??? failure "App metrics still landing outside `k8s_ws_petclinic_metrics`"
+    Confirm the transform reached the running config:
     ```bash
     kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
       -o go-template='{{index .data "relay"}}' | grep -A5 app_metrics_index
+    ```
+    If it's there but not matching, confirm the namespace the metric actually carries — the
+    predicate is `k8s.namespace.name == "petclinic"`, not a per-service name:
+    ```
+    | mcatalog values(k8s.namespace.name) WHERE index=k8s_ws_metrics metric_name=jvm.memory.used
     ```
 
 ??? failure "`mcatalog` returns nothing but data exists"

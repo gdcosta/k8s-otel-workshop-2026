@@ -102,9 +102,8 @@ agent:
       # still catches all of them. The splunk.com/metricsIndex annotation does
       # NOT cover OTLP metrics from the app — it only moves cluster-receiver
       # metrics (k8s.container.*, k8s.pod.phase).
-      # NOT independently verified live for metrics/traces — logs were;
       # k8s.namespace.name comes from the same k8s_attributes processor
-      # regardless of signal type, but confirm when AW1 is rebuilt.
+      # regardless of signal type.
       transform/app_metrics_index:
         metric_statements:
           - set(resource.attributes["com.splunk.index"], "k8s_ws_petclinic_metrics")
@@ -112,7 +111,13 @@ agent:
 
       # [AW1] There is no splunk.com/tracesIndex annotation, so traces inherit
       # splunk.com/index from the pod, which overrides splunkPlatform.tracesIndex.
-      # Override it for traces only.
+      # Override it for traces only. Verified live 2026-08-29 on the operator
+      # spike: without this override, every span from the auto-instrumented
+      # Java agent landed silently in k8s_ws_petclinic_logs instead — same
+      # com.splunk.index resource attribute, same k8s_attributes processor,
+      # shared across all three signal pipelines. No exporter error either
+      # way; the only tell was an empty k8s_ws_traces despite the collector's
+      # own otelcol_exporter_sent_spans counter climbing normally.
       transform/traces_index:
         trace_statements:
           - set(resource.attributes["com.splunk.index"], "k8s_ws_traces")
