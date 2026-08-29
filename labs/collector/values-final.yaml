@@ -44,20 +44,33 @@ logsCollection:
     excludeAgentLogs: false
     # FW2: recombine Java stack traces into a single event.
     # A new event starts at a line beginning with a non-whitespace char.
+    # Scoped to the petclinic namespace only, not a single container — six
+    # services now share this namespace and all of them are Spring Boot, so one
+    # broad rule recombines stack traces from any of them without narrowing by
+    # pod or container name. Nothing else lives in this namespace.
     multilineConfigs:
       - namespaceName:
-          value: default
+          value: petclinic
         podName:
-          value: ${WS_USER}-petclinic-.*
+          value: .*
           useRegexp: true
-        containerName:
-          value: ${WS_USER}-petclinic-otel-container01
         firstEntryRegex: ^[^\s].*
 
 # FW2: promote pod annotations to event attributes.
 # tag_name gives a clean field name directly — no regex prefix-stripping needed.
 # [FW2] Promote pod annotations onto events.
 extraAttributes:
+  # Promotes each pod's app.kubernetes.io/name label to service.name. Scraped
+  # container logs carry no service.name of their own, so this gives each of
+  # the six services a distinct name — customers-service, api-gateway, and so
+  # on — automatically, with no per-service OTTL statement. It does NOT
+  # overwrite service.name on traces: k8sattributes only sets an attribute
+  # that isn't already present, and the Java agent already supplies traces'
+  # service.name. Verified live 2026-08-29.
+  fromLabels:
+    - key: app.kubernetes.io/name
+      from: pod
+      tag_name: service.name
   fromAnnotations:
     - key: docker_image_author
       from: pod
@@ -83,32 +96,40 @@ agent:
     processors:
       # There is no splunk.com/tracesIndex annotation, so traces inherit
       # splunk.com/index from the pod. Override it for traces only.
-      # Route this application's metrics to their own index, keyed on the
-      # service name the Java agent reports. Same mechanism as traces.
+      # Route this application's metrics to their own index. Namespace, not
+      # service.name — six services now report six different names (see
+      # extraAttributes.fromLabels below), so namespace membership is the
+      # simpler, single predicate that still catches all of them.
+      # NOT independently verified live for metrics/traces — logs were;
+      # k8s.namespace.name comes from the same k8s_attributes processor
+      # regardless of signal type, but confirm when AW1 is rebuilt.
       transform/app_metrics_index:
         metric_statements:
           - set(resource.attributes["com.splunk.index"], "k8s_ws_petclinic_metrics")
-              where resource.attributes["service.name"] == "${WS_USER}-k8s-petclinic-service"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
       transform/traces_index:
         trace_statements:
           - set(resource.attributes["com.splunk.index"], "k8s_ws_traces")
       transform/petclinic_logs:
         log_statements:
           - set(resource.attributes["com.splunk.sourcetype"], "petclinic:app:log")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
 
           # Related Content correlates on host.name, service.name and trace_id.
-          # host.name arrives from resource detection; trace_id is printed by the
-          # app and auto-extracted by Splunk. service.name has to be set here.
-          - set(resource.attributes["service.name"], "${WS_USER}-k8s-petclinic-service")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+          # host.name arrives from resource detection; trace_id is printed by
+          # the app and auto-extracted by Splunk. service.name itself is NOT
+          # set here anymore — extraAttributes.fromLabels below promotes each
+          # pod's own name instead, and k8s_attributes runs before this
+          # transform, so a set() here would unconditionally overwrite that
+          # per-service value with one shared string. deployment.environment
+          # has no such per-service meaning, so it stays a single value.
           - set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
 
           - merge_maps(log.attributes,
               ExtractPatterns(log.body, "(?P<log_level>INFO|WARN|ERROR|DEBUG|TRACE)"),
               "upsert")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
 
           # Log Observer's Severity column reads the record's severity_text, NOT a
           # custom attribute. An attribute named "severity" leaves it UNKNOWN.
@@ -132,7 +153,7 @@ agent:
               ExtractPatterns(log.body,
                 "^\\S+ \\S+ \\S+ \\[[^\\]]+\\] \"(?P<http_method>[A-Z]+) (?P<http_path>\\S+)[^\"]*\" (?P<http_status>\\d{3}) (?P<http_bytes>\\S+) (?P<http_duration_us>\\d+)"),
               "upsert")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
           - set(log.severity_text, "INFO")  where log.attributes["http_status"] != nil
           - set(log.severity_text, "WARN")  where IsMatch(log.attributes["http_status"], "^4")
           - set(log.severity_text, "ERROR") where IsMatch(log.attributes["http_status"], "^5")

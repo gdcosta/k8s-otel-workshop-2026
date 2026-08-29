@@ -373,12 +373,17 @@ index=k8s_ws_logs sourcetype="kube:container:kube-apiserver" "user.username"="sy
 
 ## 6. Make the application actually log
 
+!!! abstract "Why `customers-service`, and not all six"
+    All six services are Spring Boot, so this applies identically to any of them — the
+    lesson only needs one. `customers-service` is the one you built by hand in FW #1, so
+    it's the one you already understand best.
+
 Before searching, there's a problem worth discovering yourself. Run some traffic, then look
 at what the container emitted:
 
 ```bash
-for i in $(seq 1 30); do curl -s -o /dev/null http://minikube:30000/; done
-kubectl logs deploy/${WS_USER}-petclinic-otel-deployment --since=1m | wc -l
+for i in $(seq 1 30); do curl -s -o /dev/null http://minikube:30000/api/customer/owners; done
+kubectl logs deploy/customers-service -n petclinic --since=1m | wc -l
 ```
 
 **Zero.** Thirty successful requests produced no log lines at all.
@@ -428,10 +433,12 @@ container output. Add to the container's `env:` block in your manifest:
 ```
 
 ??? example "What your manifest should look like around here"
-    Your manifest has **no `env:` key at all** at this point — FW #1's file doesn't create
-    one, and nothing before this step has needed it. This is the first env entry in the
-    whole workshop, so add `env:` as a new sibling of `ports:` inside the container spec,
-    then the seven access-log variables under it as its first list items.
+    Your manifest has six `Deployment` blocks in it now, one per service — find
+    `customers-service`'s specifically (`name: customers-service`, `containerPort: 8081`).
+    It has **no `env:` key at all** at this point — FW #1's file doesn't create one, and
+    nothing before this step has needed it. Add `env:` as a new sibling of `ports:` inside
+    *that one container spec only*, then the seven access-log variables under it as its
+    first list items. The other five services are untouched by this step.
 
     The OTel telemetry variables (`SPLUNK_OTEL_AGENT`, `OTEL_EXPORTER_OTLP_ENDPOINT`) you'll
     see in the reference manifest at the bottom of this page don't exist yet — those are
@@ -440,7 +447,7 @@ container output. Add to the container's `env:` block in your manifest:
 
     ```yaml
           ports:
-          - containerPort: 8080
+          - containerPort: 8081
           env:
           # --- FW2: access logging -----------------------------------------------
           # PetClinic logs nothing for successful requests — only startup and
@@ -472,11 +479,16 @@ container output. Add to the container's `env:` block in your manifest:
     sed -i "s|\${WS_USER}|$WS_USER|g" ${WS_USER}-petclinic-k8s-manifest.yml
 
     kubectl apply -f ${WS_USER}-petclinic-k8s-manifest.yml
-    kubectl rollout status deployment/${WS_USER}-petclinic-otel-deployment --timeout=300s
+    kubectl rollout status deployment/customers-service -n petclinic --timeout=180s
 
     # Confirm the pod picked it up
-    kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- env | grep -E '^OTEL|^SPLUNK|^SERVER|^LOGGING'
+    kubectl exec deploy/customers-service -n petclinic -- env | grep -E '^OTEL|^SPLUNK|^SERVER|^LOGGING'
     ```
+
+    `kubectl apply` re-applies the **whole file** — all six Deployments — but only
+    `customers-service`'s pod actually restarts, because that's the only one whose spec
+    changed. The other five are untouched, and `rollout status` only needs to watch the
+    one that did.
 
     Environment and annotation changes do **not** need a new image — they live in the
     Deployment. Only changes inside the jar require a rebuild.
@@ -491,26 +503,32 @@ container output. Add to the container's `env:` block in your manifest:
 
 ```bash
 kubectl apply -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
-kubectl rollout status deployment/${WS_USER}-petclinic-otel-deployment
+kubectl rollout status deployment/customers-service -n petclinic
 ```
 
 ### ✅ Checkpoint
 
 ```bash
-for i in $(seq 1 30); do curl -s -o /dev/null http://minikube:30000/; done
-kubectl logs deploy/${WS_USER}-petclinic-otel-deployment --since=1m | tail -3
+for i in $(seq 1 30); do curl -s -o /dev/null http://minikube:30000/api/customer/owners; done
+kubectl logs deploy/customers-service -n petclinic --since=1m | tail -3
 ```
 
 <details>
 <summary>Expected — one line per request</summary>
 
 ```
-10.244.0.1 - - [19/Aug/2026:21:26:38 +0000] "GET / HTTP/1.1" 200 3056 21630
-10.244.0.1 - - [19/Aug/2026:21:26:38 +0000] "GET /owners?lastName= HTTP/1.1" 200 5015 72495
+10.244.0.20 - - [29/Aug/2026:19:55:51 +0000] "GET /owners HTTP/1.1" 200 2359 789292
+10.244.0.20 - - [29/Aug/2026:19:55:52 +0000] "GET /owners HTTP/1.1" 200 2359 178242
 ```
 
 One line per request — thirty of them, against zero before. The trailing number is the
 response time in microseconds, which becomes useful shortly.
+
+!!! note "The path is `/owners`, not `/api/customer/owners`"
+    You curled `/api/customer/owners`; Tomcat logged `/owners`. `api-gateway` strips the
+    first two path segments before forwarding — that's `StripPrefix=2` on its route — so
+    this is what actually reached `customers-service`. The source IP is the gateway pod's,
+    not your own; every request to this service arrives through it, never directly.
 </details>
 
 ---
@@ -637,45 +655,45 @@ Stop early with ++ctrl+c++ if you need to. To run longer, raise the loop count:
 
 ## 8. Find the error in Splunk
 
+!!! warning "This section is incomplete — waiting on the load-generator rewrite"
+    Everything below the query itself depends on JMeter hitting a deliberate fault path
+    the way the old single-pod test plan hit `/oups` — and the microservices topology has
+    no equivalent yet. That's separate work (rewriting `petclinic_test_plan.jmx` against
+    the gateway's real routes, and choosing a fault to replace `/oups` — most likely
+    scaling a backing service to zero to trip the gateway's circuit breaker, which is a
+    genuinely more realistic failure than a hardcoded exception endpoint). Until that
+    lands, the reconciliation numbers below are **not filled in**, on purpose, rather than
+    invented to look plausible — see `AGENTS.md`'s "tested, not transcribed" rule. The
+    query itself is correct today; only the expected output is pending.
+
 With load running, go to Splunk and search the last 15 minutes:
 
 ```
-index=k8s_ws_logs "k8s.container.name"="${WS_USER}-petclinic-otel-container01" RuntimeException
+index=k8s_ws_petclinic_logs service.name="customers-service" RuntimeException
 ```
 
-You should see a steady stream of exceptions — the `/oups` endpoint firing on every pass of
-the test plan.
+!!! note "Scoped to `customers-service`, not the whole application"
+    Every service in `k8s_ws_petclinic_logs` reports its own `service.name` — see step 9.
+    The old single-pod version searched everything, because there was only one thing to
+    search. Six services means deciding *which one* you're asking about, the same way you'd
+    scope a query in a real microservices system rather than grep everything at once.
 
 !!! tip "Trigger one yourself and find it"
-    JMeter's errors all look alike. Open **http://localhost:8080/oups** in the browser
-    through your tunnel — you'll get PetClinic's error page — then note the time and search
-    for that single exception. Following one failure you caused by hand, from click to
-    stack trace, is a far better rehearsal for the Advanced workshops than reading a stream
-    of identical machine-generated ones.
+    Open **http://localhost:8080/api/customer/owners/abc** through your tunnel — a
+    non-numeric ID `customers-service` can't parse — then note the time and search for
+    that event. Following one failure you caused by hand, from click to log line, is a far
+    better rehearsal for the Advanced workshops than reading a stream of machine-generated
+    ones. This particular request returns a handled `400`, not a raw exception with a
+    stack trace — see the severity note in step 11 for why that's a meaningfully different
+    case from `RuntimeException` above, and both matter.
 
 ### ✅ Checkpoint — do the two systems agree?
 
-JMeter reports roughly **7.7%** failures. Ask Splunk the same question — but ask it of the
-*access log*, which is one line per request, exactly like JMeter's counter:
-
-```
-index=k8s_ws_logs "k8s.container.name"="${WS_USER}-petclinic-otel-container01"
-| rex "\" (?<status>\d{3}) "
-| where isnotnull(status)
-| stats count(eval(status>=500)) as errors, count as requests
-| eval error_pct = round(errors*100/requests, 2)
-```
-
-```
-errors  requests  error_pct
-    30       458       6.55
-```
-
-Within about a point of JMeter, over a shorter window. That's agreement. The same failures
-are now visible in two places: the tool that *caused* them and the platform that *collected*
-them. In the Advanced workshops a third view is added — APM's service error rate — and all
-three land within a point of each other (measured over one window: JMeter 7.69%, Splunk
-7.10%, APM 6.90%).
+*(Depends on the load-generator rewrite — see the warning above. Once JMeter reports a
+real failure rate against the new routes, this checkpoint reconciles it against the
+access log the same way the original did: same query shape, `service.name="customers-service"`
+in place of the old container-name predicate, scoped to whichever routes actually reach
+this service.)*
 
 !!! abstract "Learning moment — what you count decides whether you agree"
     The obvious version of that query counts every event in the index:
@@ -727,14 +745,26 @@ logsCollection:
     excludeAgentLogs: false
     multilineConfigs:
       - namespaceName:
-          value: default
+          value: petclinic
         podName:
-          value: ${WS_USER}-petclinic-.*
+          value: .*
           useRegexp: true
-        containerName:
-          value: ${WS_USER}-petclinic-otel-container01
         firstEntryRegex: ^[^\s].*
 ```
+
+!!! abstract "Learning moment — why namespace, and not one container"
+    The old single-pod version scoped this to one exact container name, because there was
+    exactly one container to scope to. All six services here share the `petclinic`
+    namespace and none of them are anywhere else, so `namespaceName: petclinic` +
+    `podName: .*` catches every one of them with a single rule — and nothing outside the
+    namespace, so the Kubernetes system pods and Splunk's own logs are untouched. There's
+    no `containerName` field at all: it isn't narrowing anything the namespace scope
+    doesn't already narrow, so it's simply not there.
+
+    Verified live, 2026-08-29: scaling `discovery-server` to zero forces a real multi-line
+    `TransportException` in the other five services' Eureka clients. Every one of those
+    traces — 44, 46 and 50 lines observed — recombined into a single event, confirming this
+    rule applies across the whole namespace, not just one service.
 
 ??? example "What your values file should look like around here"
     `multilineConfigs` is a sibling of `excludeAgentLogs`, both nested under `logsCollection.containers`.
@@ -744,16 +774,16 @@ logsCollection:
     logsCollection:
       containers:
         excludeAgentLogs: false
-        # FW2: recombine Java stack traces into a single event.
-        # A new event starts at a line beginning with a non-whitespace char.
+        # Scoped to the petclinic namespace only, not a single container — six
+        # services now share this namespace and all of them are Spring Boot, so
+        # one broad rule recombines stack traces from any of them. Nothing else
+        # lives in this namespace.
         multilineConfigs:
           - namespaceName:
-              value: default
+              value: petclinic
             podName:
-              value: ${WS_USER}-petclinic-.*
+              value: .*
               useRegexp: true
-            containerName:
-              value: ${WS_USER}-petclinic-otel-container01
             firstEntryRegex: ^[^\s].*
     ```
 
@@ -788,25 +818,58 @@ helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector
 kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent
 ```
 
-If your JMeter run has finished, start it again in your second terminal — you need live
-traffic for the next search. Then:
+Now produce a real multi-line stack trace to prove the recombine works. Every service here
+is a Eureka client, and Eureka clients log a full `TransportException` when they can't
+reach the registry — so briefly taking `discovery-server` down is a reliable, deterministic
+way to generate one:
+
+```bash
+kubectl scale deployment/discovery-server -n petclinic --replicas=0
+sleep 35
+kubectl scale deployment/discovery-server -n petclinic --replicas=1
+kubectl wait --for=condition=available deployment/discovery-server -n petclinic --timeout=90s
+```
+
+Then:
 
 ```
-index=k8s_ws_logs RuntimeException
+index=k8s_ws_petclinic_logs earliest=-5m
 | eval lines=mvcount(split(_raw,"
-")) | stats count by lines
+")) | stats count by lines | sort -lines
 ```
+
+<details>
+<summary>Recorded, 2026-08-29</summary>
+
+```
+lines  count
+   50      4
+   46      6
+   44      4
+    2    229
+```
+
+Events at 44–50 lines are the recombined `TransportException` traces — one Splunk event
+per exception, not one per line. Yours will differ in exact line count and how many
+services logged one, but the shape is the same: a handful of long events standing well
+apart from the flood of ordinary 1–2 line entries.
+</details>
+
+!!! danger "Don't leave `discovery-server` at 0 replicas"
+    The last command above brings it back and waits for it to report ready. If you stop
+    partway through, every other service's Eureka client will keep retrying and logging
+    the same exception until you scale it back up.
 
 ### ✅ Checkpoint
 
-Events with ~100 lines instead of dozens of 1-line events. The full trace is now one
-searchable record.
+Events with dozens of lines instead of a flood of 1–2 line events. The full trace is now
+one searchable record.
 
 ---
 
-## 10. Attach pod metadata with annotations
+## 10. Pod metadata, and why the annotation is already there
 
-!!! abstract "Learning moment — annotations vs labels
+!!! abstract "Learning moment — annotations vs labels"
     **Labels** are for *selection* — Kubernetes uses them to find objects. **Annotations**
     are for *metadata* — arbitrary information attached to an object for tools to read.
 
@@ -814,50 +877,68 @@ searchable record.
     tag telemetry with ownership, cost centre, or application version without touching
     application code.
 
-Add annotations to the pod template in your manifest:
+Look at any pod template in your manifest — every one of the six already carries this:
 
 ```yaml
-  template:
-    metadata:
-      labels:
-        app: ${WS_USER}-petclinic-otel-app
       annotations:
         docker_image_author: "${WS_USER}"
         splunk.com/index: "k8s_ws_petclinic_logs"
 ```
 
-??? example "What your manifest should look like around here"
-    Annotations go on the **pod template** (`spec.template.metadata`), not on the Deployment's own metadata. This is the single most common mistake in this step.
+!!! note "Why it's already there, and what that means"
+    In the single-pod version of this workshop, this was the step where you added these
+    annotations for the first time. Here, FW #1's manifest already carries them on all six
+    services — index routing has genuinely been working since before this module started;
+    you just haven't been told yet, or asked to verify it. `docker_image_author` is a plain
+    Kubernetes annotation, inert on its own. `splunk.com/index` is different: the Splunk
+    OTel Collector chart recognises that specific key natively and routes the event's
+    index accordingly, with no Collector-side configuration required at all — that's why
+    `index=k8s_ws_petclinic_logs` has had data in it since step 6, and every search since
+    has already been reading from the right place.
 
-    ```yaml
-        matchLabels:
-          app: ${WS_USER}-petclinic-otel-app
-      template:
-        metadata:
-          labels:
-            app: ${WS_USER}-petclinic-otel-app
-          annotations:
-            docker_image_author: "${WS_USER}"
-            splunk.com/index: "k8s_ws_petclinic_logs"
-    ```
+### ✅ Checkpoint — confirm it, don't add it
 
-??? abstract "Full command sequence — manifest change (no image rebuild)"
-    ```bash
-    cd ~/k8s_workshop/petclinic/k8s_deploy
-    ne ${WS_USER}-petclinic-k8s-manifest.yml     # or: vi
+```
+| tstats count where index=k8s_ws_logs OR index=k8s_ws_petclinic_logs by index
+```
 
-    # A text editor writes ${WS_USER} literally. Resolve it to your username:
-    sed -i "s|\${WS_USER}|$WS_USER|g" ${WS_USER}-petclinic-k8s-manifest.yml
+Both indexes have data. `k8s_ws_petclinic_logs` isn't new in this step — it's been
+populated the whole time.
 
-    kubectl apply -f ${WS_USER}-petclinic-k8s-manifest.yml
-    kubectl rollout status deployment/${WS_USER}-petclinic-otel-deployment --timeout=300s
+### See the granularity: remove it from one service
 
-    # Confirm the pod picked it up
-    kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- env | grep -E '^OTEL|^SPLUNK|^SERVER|^LOGGING'
-    ```
+`docker_image_author` still needs Collector-side config to promote it onto events — that
+part genuinely is new. But first, a more useful demonstration than adding an annotation
+that's everywhere by default: what happens when only *some* pods carry `splunk.com/index`?
+A single application can never show this — every request hits the same pod. Six services
+can.
 
-    Environment and annotation changes do **not** need a new image — they live in the
-    Deployment. Only changes inside the jar require a rebuild.
+```bash
+kubectl patch deployment vets-service -n petclinic --type=json \
+  -p='[{"op":"remove","path":"/spec/template/metadata/annotations/splunk.com~1index"}]'
+kubectl rollout status deployment/vets-service -n petclinic --timeout=90s
+
+for i in $(seq 1 15); do curl -s -o /dev/null http://minikube:30000/api/vet/vets; done
+```
+
+```
+index=k8s_ws_logs service.name="vets-service" | stats count
+index=k8s_ws_petclinic_logs service.name="vets-service" | stats count
+```
+
+`vets-service`'s new events land in `k8s_ws_logs`, the default — everything else still
+lands in `k8s_ws_petclinic_logs`. Nothing else changed: same Collector, same OTTL, same
+five other services untouched. Index routing is decided **per pod**, and this is what that
+looks like in practice, not just in theory.
+
+Put it back before continuing:
+
+```bash
+kubectl apply -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
+kubectl rollout status deployment/vets-service -n petclinic --timeout=90s
+```
+
+### Now the part that's actually new: promoting `docker_image_author`
 
 Tell the Collector to pick that annotation up — add to `values-workshop.yaml`:
 
@@ -874,16 +955,13 @@ extraAttributes:
     `tag_name` sets the final name directly, so no post-processing is needed to strip the
     prefix.
 
-Apply both:
-
 ```bash
-kubectl apply -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
 helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
   --version 0.158.0 -f values-workshop.yaml
-kubectl rollout status deployment/${WS_USER}-petclinic-otel-deployment
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
 ```
 
-### ✅ Checkpoint — two things changed at once
+### ✅ Checkpoint
 
 ```
 | tstats count where index=k8s_ws_logs OR index=k8s_ws_petclinic_logs by index
@@ -897,10 +975,20 @@ The `splunk.com/index` annotation **rerouted PetClinic logs to their own index**
 
 ## 11. Reshape events in flight with OTTL
 
-!!! abstract "Learning moment — transform before it lands
+!!! abstract "Learning moment — transform before it lands"
     Splunk can rewrite data at index time, but doing it in the Collector means it happens
     once, close to the source, and applies no matter which backend the data goes to. The
     language is **OTTL** — the OpenTelemetry Transformation Language.
+
+!!! abstract "Learning moment — one namespace, six services, one set of rules"
+    The old single-pod version matched every statement here to one exact container name,
+    because there was exactly one container. `k8s.namespace.name == "petclinic"` catches
+    all six services with a single predicate, reused throughout — no per-service copies of
+    the same statement, and a seventh service later would need zero changes here.
+
+    Verified live, 2026-08-29: sourcetype rewrite, log-level extraction, and access-log
+    field extraction all confirmed working identically across every one of the six
+    services, not just the one that used to be the only container in the workshop.
 
 Add to `values-workshop.yaml`:
 
@@ -911,11 +999,11 @@ agent:
       transform/petclinic_logs:
         log_statements:
           - set(resource.attributes["com.splunk.sourcetype"], "petclinic:app:log")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
           - merge_maps(log.attributes,
               ExtractPatterns(log.body, "(?P<log_level>INFO|WARN|ERROR|DEBUG|TRACE)"),
               "upsert")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
           # Severity: set the RECORD's severity_text, not an attribute.
           - set(log.severity_text, log.attributes["log_level"])
               where log.attributes["log_level"] != nil
@@ -937,7 +1025,7 @@ agent:
               ExtractPatterns(log.body,
                 "^\\S+ \\S+ \\S+ \\[[^\\]]+\\] \"(?P<http_method>[A-Z]+) (?P<http_path>\\S+)[^\"]*\" (?P<http_status>\\d{3}) (?P<http_bytes>\\S+) (?P<http_duration_us>\\d+)"),
               "upsert")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
           - set(log.severity_text, "INFO")  where log.attributes["http_status"] != nil
           - set(log.severity_text, "WARN")  where IsMatch(log.attributes["http_status"], "^4")
           - set(log.severity_text, "ERROR") where IsMatch(log.attributes["http_status"], "^5")
@@ -1049,30 +1137,35 @@ index=k8s_ws_petclinic_logs http_duration_us=*
 <details>
 <summary>Expected</summary>
 
-Second search — severity derived from the status code:
+!!! warning "Real counts await the load-generator rewrite — see step 8"
+    Both tables below are confirmed correct in *shape* — verified live, 2026-08-29, with
+    `severity` correctly derived from `http_status` (`INFO`/`WARN`/`ERROR` for 2xx/4xx/5xx)
+    and `http_duration_us` correctly extracted and parseable as milliseconds. What isn't
+    filled in is realistic *volume*, because that needs JMeter's rewritten test plan
+    driving sustained traffic, not a handful of manual curls. Don't treat the row counts
+    below as anything but illustrative shape.
+
+Second search — severity derived from the status code (only `customers-service` is
+access-logged at this point in the module — see step 6):
 
 ```
 http_status  severity  count
-200          INFO       2438
-302          INFO        200
-500          ERROR       221
+200          INFO          …
+400          WARN          …
 ```
 
-Third search — response times per endpoint:
+Third search — response times per endpoint. Note the paths: this is a REST API now, not
+server-rendered pages, so what shows up is `/owners`, `/owners/{id}`, not the old
+monolith's `/vets.html` or static asset requests:
 
 ```
-http_path                                          count  avg_ms
-/                                                    240     3.0
-/resources/css/petclinic.css                         240     3.1
-/webjars/bootstrap/dist/js/bootstrap.bundle.min.js   239     1.9
-/owners/find                                         238     4.1
-/owners?lastName=                                    238    10.0
-/vets.html                                           238     5.0
+http_path            count  avg_ms
+/owners                 …      …
+/owners/{ownerId}       …      …
 ```
 
-Counts are illustrative, but their *shape* isn't: every non-`/oups` sampler fires once per
-iteration, so the top rows sit within one or two of each other. Neither of these searches was
-possible before access logging.
+Neither of these searches was possible before access logging, regardless of how the row
+counts eventually fill in.
 
 Second search came back **empty**? `stats by` on a field that does not exist returns zero
 rows rather than an error, so an empty table means `severity` was never created — not that
@@ -1241,20 +1334,33 @@ steps. They're the exact files this module was tested with.
         excludeAgentLogs: false
         # FW2: recombine Java stack traces into a single event.
         # A new event starts at a line beginning with a non-whitespace char.
+        # Scoped to the petclinic namespace only, not a single container — six
+        # services now share this namespace and all of them are Spring Boot, so one
+        # broad rule recombines stack traces from any of them without narrowing by
+        # pod or container name. Nothing else lives in this namespace.
         multilineConfigs:
           - namespaceName:
-              value: default
+              value: petclinic
             podName:
-              value: ${WS_USER}-petclinic-.*
+              value: .*
               useRegexp: true
-            containerName:
-              value: ${WS_USER}-petclinic-otel-container01
             firstEntryRegex: ^[^\s].*
 
     # FW2: promote pod annotations to event attributes.
     # tag_name gives a clean field name directly — no regex prefix-stripping needed.
     # [FW2] Promote pod annotations onto events.
     extraAttributes:
+      # Promotes each pod's app.kubernetes.io/name label to service.name. Scraped
+      # container logs carry no service.name of their own, so this gives each of
+      # the six services a distinct name — customers-service, api-gateway, and so
+      # on — automatically, with no per-service OTTL statement. It does NOT
+      # overwrite service.name on traces: k8sattributes only sets an attribute
+      # that isn't already present, and the Java agent already supplies traces'
+      # service.name. Verified live 2026-08-29.
+      fromLabels:
+        - key: app.kubernetes.io/name
+          from: pod
+          tag_name: service.name
       fromAnnotations:
         - key: docker_image_author
           from: pod
@@ -1280,32 +1386,40 @@ steps. They're the exact files this module was tested with.
         processors:
           # There is no splunk.com/tracesIndex annotation, so traces inherit
           # splunk.com/index from the pod. Override it for traces only.
-          # Route this application's metrics to their own index, keyed on the
-          # service name the Java agent reports. Same mechanism as traces.
+          # Route this application's metrics to their own index. Namespace, not
+          # service.name — six services now report six different names (see
+          # extraAttributes.fromLabels below), so namespace membership is the
+          # simpler, single predicate that still catches all of them.
+          # NOT independently verified live for metrics/traces — logs were;
+          # k8s.namespace.name comes from the same k8s_attributes processor
+          # regardless of signal type, but confirm when AW1 is rebuilt.
           transform/app_metrics_index:
             metric_statements:
               - set(resource.attributes["com.splunk.index"], "k8s_ws_petclinic_metrics")
-                  where resource.attributes["service.name"] == "${WS_USER}-k8s-petclinic-service"
+                  where resource.attributes["k8s.namespace.name"] == "petclinic"
           transform/traces_index:
             trace_statements:
               - set(resource.attributes["com.splunk.index"], "k8s_ws_traces")
           transform/petclinic_logs:
             log_statements:
               - set(resource.attributes["com.splunk.sourcetype"], "petclinic:app:log")
-                  where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+                  where resource.attributes["k8s.namespace.name"] == "petclinic"
 
               # Related Content correlates on host.name, service.name and trace_id.
-              # host.name arrives from resource detection; trace_id is printed by the
-              # app and auto-extracted by Splunk. service.name has to be set here.
-              - set(resource.attributes["service.name"], "${WS_USER}-k8s-petclinic-service")
-                  where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              # host.name arrives from resource detection; trace_id is printed by
+              # the app and auto-extracted by Splunk. service.name itself is NOT
+              # set here anymore — extraAttributes.fromLabels below promotes each
+              # pod's own name instead, and k8s_attributes runs before this
+              # transform, so a set() here would unconditionally overwrite that
+              # per-service value with one shared string. deployment.environment
+              # has no such per-service meaning, so it stays a single value.
               - set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
-                  where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+                  where resource.attributes["k8s.namespace.name"] == "petclinic"
 
               - merge_maps(log.attributes,
                   ExtractPatterns(log.body, "(?P<log_level>INFO|WARN|ERROR|DEBUG|TRACE)"),
                   "upsert")
-                  where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+                  where resource.attributes["k8s.namespace.name"] == "petclinic"
 
               # Log Observer's Severity column reads the record's severity_text, NOT a
               # custom attribute. An attribute named "severity" leaves it UNKNOWN.
@@ -1329,7 +1443,7 @@ steps. They're the exact files this module was tested with.
                   ExtractPatterns(log.body,
                     "^\\S+ \\S+ \\S+ \\[[^\\]]+\\] \"(?P<http_method>[A-Z]+) (?P<http_path>\\S+)[^\"]*\" (?P<http_status>\\d{3}) (?P<http_bytes>\\S+) (?P<http_duration_us>\\d+)"),
                   "upsert")
-                  where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+                  where resource.attributes["k8s.namespace.name"] == "petclinic"
               - set(log.severity_text, "INFO")  where log.attributes["http_status"] != nil
               - set(log.severity_text, "WARN")  where IsMatch(log.attributes["http_status"], "^4")
               - set(log.severity_text, "ERROR") where IsMatch(log.attributes["http_status"], "^5")
@@ -1369,84 +1483,454 @@ steps. They're the exact files this module was tested with.
     ```
 
 ??? example "petclinic manifest"
-    Also the **final** state: the profiler variables and `LOGGING_PATTERN_LEVEL` below
-    are added in AW #2, so at the end of FW #2 your manifest is this file minus those
-    three blocks. The comments name the module each one belongs to.
+    This is the state **at the end of FW #2** — six services, customers-service
+    carrying access-log env vars. AW #1 and AW #2 add their own env vars once those
+    modules are migrated; this file doesn't reflect them yet, and nothing here is
+    guessed at ahead of that work.
 
     ```yaml
-    # PetClinic Deployment + NodePort Service — final workshop state.
-    # TESTED 2026-08-19. Render with: WS_USER=<you> envsubst < petclinic-final.yml
+    # PetClinic microservices — end of FW #2 state.
+    # Identical to petclinic-microservices.yml (FW #1's base file) except
+    # customers-service now carries Tomcat access-log env vars — see FW2 §6.
+    # AW #1 and AW #2 add their own env vars once those modules are migrated;
+    # this file does not yet reflect them, and nothing here should be guessed at.
+    # TESTED 2026-08-29 on an 8 vCPU / 32 GB instance. Render with:
+    #   WS_USER=<you> envsubst < petclinic-microservices-fw2.yml > my-petclinic.yml
+    #
+    # Every image here is springcommunity/spring-petclinic-<service>:3.2.0 EXCEPT
+    # customers-service, which this module builds by hand — see FW1 §4-5. That is
+    # the one image pulled with `imagePullPolicy: Never`; the rest pull from
+    # Docker Hub.
+    #
+    # WHY THESE SIX SERVICE NAMES ARE NOT ${WS_USER}-PREFIXED, UNLIKE EVERYTHING
+    # ELSE IN THIS WORKSHOP: every other participant-facing name in this repo is
+    # namespaced by WS_USER because Splunk indexes, dashboards, and locally-built
+    # image tags are shared surfaces where two participants' names could collide.
+    # These six Kubernetes Service names never leave your own single-node
+    # minikube cluster, and — more importantly — the published images have
+    # `http://discovery-server:8761/eureka/` and the config-server address baked
+    # into their `docker` Spring profile (see the ConfigMap below). Renaming
+    # these Services would mean overriding that wiring with per-service
+    # environment variables for no real benefit, since nothing here is shared
+    # between participants. WS_USER still namespaces the one thing that IS
+    # participant-specific: the hand-built customers-service image tag.
+    #
+    # The ConfigMap below is copied byte-for-byte from
+    # https://github.com/spring-petclinic/spring-petclinic-microservices-config
+    # (the `main` branch, as of 2026-08-28) and baked in via Spring Cloud
+    # Config Server's "native" profile — see FW1 §6, "Skim it before applying".
+    # Without this, config-server defaults to fetching this same configuration
+    # live from GitHub on every restart, an unpinned external dependency this
+    # workshop otherwise never has. Re-copy these files if you bump
+    # PETCLINIC_MICROSVC_TAG to a release with a materially different config
+    # shape; check by diffing against the upstream repo first.
+    #
+    # Everything below lives in its own `petclinic` namespace, not `default` —
+    # the whole application is one unit, worth being able to `kubectl get all -n
+    # petclinic` or `kubectl delete namespace petclinic` as a single step, the
+    # same way you'd want to tear down or inspect it in a real cluster shared
+    # with other workloads. One `kubectl apply -f` creates the namespace and
+    # everything in it together; nothing extra to run first.
+    ---
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: petclinic
+    ---
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: petclinic-config
+      namespace: petclinic
+    data:
+      application.yml: |
+        # COMMON APPLICATION PROPERTIES
+
+        server:
+          # start services on random port by default
+          port: 0
+          # The stop processing uses a timeout which provides a grace period during which existing requests will be allowed to complete but no new requests will be permitted
+          shutdown: graceful
+
+        # embedded database init, supports mysql too trough the 'mysql' spring profile
+        spring:
+          sql:
+            init:
+              schema-locations: classpath*:db/hsqldb/schema.sql
+              data-locations: classpath*:db/hsqldb/data.sql
+          sleuth:
+            sampler:
+              probability: 1.0
+          cloud:
+            config:
+              # Allow the microservices to override the remote properties with their own System properties or config file
+              allow-override: true
+              # Override configuration with any local property source
+              override-none: true
+          jpa:
+            open-in-view: false
+            hibernate:
+              ddl-auto: none
+
+        # Spring Boot 1.5 makes actuator secure by default
+        management.security.enabled: false
+        # Enable all Actuators and not only the two available by default /health and /info starting Spring Boot 2.0
+        management.endpoints.web.exposure.include: "*"
+
+        # Temporary hack required by the Spring Boot 2 / Spring Cloud Finchley branch
+        # Waiting issue https://github.com/spring-projects/spring-boot/issues/13042
+        spring.cloud.refresh.refreshable: false
+
+
+        # Logging
+        logging.level.org.springframework: INFO
+
+        # Metrics
+        management:
+          endpoint:
+            metrics:
+              enabled: true
+            prometheus:
+              enabled: true
+          endpoints:
+            web:
+              exposure:
+                include: '*'
+          metrics:
+            export:
+              prometheus:
+                enabled: true
+          tracing:
+            sampling:
+              probability: 1
+
+        eureka:
+          instance:
+            # Register IP address instead of hostname to avoid resolution failures on Windows
+            prefer-ip-address: true
+
+        # Chaos Engineering
+        ---
+        spring:
+          config:
+            activate:
+              on-profile: chaos-monkey
+        management.endpoint.chaosmonkey.enabled: true
+        chaos:
+          monkey:
+            enabled: true
+            watcher:
+              component: false
+              controller: false
+              repository: false
+              rest-controller: false
+              service: false
+
+        ---
+        spring:
+          config:
+            activate:
+              on-profile: docker
+        management:
+          tracing:
+            export:
+              zipkin:
+                endpoint: "http://tracing-server:9411/api/v2/spans"
+
+        ---
+        spring:
+          config:
+            activate:
+              on-profile: mysql
+          datasource:
+            url: jdbc:mysql://localhost:3306/petclinic?allowPublicKeyRetrieval=true&useSSL=false
+            username: root
+            password: petclinic
+          sql:
+            init:
+              schema-locations: classpath*:db/mysql/schema.sql
+              data-locations: classpath*:db/mysql/data.sql
+              mode: ALWAYS
+      customers-service.yml: |
+        spring:
+          config:
+            activate:
+              on-profile: default
+        eureka:
+          instance:
+            # enable to register multiple app instances with a random server port
+            instance-id: ${spring.application.name}:${random.uuid}
+
+        ---
+        spring:
+          config:
+            activate:
+              on-profile: docker
+        server:
+          port: 8081
+        eureka:
+          client:
+            serviceUrl:
+              defaultZone: http://discovery-server:8761/eureka/
+      discovery-server.yml: |
+        server:
+          port: 8761
+
+        eureka:
+          instance:
+            hostname: localhost
+          # standalone mode
+          client:
+            registerWithEureka: false
+            fetchRegistry: false
+            serviceUrl:
+              defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/
+      api-gateway.yml: |
+        spring:
+          reactor:
+            context-propagation: auto
+        server:
+          port: 8080
+          compression:
+            enabled: true
+            mime-types: application/json,text/css,application/javascript
+            min-response-size: 2048
+
+        # Internationalization
+        spring.messages.basename: messages/messages
+
+        ---
+        spring:
+          config:
+            activate:
+              on-profile: docker
+        eureka:
+          client:
+            serviceUrl:
+              defaultZone: http://discovery-server:8761/eureka/
+      visits-service.yml: |
+        spring:
+          config:
+            activate:
+              on-profile: default
+        eureka:
+          instance:
+            # enable to register multiple app instances with a random server port
+            instance-id: ${spring.application.name}:${random.uuid}
+
+        ---
+        spring:
+          config:
+            activate:
+              on-profile: docker
+        server:
+          port: 8082
+        eureka:
+          client:
+            serviceUrl:
+              defaultZone: http://discovery-server:8761/eureka/
+      vets-service.yml: |
+        vets:
+          cache:
+            ttl: 60
+            heap-size: 100
+
+        ---
+        spring:
+          config:
+            activate:
+              on-profile: default
+        eureka:
+          instance:
+            # enable to register multiple app instances with a random server port
+            instance-id: ${spring.application.name}:${random.uuid}
+
+        ---
+        spring:
+          config:
+            activate:
+              on-profile: docker
+        server:
+          port: 8083
+        eureka:
+          client:
+            serviceUrl:
+              defaultZone: http://discovery-server:8761/eureka/
+    ---
     apiVersion: v1
     kind: Service
     metadata:
-      name: ${WS_USER}-petclinic-srv
+      name: config-server
+      namespace: petclinic
     spec:
-      type: NodePort
       selector:
-        app: ${WS_USER}-petclinic-otel-app
+        app.kubernetes.io/name: config-server
       ports:
-      - protocol: TCP
-        port: 8080
-        targetPort: 8080
-        nodePort: 30000
+      - port: 8888
+        targetPort: 8888
     ---
     apiVersion: apps/v1
     kind: Deployment
     metadata:
-      name: ${WS_USER}-petclinic-otel-deployment
+      name: config-server
+      namespace: petclinic
       labels:
-        app: ${WS_USER}-petclinic-otel-app
+        app.kubernetes.io/name: config-server
+        app.kubernetes.io/part-of: petclinic
     spec:
+      replicas: 1
       selector:
         matchLabels:
-          app: ${WS_USER}-petclinic-otel-app
+          app.kubernetes.io/name: config-server
       template:
         metadata:
           labels:
-            app: ${WS_USER}-petclinic-otel-app
+            app.kubernetes.io/name: config-server
+            app.kubernetes.io/part-of: petclinic
           annotations:
             docker_image_author: "${WS_USER}"
             splunk.com/index: "k8s_ws_petclinic_logs"
         spec:
           containers:
-          - name: ${WS_USER}-petclinic-otel-container01
-            image: ${WS_USER}/petclinic-otel:v1
+          - name: config-server
+            image: springcommunity/spring-petclinic-config-server:3.2.0
+            imagePullPolicy: IfNotPresent
+            env:
+            # Overrides the image's baked-in git.uri, which otherwise pulls this
+            # exact config from GitHub's `main` branch on every restart — an
+            # unpinned network dependency this workshop otherwise never has.
+            # "native" backs the Config Server with local files instead; GIT_REPO
+            # is the placeholder the image's own application.yml already expects
+            # (see `native.searchLocations: file:///${GIT_REPO}`).
+            - name: SPRING_PROFILES_ACTIVE
+              value: "native"
+            - name: GIT_REPO
+              value: "/config"
+            ports:
+            - containerPort: 8888
+            readinessProbe:
+              httpGet:
+                path: /actuator/health
+                port: 8888
+              initialDelaySeconds: 10
+              periodSeconds: 5
+              failureThreshold: 40
+            volumeMounts:
+            - name: petclinic-config
+              mountPath: /config
+          volumes:
+          - name: petclinic-config
+            configMap:
+              name: petclinic-config
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: discovery-server
+      namespace: petclinic
+    spec:
+      selector:
+        app.kubernetes.io/name: discovery-server
+      ports:
+      - port: 8761
+        targetPort: 8761
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: discovery-server
+      namespace: petclinic
+      labels:
+        app.kubernetes.io/name: discovery-server
+        app.kubernetes.io/part-of: petclinic
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: discovery-server
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: discovery-server
+            app.kubernetes.io/part-of: petclinic
+          annotations:
+            docker_image_author: "${WS_USER}"
+            splunk.com/index: "k8s_ws_petclinic_logs"
+        spec:
+          # discovery-server is a Spring Cloud Config Client too — it fetches its
+          # own config from config-server at boot and fails fast if that isn't
+          # up yet. Every Deployment below carries this same init container for
+          # the same reason. See "Why every service waits" in FW1 §6.
+          initContainers:
+          - name: wait-for-config-server
+            image: curlimages/curl:8.21.0
+            command: ["sh", "-c", "until curl -sf http://config-server:8888/actuator/health; do echo waiting on config-server; sleep 2; done"]
+          containers:
+          - name: discovery-server
+            image: springcommunity/spring-petclinic-discovery-server:3.2.0
+            imagePullPolicy: IfNotPresent
+            ports:
+            - containerPort: 8761
+            readinessProbe:
+              httpGet:
+                path: /actuator/health
+                port: 8761
+              initialDelaySeconds: 10
+              periodSeconds: 5
+              failureThreshold: 40
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: customers-service
+      namespace: petclinic
+    spec:
+      selector:
+        app.kubernetes.io/name: customers-service
+      ports:
+      - port: 8081
+        targetPort: 8081
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: customers-service
+      namespace: petclinic
+      labels:
+        app.kubernetes.io/name: customers-service
+        app.kubernetes.io/part-of: petclinic
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: customers-service
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: customers-service
+            app.kubernetes.io/part-of: petclinic
+          annotations:
+            docker_image_author: "${WS_USER}"
+            splunk.com/index: "k8s_ws_petclinic_logs"
+        spec:
+          initContainers:
+          - name: wait-for-config-server
+            image: curlimages/curl:8.21.0
+            command: ["sh", "-c", "until curl -sf http://config-server:8888/actuator/health; do echo waiting on config-server; sleep 2; done"]
+          containers:
+          - name: customers-service
+            # The one image you build yourself — see FW1 §4-5.
+            image: ${WS_USER}/petclinic-customers:v1
             imagePullPolicy: Never
             ports:
-            - containerPort: 8080
+            - containerPort: 8081
             env:
-            # --- AW1: where to send telemetry -------------------------------------
-            # The collector agent is a DaemonSet, so the right target is whichever
-            # node this pod landed on. A pod cannot resolve the `minikube` hosts
-            # entry — that exists only on the host.
-            - name: SPLUNK_OTEL_AGENT
-              valueFrom:
-                fieldRef:
-                  fieldPath: status.hostIP
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://$(SPLUNK_OTEL_AGENT):4317"
-
-            # --- AW2: AlwaysOn Profiling ------------------------------------------
-            - name: SPLUNK_PROFILER_ENABLED
-              value: "true"
-            - name: SPLUNK_PROFILER_MEMORY_ENABLED
-              value: "true"
-            # Defaults to http/protobuf on :4318, but our endpoint above is gRPC on
-            # :4317. Mismatched, the profiler starts and sends nothing, with no error.
-            - name: SPLUNK_PROFILER_OTLP_PROTOCOL
-              value: "grpc"
-
-            # --- AW2: trace context in the log line --------------------------------
-            # The agent already puts trace_id/span_id in the MDC; Spring Boot's
-            # default pattern just never prints them. Without this there is no
-            # trace_id on the logs and APM <-> Logs correlation cannot work.
-            - name: LOGGING_PATTERN_LEVEL
-              value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
-
             # --- FW2: access logging -----------------------------------------------
             # PetClinic logs nothing for successful requests — only startup and
             # exceptions. One line per request is what makes the log exercises work.
             # directory=/dev + prefix=stdout + empty suffix resolves to /dev/stdout.
+            # Only customers-service carries this — see FW2 §6 for why one service
+            # is enough to teach the lesson.
             - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
               value: "true"
             - name: SERVER_TOMCAT_ACCESSLOG_DIRECTORY
@@ -1465,10 +1949,169 @@ steps. They're the exact files this module was tested with.
             readinessProbe:
               httpGet:
                 path: /actuator/health
+                port: 8081
+              initialDelaySeconds: 10
+              periodSeconds: 5
+              failureThreshold: 40
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: visits-service
+      namespace: petclinic
+    spec:
+      selector:
+        app.kubernetes.io/name: visits-service
+      ports:
+      - port: 8082
+        targetPort: 8082
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: visits-service
+      namespace: petclinic
+      labels:
+        app.kubernetes.io/name: visits-service
+        app.kubernetes.io/part-of: petclinic
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: visits-service
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: visits-service
+            app.kubernetes.io/part-of: petclinic
+          annotations:
+            docker_image_author: "${WS_USER}"
+            splunk.com/index: "k8s_ws_petclinic_logs"
+        spec:
+          initContainers:
+          - name: wait-for-config-server
+            image: curlimages/curl:8.21.0
+            command: ["sh", "-c", "until curl -sf http://config-server:8888/actuator/health; do echo waiting on config-server; sleep 2; done"]
+          containers:
+          - name: visits-service
+            image: springcommunity/spring-petclinic-visits-service:3.2.0
+            imagePullPolicy: IfNotPresent
+            ports:
+            - containerPort: 8082
+            readinessProbe:
+              httpGet:
+                path: /actuator/health
+                port: 8082
+              initialDelaySeconds: 10
+              periodSeconds: 5
+              failureThreshold: 40
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: vets-service
+      namespace: petclinic
+    spec:
+      selector:
+        app.kubernetes.io/name: vets-service
+      ports:
+      - port: 8083
+        targetPort: 8083
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: vets-service
+      namespace: petclinic
+      labels:
+        app.kubernetes.io/name: vets-service
+        app.kubernetes.io/part-of: petclinic
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: vets-service
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: vets-service
+            app.kubernetes.io/part-of: petclinic
+          annotations:
+            docker_image_author: "${WS_USER}"
+            splunk.com/index: "k8s_ws_petclinic_logs"
+        spec:
+          initContainers:
+          - name: wait-for-config-server
+            image: curlimages/curl:8.21.0
+            command: ["sh", "-c", "until curl -sf http://config-server:8888/actuator/health; do echo waiting on config-server; sleep 2; done"]
+          containers:
+          - name: vets-service
+            image: springcommunity/spring-petclinic-vets-service:3.2.0
+            imagePullPolicy: IfNotPresent
+            ports:
+            - containerPort: 8083
+            readinessProbe:
+              httpGet:
+                path: /actuator/health
+                port: 8083
+              initialDelaySeconds: 10
+              periodSeconds: 5
+              failureThreshold: 40
+    ---
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: ${WS_USER}-petclinic-srv
+      namespace: petclinic
+    spec:
+      type: NodePort
+      selector:
+        app.kubernetes.io/name: api-gateway
+      ports:
+      - protocol: TCP
+        port: 8080
+        targetPort: 8080
+        nodePort: 30000
+    ---
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: api-gateway
+      namespace: petclinic
+      labels:
+        app.kubernetes.io/name: api-gateway
+        app.kubernetes.io/part-of: petclinic
+    spec:
+      replicas: 1
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: api-gateway
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: api-gateway
+            app.kubernetes.io/part-of: petclinic
+          annotations:
+            docker_image_author: "${WS_USER}"
+            splunk.com/index: "k8s_ws_petclinic_logs"
+        spec:
+          initContainers:
+          - name: wait-for-config-server
+            image: curlimages/curl:8.21.0
+            command: ["sh", "-c", "until curl -sf http://config-server:8888/actuator/health; do echo waiting on config-server; sleep 2; done"]
+          containers:
+          - name: api-gateway
+            image: springcommunity/spring-petclinic-api-gateway:3.2.0
+            imagePullPolicy: IfNotPresent
+            ports:
+            - containerPort: 8080
+            readinessProbe:
+              httpGet:
+                path: /actuator/health
                 port: 8080
               initialDelaySeconds: 10
               periodSeconds: 5
-              failureThreshold: 30
+              failureThreshold: 40
     ```
 
 !!! tip "Diff instead of re-reading"
@@ -1523,11 +2166,14 @@ export SPLUNK_AUTH=admin:<your-admin-password>
     `helm upgrade`. If it *is* there but has no effect, the condition isn't matching:
     re-read the OTTL warning in step 11.
 
-??? failure "PetClinic logs still going to `k8s_ws_logs`"
+??? failure "One service's logs are going to `k8s_ws_logs` when they shouldn't be"
     Annotations live on the **pod template** (`spec.template.metadata.annotations`), not on
-    the Deployment's own metadata. Confirm what the running pod actually has:
+    the Deployment's own metadata. Confirm what the running pod actually has — this also
+    catches the case from step 10 where you deliberately removed `splunk.com/index` from
+    one service and forgot to put it back:
     ```bash
-    kubectl get pods -l app=${WS_USER}-petclinic-otel-app -o jsonpath='{.items[*].metadata.annotations}'
+    kubectl get pods -n petclinic -l app.kubernetes.io/part-of=petclinic \
+      -o jsonpath='{range .items[*]}{.metadata.labels.app\.kubernetes\.io/name}{"  "}{.metadata.annotations}{"\n"}{end}'
     ```
 
 ---

@@ -26,12 +26,37 @@ here's where things stand:
   FW #2/AW1/AW2 get their own migration pass later, their `kubectl` commands need
   `-n petclinic` added too — grep those docs for bare `kubectl get/logs/exec` touching
   PetClinic before assuming `default` still works.
-- **FW #2, AW #1, and AW #2 have NOT been touched yet.** They still reference the old
-  single-pod Deployment name (`${WS_USER}-petclinic-otel-deployment`) and container name
-  (`${WS_USER}-petclinic-otel-container01`) throughout — in the Collector's OTTL
-  predicates, the dashboards, JMeter, and the RUM script. **Do not run FW #1 through to
-  FW #2 on a live instance right now and expect it to work** — that inconsistency is
-  expected mid-migration, not a bug to chase.
+- **Phase 2 (FW #2, the Collector rework) is done and tested.** All four Collector
+  overlays (`labs/collector/values-{workshop,aw1,final,aw2}.yaml`) are re-cut: OTTL
+  predicates now key on `resource.attributes["k8s.namespace.name"] == "petclinic"`
+  instead of one exact container name, `extraAttributes.fromLabels` promotes each pod's
+  `app.kubernetes.io/name` to `service.name` (verified live: k8sattributes doesn't
+  overwrite an attribute that already exists, so agent-instrumented traces keep their
+  real name and only scraped logs get the promoted one), and multiline recombine is
+  scoped to the `petclinic` namespace rather than one container — verified live with a
+  real multi-line `TransportException` (44–50 lines) recombining correctly across five
+  different services. The two hardcoded `service.name`/`deployment.environment`
+  statements in `values-final.yaml`/`values-aw2.yaml` are gone; leaving them would have
+  silently overwritten the per-service names the label promotion just set, since
+  `k8s_attributes` runs before that transform in the pipeline. **The metrics/traces
+  predicates in aw1/final/aw2 were changed the same way but NOT independently verified
+  live** — only logs were exercised this phase; confirm those three when AW1 is rebuilt.
+  `scripts/verify-fw2.sh` is rewritten and passes 16/16 live. A new
+  `labs/manifests/petclinic-microservices-fw2.yml` captures the FW2 end state (adds
+  Tomcat access logging to `customers-service` only — see FW2 §6 for why one service is
+  enough).
+- **AW #1 and AW #2 have NOT been touched yet.** They still reference the old single-pod
+  Deployment name (`${WS_USER}-petclinic-otel-deployment`) and container name
+  (`${WS_USER}-petclinic-otel-container01`) throughout — the dashboards, JMeter, and the
+  RUM script. **Do not run FW #2 through to AW #1 on a live instance right now and expect
+  it to work** — that inconsistency is expected mid-migration, not a bug to chase.
+- **FW #2's access-logging and error-rate-reconciliation content (§7–8) is partially
+  blocked on Phase 3.** There is no `/oups` equivalent in the microservices topology yet
+  — the deliberate fault is Phase 3's job (most likely scaling a backend to zero to trip
+  the gateway's circuit breaker, decided against a public-HTTP or in-cluster-loadgen
+  reference design that was evaluated and rejected — see below). §8's reconciliation
+  numbers are deliberately left unfilled rather than invented; do not add plausible-
+  looking numbers there without a real JMeter run behind them.
 - **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
   the manifest again:** Config Server defaults to a live, unpinned `git pull` from
   GitHub on every restart (fixed via the `native` profile + a baked-in ConfigMap — see
@@ -53,8 +78,8 @@ here's where things stand:
   `kubectl apply`, zero restarts, 72 seconds to ready) is the number that went in the
   guide. Don't mistake a noisy validation instance for a real defect; check what's
   actually consuming CPU before concluding the app is at fault.
-- Remaining phases (Collector rework, load-generator rewrite, AW1/AW2, dashboards,
-  Cilium) are unstarted. See the migration plan for the full phase breakdown and gates.
+- Remaining phases (load-generator rewrite, AW1/AW2, dashboards, Cilium) are unstarted.
+  See the migration plan for the full phase breakdown and gates.
 - **Considered and rejected: switching FW1 to Splunk's own reference PetClinic
   microservices deployment** (`splunk/observability-workshop`, "Ninja Workshops" ->
   `automatic-discovery` -> `petclinic-kubernetes`). Its images

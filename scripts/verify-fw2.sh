@@ -27,12 +27,26 @@ echo "Verifying Foundational Workshop #2 (WS_USER=$WS_USER)"; echo
 #
 # BURST_START is also what lets the severity checks below scope themselves to
 # events this script created, instead of a flat 15-minute lookback.
+#
+# Observed 2026-08-29: running this immediately after a fresh `helm install` or
+# a fresh `kubectl apply` can trip the severity check below with a false
+# failure — six services cold-starting at once means proportionally more
+# startup noise (Eureka registration, Tomcat init) than the single-pod version
+# ever produced in one window, and that noise carries no severity by design.
+# It clears on a second run a minute later. Not a bug; don't chase it if the
+# Collector and app have both just (re)started.
+#
+# /oups doesn't exist in the microservices topology — the fault-injection
+# replacement (scaling a backend to zero) is separate load-generator work, not
+# yet built. /owners/abc is a real, cheap substitute for THIS script's purposes:
+# customers-service can't parse a non-numeric ID and returns a genuine 400,
+# giving the severity checks below something other than flat INFO to see.
 warmup(){
   BURST_START=$(date +%s)
   printf '  … generating a short burst of traffic\n'
   for _ in $(seq 1 20); do
-    curl -s -o /dev/null --max-time 5 http://minikube:30000/          || true
-    curl -s -o /dev/null --max-time 5 http://minikube:30000/oups      || true
+    curl -s -o /dev/null --max-time 5 http://minikube:30000/api/customer/owners      || true
+    curl -s -o /dev/null --max-time 5 http://minikube:30000/api/customer/owners/abc  || true
   done
   printf '  … waiting %ss for ingest\n\n' "${WARMUP_WAIT:-50}"
   sleep "${WARMUP_WAIT:-50}"
@@ -65,14 +79,25 @@ n=$(cnt "| tstats count where index=k8s_ws_petclinic_logs sourcetype=\"petclinic
 [ "${n:-0}" -gt 0 ] && ok "OTTL transform applied ($n events/15m)" \
   || no "sourcetype not rewritten" "OTTL needs context-prefixed paths — see step 11"
 
-# --- access logging (step 7) -------------------------------------------------
-n=$(cnt 'index=k8s_ws_petclinic_logs http_status=* | stats count')
+# Each of the six services should report its own service.name — that's the
+# extraAttributes.fromLabels promotion, not an OTTL statement. Fewer than 4
+# distinct names in a 15-minute window usually means only the idle services
+# (config-server, discovery-server) have logged anything yet; run the warm-up
+# traffic again rather than assuming it's broken.
+n=$(cnt '| tstats count where index=k8s_ws_petclinic_logs by service.name | stats dc(service.name) as n')
+[ "${n:-0}" -ge 4 ] && ok "$n distinct service.name values seen — per-service labelling works" \
+  || no "only $n distinct service.name value(s)" "check extraAttributes.fromLabels for app.kubernetes.io/name -> service.name"
+
+# --- access logging (step 6) -------------------------------------------------
+# Only customers-service has Tomcat access logging enabled — see step 6 — so
+# scope explicitly rather than searching the whole petclinic index.
+n=$(cnt 'index=k8s_ws_petclinic_logs service.name="customers-service" http_status=* | stats count')
 [ "${n:-0}" -gt 0 ] \
   && ok "access logs flowing and parsed ($n events/15m)" \
-  || no "no http_status field" "enable SERVER_TOMCAT_ACCESSLOG_* on the Deployment (step 7)"
+  || no "no http_status field on customers-service" "enable SERVER_TOMCAT_ACCESSLOG_* on customers-service (step 6)"
 
 for f in http_method http_path http_duration_us; do
-  n=$(cnt "index=k8s_ws_petclinic_logs $f=* | stats count")
+  n=$(cnt "index=k8s_ws_petclinic_logs service.name=\"customers-service\" $f=* | stats count")
   [ "${n:-0}" -gt 0 ] && ok "$f extracted" \
     || no "$f not extracted" "check the access-log ExtractPatterns regex (step 11)"
 done
@@ -120,7 +145,7 @@ fi
 tot=$(scnt 'index=k8s_ws_petclinic_logs | stats count')
 nul=$(scnt 'index=k8s_ws_petclinic_logs | where isnull(severity) OR severity="" | stats count')
 if [ "${tot:-0}" -eq 0 ]; then
-  no "no petclinic log events in the window" "generate traffic (curl http://minikube:30000/) and re-run"
+  no "no petclinic log events in the window" "generate traffic (curl http://minikube:30000/api/customer/owners) and re-run"
 elif [ "${nul:-0}" -eq 0 ]; then
   ok "every event carries a severity ($tot events checked)"
 elif [ $(( nul * 100 / tot )) -lt 5 ]; then
