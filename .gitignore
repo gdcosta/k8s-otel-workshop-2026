@@ -1,6 +1,5 @@
 # Build output
 site/
-site-offline/
 docs-standalone/
 .build-tmp/
 .venv/
