@@ -29,9 +29,13 @@ echo "Verifying Advanced Workshop #2 (WS_USER=$WS_USER, realm=$REALM)"; echo
 # failure. Not a substitute for the JMeter load test; just enough to assert on.
 warmup(){
   printf '  … generating a short burst of traffic\n'
+  # /oups doesn't exist any more — Phase 3 replaced it with an external fault
+  # (kubectl scale deployment/visits-service --replicas=0, FW2 §8 / AW1 §1).
+  # This warmup only needs real requests flowing, not a forced error.
   for _ in $(seq 1 20); do
-    curl -s -o /dev/null --max-time 5 http://minikube:30000/          || true
-    curl -s -o /dev/null --max-time 5 http://minikube:30000/oups      || true
+    curl -s -o /dev/null --max-time 5 http://minikube:30000/                        || true
+    curl -s -o /dev/null --max-time 5 http://minikube:30000/api/customer/owners     || true
+    curl -s -o /dev/null --max-time 5 http://minikube:30000/api/vet/vets            || true
   done
   printf '  … waiting %ss for ingest\n\n' "${WARMUP_WAIT:-50}"
   sleep "${WARMUP_WAIT:-50}"
@@ -61,18 +65,31 @@ n=$(kubectl logs daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --tail=
   || no "$n auth errors in collector logs" "check the access token"
 
 # --- profiling ---------------------------------------------------------------
-PL=$(kubectl logs deploy/${WS_USER}-petclinic-otel-deployment 2>/dev/null | grep -A8 'Profiler configuration')
-if echo "$PL" | grep -q 'Enabled : true'; then
-  proto=$(echo "$PL" | grep OtlpProtocol | awk '{print $NF}')
-  ep=$(kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- \
-       printenv OTEL_EXPORTER_OTLP_ENDPOINT 2>/dev/null)
-  if { [ "$proto" = "grpc" ] && echo "$ep" | grep -q ':4317'; } || \
-     { [ "$proto" = "http/protobuf" ] && echo "$ep" | grep -q ':4318'; }; then
-    ok "profiler enabled, protocol ($proto) matches endpoint"
+# Set once, via instrumentation.spec.java.env in values-aw2.yaml — applies to
+# every operator-instrumented pod uniformly, unlike the old per-Deployment env
+# block. Checked per service, same minimum pair AW1 established
+# (customers-service hand-built, vets-service pulled) to prove it's genuinely
+# uniform rather than something that happened to land on one service.
+for svc in customers-service vets-service; do
+  pod=$(kubectl get pod -n petclinic -l app.kubernetes.io/name="$svc" \
+          -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -z "$pod" ]; then no "$svc: no running pod found" "kubectl get pods -n petclinic"; continue; fi
+  envout=$(kubectl get pod -n petclinic "$pod" \
+    -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' 2>/dev/null)
+  enabled=$(echo "$envout" | grep '^SPLUNK_PROFILER_ENABLED=' | cut -d= -f2-)
+  proto=$(echo "$envout"   | grep '^SPLUNK_PROFILER_OTLP_PROTOCOL=' | cut -d= -f2-)
+  ep=$(echo "$envout"      | grep '^OTEL_EXPORTER_OTLP_ENDPOINT=' | cut -d= -f2-)
+  if [ "$enabled" = "true" ]; then
+    if { [ "$proto" = "grpc" ] && echo "$ep" | grep -q ':4317'; } || \
+       { [ "$proto" = "http/protobuf" ] && echo "$ep" | grep -q ':4318'; }; then
+      ok "$svc: profiler enabled, protocol ($proto) matches endpoint"
+    else
+      no "$svc: profiler protocol '$proto' vs endpoint '$ep'" "set SPLUNK_PROFILER_OTLP_PROTOCOL to match in instrumentation.spec.java.env"
+    fi
   else
-    no "profiler protocol '$proto' vs endpoint '$ep'" "set SPLUNK_PROFILER_OTLP_PROTOCOL to match"
+    no "$svc: profiler not enabled" "add SPLUNK_PROFILER_ENABLED=true to instrumentation.spec.java.env in values-aw2.yaml"
   fi
-else no "profiler not enabled" "set SPLUNK_PROFILER_ENABLED=true on the Deployment"; fi
+done
 
 # --- RUM ---------------------------------------------------------------------
 # Grepping the served HTML proves NOTHING about RUM. The published snippet once
@@ -83,7 +100,7 @@ else no "profiler not enabled" "set SPLUNK_PROFILER_ENABLED=true on the Deployme
 # least prove the init block PARSES rather than merely being present.
 html=$(curl -s --max-time 20 http://minikube:30000/ 2>/dev/null)
 echo "$html" | grep -q 'o11y-gdi-rum'  && ok "RUM library served in page" \
-  || no "RUM script tag missing" "re-check layout.html and rebuild the image"
+  || no "RUM script tag missing" "run scripts/inject-rum-snippet.sh (step 7) — api-gateway is a pulled image, there is no layout.html to hand-edit here"
 
 # The init call, from `SplunkRum.init(` to its closing `});`.
 init_block=$(printf '%s\n' "$html" | tr -d '\r' | sed -n '/SplunkRum\.init(/,/});/p')
@@ -151,28 +168,42 @@ fi
 
 # --- Related Content correlation fields --------------------------------------
 # APM<->Logs joins on host.name, service.name, deployment.environment and
-# trace_id. All four must be on the LOG, and match the span exactly.
-SP_SVC=$(kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- \
-         printenv OTEL_SERVICE_NAME 2>/dev/null)
-SP_ENV=$(kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- \
-         printenv OTEL_RESOURCE_ATTRIBUTES 2>/dev/null | sed 's/.*deployment.environment=//; s/,.*//')
-
+# trace_id. All four must be on the LOG, and match the span exactly. Checked
+# per service — service.name now genuinely differs per service (FW2's label
+# promotion), so a single hardcoded expectation can't cover this any more.
 lq(){ $SPLUNK search "$1" -earliest_time -15m -auth "${SPLUNK_AUTH:-}" 2>/dev/null | tail -1 | tr -d ' '; }
 
 if [ -n "${SPLUNK_AUTH:-}" ]; then
   n=$(lq 'index=k8s_ws_petclinic_logs trace_id=* | stats count' | tr -dc '0-9')
   [ "${n:-0}" -gt 0 ] && ok "logs carry trace_id ($n events/15m)" \
-    || no "no trace_id on logs" "add LOGGING_PATTERN_LEVEL to the Deployment (step 5)"
+    || no "no trace_id on logs" "check LOGGING_PATTERN_LEVEL in instrumentation.spec.java.env (step 5)"
 
-  lsvc=$(lq 'index=k8s_ws_petclinic_logs | rename "service.name" as x | search x=* | head 1 | table x')
-  [ -n "$lsvc" ] && [ "$lsvc" = "$SP_SVC" ] \
-    && ok "log service.name matches the span ($lsvc)" \
-    || no "log service.name='${lsvc:-missing}' vs span='${SP_SVC}'" "they must match exactly (step 5)"
+  for svc in customers-service vets-service; do
+    pod=$(kubectl get pod -n petclinic -l app.kubernetes.io/name="$svc" \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -z "$pod" ]; then no "$svc: no running pod found" "kubectl get pods -n petclinic"; continue; fi
+    envout=$(kubectl get pod -n petclinic "$pod" \
+      -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' 2>/dev/null)
+    SP_SVC=$(echo "$envout" | grep '^OTEL_SERVICE_NAME=' | cut -d= -f2-)
+    # deployment.environment is NOT in this pod's own env — it's added
+    # collector-side by transform/traces_index (values-aw2.yaml), not by the
+    # operator. Real bug caught live: grepping OTEL_RESOURCE_ATTRIBUTES for it
+    # here always came back empty, because it's simply never there — that
+    # attribute name doesn't appear in the pod's env under either semconv
+    # spelling. Ask the span itself what it actually carries instead of
+    # trying to derive the expectation from the pod.
+    SP_ENV=$(lq "index=k8s_ws_traces \"service.name\"=\"$svc\" | rename \"deployment.environment\" as x | search x=* | head 1 | table x")
 
-  lenv=$(lq 'index=k8s_ws_petclinic_logs | rename "deployment.environment" as x | search x=* | head 1 | table x')
-  [ -n "$lenv" ] && [ "$lenv" = "$SP_ENV" ] \
-    && ok "log deployment.environment matches the span ($lenv)" \
-    || no "log env='${lenv:-missing}' vs span='${SP_ENV}'" "APM identifies a service as (name, environment)"
+    lsvc=$(lq "index=k8s_ws_petclinic_logs \"service.name\"=\"$svc\" | rename \"service.name\" as x | head 1 | table x")
+    [ -n "$lsvc" ] && [ "$lsvc" = "$SP_SVC" ] \
+      && ok "$svc: log service.name matches the span ($lsvc)" \
+      || no "$svc: log service.name='${lsvc:-missing}' vs span='${SP_SVC}'" "they must match exactly (step 5)"
+
+    lenv=$(lq "index=k8s_ws_petclinic_logs \"service.name\"=\"$svc\" | rename \"deployment.environment\" as x | search x=* | head 1 | table x")
+    [ -n "$lenv" ] && [ "$lenv" = "$SP_ENV" ] \
+      && ok "$svc: log deployment.environment matches the span ($lenv)" \
+      || no "$svc: log env='${lenv:-missing}' vs span='${SP_ENV}'" "APM identifies a service as (name, environment) — check transform/traces_index sets deployment.environment too (values-aw2.yaml)"
+  done
 
   lhost=$(lq 'index=k8s_ws_petclinic_logs | head 1 | table host')
   [ -n "$lhost" ] && ok "logs carry host ($lhost — aliased to host.name)" \

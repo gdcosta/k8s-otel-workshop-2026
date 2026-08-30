@@ -96,13 +96,47 @@ here's where things stand:
   believed still accurate (they catalog metric *names*, not per-service instance counts,
   so six services shouldn't change them) but not independently re-verified against the
   live six-service topology, and `labs/dashboards/*.xml` themselves are untouched pending
-  the separate dashboards-rework phase. AW #2 doc prose is still fully untouched — it
-  still references the old single-pod Deployment name
-  (`${WS_USER}-petclinic-otel-deployment`) and container name
-  (`${WS_USER}-petclinic-otel-container01}`) throughout, and its RUM section still
-  describes the OLD script's Thymeleaf-form journey, not the rewritten one. **Do not run
-  FW #2 through to AW #2 on a live instance right now and expect it to work** — that
-  inconsistency is expected mid-migration, not a bug to chase.
+  the separate dashboards-rework phase.
+- **Phase 4b (AW #2 doc rewrite) is done and tested, using sub-agents for the live
+  validation, config/script finalization, and doc-writing passes** — a deliberate change
+  in working method partway through this migration, to keep long live-debugging spikes
+  out of the main session's context window. Three technical additions on top of AW #1's operator
+  approach, all verified live on the spike instance: **Observability Cloud export**
+  (`splunkObservability` layered on the existing operator config — 706 spans, 8,913+713
+  metric points delivered, zero failures); **AlwaysOn Profiling and log correlation**,
+  both moved from hand-written manifest env vars to `instrumentation.spec.java.env` in
+  `labs/collector/values-aw2.yaml` — the same env-injection mechanism AW #1 established,
+  now carrying `SPLUNK_PROFILER_*` and `LOGGING_PATTERN_LEVEL`; and **RUM**, whose
+  snippet-injection mechanism had the same problem AW #1's Java-agent attach did:
+  `api-gateway` (which serves the AngularJS SPA) is a pulled image with no Dockerfile.
+  Fixed with a new `scripts/inject-rum-snippet.sh` — extracts the live-served
+  `index.html` (never a static copy baked into the repo, since a pulled image's content
+  isn't this repo's to own), inserts the snippet, mounts it back via a `ConfigMap` +
+  `subPath` volume patch on `api-gateway`. Three real, non-obvious findings from this
+  phase: (1) `instrumentation.spec.java.env` **replaces**, not merges, the chart's own
+  default env list — omitting the chart's two defaults when adding AW2's four silently
+  drops them, no error; (2) the profiler's `SPLUNK_PROFILER_OTLP_PROTOCOL` needed
+  `http/protobuf`, not the `grpc` earlier revisions used — the operator's own default
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is HTTP on `:4318`, not gRPC on `:4317` like the old
+  hand-built approach, and the mismatch fails silently (caught by `verify-aw2.sh` itself
+  failing, not by inspection); (3) a `deployment.environment`/`deployment.environment.name`
+  split flagged as an open question in `values-aw1.yaml`'s comments was resolved by
+  reconciling both onto one value in `values-aw2.yaml`'s OTTL, since this module is
+  specifically about correlation fields matching exactly. `scripts/verify-aw2.sh` is
+  rewritten (per-service profiling/correlation checks, `/oups`-free warmup) and passes
+  17/17 live, including a real Playwright-driven RUM initialization check. §8's
+  three-way error-rate reconciliation now uses FW #2 §8's `visits-service` fault
+  (JMeter 28.57%, Splunk 242 events) instead of the retired `/oups` sampler — APM's own
+  percentage for that fault is **honestly left unmeasured**: this pass had no
+  Observability Cloud UI/API/MCP access to query it (the ingest token confirmed working
+  for writes returns 401 against the SignalFlow query API, as expected — different
+  scope), and the doc says so rather than inventing a plausible number. **NOT yet done:**
+  §3's/§9's dashboard-adjacent numeric claims beyond what's called out above, and
+  `labs/dashboards/aw2-dashboard.xml`/`aw2-o11y-dashboard.json` themselves, both still
+  pending the separate dashboards-rework phase (confirmed topology-independent by direct
+  read of the Splunk-side XML, not yet re-verified for the Observability Cloud JSON).
+  **Do not run FW #2 through to AW #2 on a live instance right now and expect the
+  dashboards to reflect the current topology** — that gap is expected mid-migration.
 - **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
   the manifest again:** Config Server defaults to a live, unpinned `git pull` from
   GitHub on every restart (fixed via the `native` profile + a baked-in ConfigMap — see
@@ -124,8 +158,8 @@ here's where things stand:
   `kubectl apply`, zero restarts, 72 seconds to ready) is the number that went in the
   guide. Don't mistake a noisy validation instance for a real defect; check what's
   actually consuming CPU before concluding the app is at fault.
-- Remaining phases (AW2 doc rewrite, dashboards rework, Cilium) are unstarted. See the
-  migration plan for the full phase breakdown and gates.
+- Remaining phases (dashboards rework, Cilium) are unstarted. See the migration plan for
+  the full phase breakdown and gates.
 - **Considered and rejected: switching FW1 to Splunk's own reference PetClinic
   microservices deployment** (`splunk/observability-workshop`, "Ninja Workshops" ->
   `automatic-discovery` -> `petclinic-kubernetes`). Its images
