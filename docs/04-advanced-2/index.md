@@ -525,8 +525,16 @@ Print the certificate now, before you move to the browser — the next step asks
 it into a form, and you will not want to come back for it:
 
 ```bash
-sudo cat /opt/splunk/etc/auth/loccerts/locCert.pem
+cat /opt/splunk/etc/auth/loccerts/locCert.pem
 ```
+
+!!! danger "Don't `sudo` this — you're still the `splunk` user from step 4's `sudo -i -u splunk`"
+    Nothing since then has `exit`ed that shell, and `splunk` owns the file it just created —
+    plain `cat` reads it. `splunk` has **no sudo rights at all** on this instance (confirmed:
+    `sudo -n -l` → "a password is required"), so `sudo cat` here doesn't fail loudly, it just
+    hangs at a password prompt with no valid password to give it — right at the step that
+    hands you the credential the next step needs. Confirmed live on a clean run-through,
+    2026-08-31.
 
 !!! warning "Two different `.pem` files, and only one of them gets pasted"
     This certificate was generated on the instance a moment ago. It has nothing to do with
@@ -558,7 +566,7 @@ paste from `-----BEGIN CERTIFICATE-----` to `-----END CERTIFICATE-----` inclusiv
 | Password | `LogObserver2026!` |
 | Splunk platform URL | `https://$PUB_DNS:8089` — run `echo "https://$PUB_DNS:8089"` |
 | Connection name | e.g. `loc_${WS_USER}_k8s_otel_workshop` |
-| Certificate | output of `sudo cat /opt/splunk/etc/auth/loccerts/locCert.pem` |
+| Certificate | output of `cat /opt/splunk/etc/auth/loccerts/locCert.pem` |
 
 Then choose who may use the connection:
 
@@ -745,20 +753,15 @@ Both zero. Everything is collected correctly; nothing is *linked*.
 
     So this step is about putting the same four values on both sides.
 
-### Three of the four fields are already true — check, don't add
+### Two of the four fields are already true — check, don't add
 
-AW #1 and FW #2 already put three of the four correlation fields on every log and span,
-for reasons that had nothing to do with this module:
+AW #1 and FW #2 already put two of the four correlation fields on every log and span, for
+reasons that had nothing to do with this module:
 
 - **`service.name`** — FW #2's `extraAttributes.fromLabels` promotes each pod's
   `app.kubernetes.io/name` label onto its logs, and the Java agent already sets it on
   spans. Same string, two independent sources — that's *why* it matches, not a
   coincidence to configure.
-- **`deployment.environment`** — `values-aw2.yaml`'s `transform/petclinic_logs`,
-  `transform/traces_index` and `transform/app_metrics_index` all set the same literal
-  value, reconciled onto one attribute name across all three signals (see the comment on
-  the top-level `environment:` key in that file for why two names existed separately
-  until this module).
 - **`host.name`** — handled by field aliasing below, same as before.
 
 Confirm rather than assume — pick one instrumented service and check both sides:
@@ -779,6 +782,71 @@ index=k8s_ws_petclinic_logs "service.name"=customers-service | head 1 | table "s
 
 The two should read identically — no per-service edit made either of them true, and none
 is needed here.
+
+### `deployment.environment` — a real edit, not a checkpoint
+
+This one is **not** already true, despite how it can look. AW #1's top-level `environment:`
+key does set an environment attribute on every span and metric — but it's
+`deployment.environment.name` (the newer semantic-convention name, with `.name`), because
+that's what the chart schema demands once `operator.enabled`/`tracesEnabled`/`agent.enabled`
+are all on. Correlation reads the **old** name, `deployment.environment` (no `.name`), and
+nothing upstream of this module has ever set that one — check for it and you'll find it
+missing on every signal, logs included.
+
+!!! danger "The doc's reference file already has this; your `values-workshop.yaml` doesn't yet"
+    This is easy to miss because the *end state* looks like it happened for free: the
+    `values-aw2.yaml` reference at the end of this module carries `deployment.environment`
+    set() statements in all three transforms, so diffing against it or reading ahead makes
+    the field look pre-existing. It isn't — nothing in AW #1 or FW #2 ever added those
+    statements to the file you've actually been building. Skip this edit and every
+    correlation checkpoint below comes back with `env` blank, and `verify-aw2.sh` fails
+    with "no `deployment.environment`" on every one of the six services — confirmed live on
+    a clean run-through, 2026-08-31.
+
+You already have `transform/app_metrics_index`, `transform/traces_index` and
+`transform/petclinic_logs` in `values-workshop.yaml`'s `agent:` key, from AW #1 and FW #2.
+Add one `set()` statement to **each of the three** — don't create new processor blocks,
+edit the ones you already have:
+
+```yaml
+# transform/app_metrics_index — add alongside the existing com.splunk.index set():
+- set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
+    where resource.attributes["k8s.namespace.name"] == "petclinic"
+
+# transform/traces_index — add alongside the existing com.splunk.index set():
+- set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
+
+# transform/petclinic_logs — add alongside the existing sourcetype set():
+- set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
+    where resource.attributes["k8s.namespace.name"] == "petclinic"
+```
+
+Apply it the same way as every other collector change this workshop makes:
+
+```bash
+cd ~/k8s_workshop/k8s_otel
+ne values-workshop.yaml          # or: vi values-workshop.yaml
+sed -i "s|\${WS_USER}|$WS_USER|g" values-workshop.yaml
+
+helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+  --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client \
+  --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
+
+helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+  --version 0.158.0 -f values-workshop.yaml --namespace otel \
+  --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
+
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel --timeout=300s
+```
+
+```
+index=k8s_ws_petclinic_logs "service.name"=customers-service | head 1
+| table "service.name" "deployment.environment"
+```
+
+`deployment.environment` should now read `<you>-k8s-petclinic-env` — the same literal value
+the top-level `environment:` key carries, just under the name correlation actually looks
+for.
 
 ### The one field that's genuinely new: `trace_id` in the log line
 
@@ -1172,10 +1240,17 @@ real change from how earlier revisions of this workshop did it.
 umask 077
 printf '%s' '<YOUR_RUM_TOKEN>' > ~/.rum-token
 
-cd ~/k8s_workshop
+cd ~/k8s-otel-workshop
 WS_USER=$WS_USER REALM=$O11Y_REALM RUM_TOKEN=$(cat ~/.rum-token) \
   ./scripts/inject-rum-snippet.sh
 ```
+
+!!! note "Two different `~/k8s...` directories — this is the other one"
+    Most of this workshop's `cd` commands point at `~/k8s_workshop`, a lab working
+    directory for values files and JMeter. `scripts/inject-rum-snippet.sh` isn't a lab
+    file — it's part of this repo, cloned to `~/k8s-otel-workshop` back in
+    [00-setup](../00-setup/index.md). Run it from `~/k8s_workshop` and you get `No such
+    file or directory`, confirmed live on a clean run-through, 2026-08-31.
 
 <details>
 <summary>Expected output</summary>

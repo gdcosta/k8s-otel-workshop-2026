@@ -646,12 +646,37 @@ cluster-receiver metrics — `k8s.container.ready`, `k8s.container.restarts`,
 `k8s.pod.phase` — and leaves every OTLP metric from the application behind.
 
 So route both signals in the Collector, with the same OTTL mechanism you used in FW #2.
-Add to `values-workshop.yaml`:
+
+!!! danger "You already have an `agent:` key — edit it, don't add a second one"
+    FW #2 step 11 already put a top-level `agent:` key into `values-workshop.yaml`, holding
+    `transform/petclinic_logs` and the `logs` pipeline's processor list. YAML does not merge
+    two mappings that share a key at the same level — when a file has `agent:` twice, a
+    parser keeps only the **second** one and the first is gone, silently, with no warning
+    from Helm or the Collector. Pasting the block below in as a brand-new `agent:` entry at
+    the bottom of the file — instead of adding to the one you already have — deletes FW #2's
+    entire log-enrichment pipeline: no more sourcetype rewrite, no more `severity`, no more
+    `http_status`/`http_method`/`http_duration_us` extraction. Nothing errors. Everything
+    downstream that reads those fields just goes quietly empty.
+
+    Confirmed live on a clean run-through, 2026-08-31: exactly this happened. `grep -n
+    '^agent:' values-workshop.yaml` showed two hits, the rendered Collector config had
+    **zero** occurrences of `transform/petclinic_logs`, and every one of `verify-aw2.sh`'s
+    `deployment.environment` checks failed downstream in AW #2 as a result — a single
+    duplicated key, three modules later, six unrelated-looking symptoms.
+
+    Open `values-workshop.yaml`, find your existing `agent:` key from FW #2, and add the new
+    `transform/app_metrics_index` / `transform/traces_index` processors and the `metrics` /
+    `traces` pipeline entries **inside it**, alongside what's already there. The full,
+    correctly merged block looks like this:
 
 ```yaml
 agent:
   config:
     processors:
+      # From FW #2 step 11 — keep this, don't drop it.
+      transform/petclinic_logs:
+        log_statements:
+          # ... unchanged from FW #2 ...
       # Application metrics -> their own index. Namespace, not service.name —
       # six services now report six different names (FW #2's label promotion
       # gives each its own), so namespace membership is the single predicate
@@ -666,6 +691,17 @@ agent:
           - set(resource.attributes["com.splunk.index"], "k8s_ws_traces")
     service:
       pipelines:
+        logs:
+          processors:
+            # From FW #2 step 11 — keep this pipeline entry too.
+            - memory_limiter
+            - k8s_attributes
+            - filter/logs
+            - transform/petclinic_logs
+            - batch
+            - resource_detection
+            - resource
+            - resource/logs
         metrics:
           processors:
             - memory_limiter
@@ -683,6 +719,10 @@ agent:
             - resource_detection
             - resource
 ```
+
+Only the `metrics:` and `traces:` pipelines and the two new processors are actually new
+here — `logs:` and `transform/petclinic_logs` are shown in full only so you can confirm your
+merged file matches this, not as something to retype.
 
 ??? abstract "Full command sequence — collector change"
     ```bash

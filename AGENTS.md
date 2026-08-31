@@ -297,6 +297,60 @@ here's where things stand:
   Reference-section splice re-synced from the real current files, and FW1's own
   "later modules assume `default`" note rewritten to name `otel` explicitly instead of
   leaving a claim that would have read as wrong once this shipped.
+- **A full 5-stage, sub-agent-driven, clean-instance run-through of the whole workshop
+  (00-setup → FW1 → FW2 → AW1 → AW2) was completed 2026-08-31**, each stage a `fork`
+  sub-agent executing every doc command literally on a fresh EC2 instance
+  (`18.222.78.181`), reporting both technical pass/fail and a persona-based teaching
+  review ("technical, comfortable on Linux, little to no prior Kubernetes/OTel/Docker/git
+  knowledge"). It found and fixed **7 real, reproducible bugs**, none of them known
+  before this run:
+  - FW1's manifest `curl` and FW2's JMeter-plan `curl` both pointed at the wrong branch
+    (fixed once `origin` was brought current — see below).
+  - FW2's `service.name` label promotion (`extraAttributes.fromLabels`) was never taught
+    as its own step, silently breaking two earlier checkpoints that assumed it already
+    existed — fixed by adding the missing step and making the earlier checkpoints
+    `sourcetype`-based instead.
+  - AW1's Helm-upgrade-vs-install CRD gap (`no matches for kind "Instrumentation"`) —
+    fixed by adding the one-time `helm show crds | kubectl apply -f -` step.
+  - **AW1 §5 instructed a *second* top-level `agent:` key in `values-workshop.yaml`,
+    duplicating the one FW2 §11 already added.** YAML keeps only the last of two
+    same-level duplicate keys — a participant who pastes each "Add to
+    `values-workshop.yaml`" block in as shown, rather than merging by hand, silently
+    deletes FW2's entire log-enrichment pipeline (sourcetype rewrite, severity,
+    `http_status`/`http_method`/`http_duration_us` extraction) the moment they reach
+    AW1, with zero errors anywhere. This was the single highest-impact finding of the
+    whole run-through — confirmed live (`grep -n '^agent:'` → 2 hits, zero
+    `transform/petclinic_logs` in the rendered config) and reproduced independently by
+    6 of `verify-aw2.sh`'s 32 checks failing on missing `deployment.environment` three
+    modules later. Fixed by rewriting AW1 §5 to show the full, correctly merged `agent:`
+    block with an explicit "edit your existing key, don't add a new one" warning. The
+    doc's own end-of-module reference file (`values-aw1.yaml`) was already correct — only
+    the step-by-step instructed edit had the bug, which is exactly why it survived every
+    earlier review that only diffed against the reference.
+  - AW2 §5 claimed `deployment.environment` was "already true — check, don't add," but
+    the `set()` statements that make it true existed only in AW2's own end-of-module
+    reference appendix, never as an instructed edit in any numbered step — so a literal
+    participant's file never got them. Fixed by adding a real instructed step (edit the
+    three existing transform blocks, one new `set()` line each, then `helm upgrade`).
+  - AW2 §4's cert-print command, `sudo cat .../locCert.pem`, was run from inside the
+    `sudo -i -u splunk` shell §4 itself opens — but `splunk` has no sudo rights at all, so
+    a literal follow-along hangs at a password prompt right at the step that hands you
+    the credential the guided setup needs next. Fixed by dropping `sudo` (the file is
+    already readable as `splunk`).
+  - AW2 §7's RUM-snippet step ran `cd ~/k8s_workshop` before `./scripts/inject-rum-snippet.sh`
+    — that script lives in the repo clone (`~/k8s-otel-workshop`), a different directory
+    from the lab working directory most other `cd`s in this workshop point at. Fixed the
+    `cd` target and added a note distinguishing the two directories.
+
+  Also found, not a doc defect: `origin` on GitHub was 14 commits behind local, which is
+  *why* the branch-`curl` bugs above were still live in the version stages 3–5 initially
+  tested against — pushed once the user confirmed. Stage 5's §8 reconciliation exercise
+  also surfaced a genuine, large APM-vs-ground-truth divergence worth knowing about
+  rather than fixing: Spring Cloud LoadBalancer fails *before* attempting any HTTP call
+  when a backend is scaled to zero, so no CLIENT span is ever created for the failed
+  request — APM's own error rate reads a flat **0%** against a JMeter-confirmed **20%**
+  real failure rate in the same window. This is the intended teaching moment for AW2 §8
+  ("three lenses, three numbers, divergence is the finding"), not a bug to silence.
 - **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
   the manifest again:** Config Server defaults to a live, unpinned `git pull` from
   GitHub on every restart (fixed via the `native` profile + a baked-in ConfigMap — see
