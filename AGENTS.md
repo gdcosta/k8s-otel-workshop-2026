@@ -239,6 +239,22 @@ here's where things stand:
   running" is today. External JMeter (already the design) stays primary. If it gets
   built later, it must be introduced *after* the app is already confirmed healthy —
   never in the initial deploy — the same timing FW2 §7 already uses for JMeter.
+- **Phase 6 (Cilium/Hubble) idea, captured before it's forgotten: a misconfigured
+  `CiliumNetworkPolicy` between two pods as a second fault scenario, distinct from
+  FW2 §8's `visits-service` scale-to-zero.** User's own observation, 2026-08-31 — worth
+  building once Cilium actually exists in the cluster, not before. The two faults fail
+  at genuinely different layers, which is the pedagogical point: scale-to-zero is a
+  *service-discovery* failure (Eureka has no healthy instance, so Spring Cloud
+  LoadBalancer fails fast before attempting a connection — "no servers available", no
+  traffic ever leaves the caller). A blocked `NetworkPolicy` would be a *network-layer*
+  failure instead — the destination pod is running and still correctly registered in
+  Eureka, so the LoadBalancer picks it and genuinely tries to connect, and the packet
+  just gets dropped at the CNI layer. That produces connection timeouts rather than a
+  clean fast-fail, and is a much more true-to-production "everything looks healthy and
+  it still doesn't work" class of bug — exactly what Hubble's flow visibility exists to
+  diagnose, and something the current fault has no equivalent demonstration of. Do not
+  build this exercise without Cilium actually deployed and the policy actually tested
+  live — same "tested, not transcribed" rule as everything else here.
 
 ---
 
