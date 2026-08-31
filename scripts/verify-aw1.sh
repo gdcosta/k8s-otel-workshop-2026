@@ -21,6 +21,20 @@ mcount(){ num "| mcatalog values(metric_name) WHERE index=$1 | rename values(met
 
 echo "Verifying Advanced Workshop #1 (WS_USER=$WS_USER)"; echo
 
+# --- Helm release health (checked first — every check below assumes this) ---
+# Real incident, 2026-08-31: a field-manager conflict left this release stuck
+# in STATUS=failed for hours while individual resources were patched around
+# it by hand. Every live signal looked healthy (spans flowing, zero export
+# failures) because the RUNNING resources were fine — what silently drifted
+# was the collector's own OTTL config, stuck on an older revision's content
+# that was missing a real statement (see values-final.yaml's git history). No
+# check below would have caught the cause, only a downstream symptom of it —
+# this one catches it directly, first, before chasing anything else.
+hs=$(helm status "$RELEASE" -n default -o json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["info"]["status"])' 2>/dev/null)
+[ "$hs" = "deployed" ] \
+  && ok "Helm release '$RELEASE' is deployed (not failed/pending)" \
+  || no "Helm release status is '${hs:-unknown}', not deployed" "run 'helm history $RELEASE -n default' to see what failed and why; a field-manager conflict on the Instrumentation CR usually means deleting and letting the next 'helm upgrade' recreate it cleanly — see AGENTS.md's Phase 4c notes for the exact incident this check exists for"
+
 # --- Operator infrastructure ---------------------------------------------
 kubectl get pod -n default -l app.kubernetes.io/name=operator 2>/dev/null \
   | grep -q '1/1.*Running' \

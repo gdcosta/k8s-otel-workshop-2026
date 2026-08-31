@@ -22,6 +22,21 @@ tbd(){ printf '  \033[33m•\033[0m %s\n' "$1"; warn=$((warn+1)); }
 
 echo "Verifying Advanced Workshop #2 (WS_USER=$WS_USER, realm=$REALM)"; echo
 
+# --- Helm release health (checked first — every check below assumes this) ---
+# Real incident, 2026-08-31: a field-manager conflict left this release stuck
+# in STATUS=failed for hours while individual resources were patched around
+# it by hand. Every live signal looked healthy (spans flowing, zero export
+# failures) because the RUNNING resources were fine — what silently drifted
+# was the collector's own OTTL config, stuck on an older revision's content
+# that was missing a real statement (see values-final.yaml's git history and
+# AGENTS.md's Phase 4c notes for the exact incident). No check below would
+# have caught the cause, only a downstream symptom of it — this one catches
+# it directly, first, before chasing anything else.
+hs=$(helm status "${WS_USER}-k8s-ws" -n default -o json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["info"]["status"])' 2>/dev/null)
+[ "$hs" = "deployed" ] \
+  && ok "Helm release '${WS_USER}-k8s-ws' is deployed (not failed/pending)" \
+  || no "Helm release status is '${hs:-unknown}', not deployed" "run 'helm history ${WS_USER}-k8s-ws -n default' to see what failed and why; a field-manager conflict on the Instrumentation CR usually means deleting it and letting the next 'helm upgrade' recreate it cleanly"
+
 # --- warm-up -----------------------------------------------------------------
 # These checks read data the application only produces under traffic. With an
 # idle app the only log lines are readiness probes, which carry no trace context
@@ -59,8 +74,12 @@ echo "$CM" | grep -q 'signalfx' \
   && ok "collector has signalfx exporters" \
   || no "no signalfx exporter" "add splunkObservability to values-workshop.yaml"
 
+# Real false positive, 2026-08-31: a bare '401|403' matched the digits inside
+# an unrelated retry-interval value ("4.641401346s") in a transient, already-
+# recovered "connection refused" line — nothing to do with auth at all. Word
+# boundaries stop the pattern from matching digits embedded in a longer number.
 n=$(kubectl logs daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --tail=400 2>/dev/null \
-    | grep -ciE '401|403|unauthorized')
+    | grep -ciE '\b401\b|\b403\b|unauthorized')
 [ "${n:-0}" -eq 0 ] && ok "no auth errors from the collector" \
   || no "$n auth errors in collector logs" "check the access token"
 
@@ -217,9 +236,17 @@ if [ -n "${SPLUNK_AUTH:-}" ]; then
       || no "$svc: log service.name='${lsvc:-missing}' vs span='${SP_SVC}'" "they must match exactly (step 5)"
 
     lenv=$(lq "index=k8s_ws_petclinic_logs \"service.name\"=\"$svc\" | rename \"deployment.environment\" as x | search x=* | head 1 | table x")
-    [ -n "$lenv" ] && [ "$lenv" = "$SP_ENV" ] \
-      && ok "$svc: log deployment.environment matches the span ($lenv)" \
-      || no "$svc: log env='${lenv:-missing}' vs span='${SP_ENV}'" "APM identifies a service as (name, environment) — check transform/traces_index sets deployment.environment too (values-aw2.yaml)"
+    if [ -z "$SP_ENV" ]; then
+      # Real incident, 2026-08-31: this came back empty because
+      # transform/traces_index in the DEPLOYED values file had no
+      # deployment.environment statement at all — not a mismatch, an absence.
+      # A blank "vs span=''" here looks like a query fluke; say so explicitly.
+      no "$svc: span carries NO deployment.environment at all" "not a mismatch — an absence. Check the deployed values file's transform/traces_index for a missing set() statement, and that the Helm release reports 'deployed', not 'failed' — see the Helm-release check above"
+    elif [ -n "$lenv" ] && [ "$lenv" = "$SP_ENV" ]; then
+      ok "$svc: log deployment.environment matches the span ($lenv)"
+    else
+      no "$svc: log env='${lenv:-missing}' vs span='${SP_ENV}'" "APM identifies a service as (name, environment) — check transform/traces_index sets deployment.environment too (values-aw2.yaml)"
+    fi
   done
 
   lhost=$(lq 'index=k8s_ws_petclinic_logs | head 1 | table host')

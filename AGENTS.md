@@ -226,6 +226,42 @@ here's where things stand:
   Confirmed nothing was changed on `discovery-server` before the drop landed. If this
   gets revisited later, the constraint above (per-service, not uniform) is the reason a
   naive copy of the Zipkin/config-client pattern won't work for it.
+- **A real incident, 2026-08-31, worth knowing before trusting any live signal over
+  `helm status`:** the same day's config-client fix work hit a field-manager conflict
+  mid-`helm upgrade` (`.spec.python.env`, later `.spec.java.env`, owned by a rogue
+  `"kubectl"` manager left behind by an earlier `kubectl apply --server-side
+  --force-conflicts` workaround). The release sat in `STATUS: failed` for hours
+  afterward while individual resources kept working — spans kept flowing, zero export
+  failures on either destination, six services, real data — because the *running*
+  resources were fine. What silently drifted was the collector's own OTTL config,
+  stuck on the last successful revision's content: `values-final.yaml`'s
+  `transform/traces_index` (and `transform/app_metrics_index`) were missing the
+  `deployment.environment` `set()` statement `values-aw2.yaml` already had from Phase
+  4c's own reconciliation — a real gap in the "brought to full parity" claim from that
+  phase, caught only because the user filtered Observability Cloud's service map by
+  environment and got "No data found," then pushed on *why* rather than accepting "the
+  pipeline looks healthy" as the answer. Fixed by correcting `values-final.yaml` to
+  match `values-aw2.yaml` exactly, deleting the conflicted `Instrumentation` CR (fully
+  Helm-owned — safe to delete, it's recreated fresh on the next upgrade), and a clean
+  `helm upgrade` that landed as `STATUS: deployed` (revision 17). Confirmed live
+  end-to-end afterward: fresh spans carry `deployment.environment` correctly, all six
+  services' logs match their spans on both `service.name` and `deployment.environment`.
+
+  `scripts/verify-aw1.sh` and `verify-aw2.sh` both now check `helm status` first,
+  before anything else — a `failed` release should be the loudest, earliest signal,
+  not something no check ever looks at while every downstream symptom gets chased
+  individually. The existing `deployment.environment` correlation check in
+  `verify-aw2.sh` already would have caught this outright (it reads the value straight
+  off the span, not derived from assumption) — the real gap wasn't a missing check, it
+  was the script not being re-run after today's failed upgrades. Two more real,
+  unrelated bugs surfaced live while re-running both scripts to confirm the fix:
+  `verify-aw2.sh`'s auth-error log check (`grep -E '401|403|unauthorized'`) was a false
+  positive on the digits inside an unrelated retry-interval value
+  (`4.641401346s` contains `401`) — fixed with word boundaries so it can't match
+  digits embedded in a longer number; and a one-off "trace_id has no matching span"
+  failure turned out to be exactly the timing-window flake the check's own hint text
+  already predicted, confirmed by a follow-up query finding the span seconds later —
+  no fix needed, the check's existing hint was already correct.
 - **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
   the manifest again:** Config Server defaults to a live, unpinned `git pull` from
   GitHub on every restart (fixed via the `native` profile + a baked-in ConfigMap — see
