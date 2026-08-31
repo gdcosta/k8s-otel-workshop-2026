@@ -13,6 +13,32 @@ By the end you will have:
 - [x] That service packaged as a container image
 - [x] All six services deployed to Kubernetes, reachable from your browser through one gateway
 
+## The six services
+
+Three own data, three don't. Worth knowing before any of them exist as containers:
+
+| Service | Owns | Database |
+|---|---|---|
+| `customers-service` | Owners and their pets | Own in-memory HSQLDB instance |
+| `vets-service` | The list of vets and their specialties | Own in-memory HSQLDB instance |
+| `visits-service` | Visit records — each time a pet saw a vet | Own in-memory HSQLDB instance |
+| `api-gateway` | Routes external requests to the right backend by path, serves the AngularJS SPA's static files | none |
+| `discovery-server` | Eureka service registry — every other service registers here on startup and heartbeats so it can be found by name | none |
+| `config-server` | Serves externalized configuration to every other service, once, at startup | none |
+
+!!! abstract "Learning moment — database *per* service, not one shared database"
+    `customers-service`, `vets-service` and `visits-service` each get their **own**
+    in-memory database — not three services pointed at one shared instance. That's a
+    deliberate microservices pattern, not an accident of the in-memory choice: a shared
+    database is exactly the kind of coupling this architecture exists to avoid. One
+    service's schema change can't break another's queries if there's no schema for them
+    to share, and any one of the three can be scaled, restarted, or replaced without
+    touching the other two's data at all.
+
+    `api-gateway`, `discovery-server` and `config-server` don't own data — they coordinate
+    the other three (routing, service discovery, configuration) without persisting
+    anything themselves.
+
 ## Session variables
 
 Every command below uses these. Host setup step 13 wired them into the `splunk` account's

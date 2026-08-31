@@ -269,7 +269,7 @@ You should see one service **per Deployment you patched with the injection annot
 AW #1 §3 — all six PetClinic services, if you followed that module's default flow.
 
 !!! abstract "Learning moment — the map assembles itself from what's actually happening"
-    Nobody drew this map. Every edge between the six nodes exists because a real `CLIENT`
+    Nobody drew this map. Every edge between the nodes exists because a real `CLIENT`
     span was captured somewhere — a JDBC call, an HTTP call through the gateway, Eureka's
     own heartbeat (`PUT /eureka/apps/<SERVICE>/<instance>`) from every service registering
     and renewing its lease every few seconds. Observability Cloud draws the topology purely
@@ -277,13 +277,56 @@ AW #1 §3 — all six PetClinic services, if you followed that module's default 
     service tomorrow, and the map changes on its own — the alternative, a diagram someone
     drew once, goes stale the moment anything about the architecture does.
 
-    If you don't see this level of detail — say, only two or three nodes, or a node called
-    **`localhost`** that isn't a real PetClinic service — one of two things happened: either
-    fewer than all six Deployments were patched in AW #1 §3, or that module's
-    `SPRING_AUTOCONFIGURE_EXCLUDE` step (silencing PetClinic's own bundled Zipkin
-    auto-export) hasn't reached the running pods yet. `localhost` specifically is that
-    Zipkin noise, not a real dependency — see AW #1 §3's danger box for what it is and how
-    to confirm the fix landed.
+    If you see fewer than all six PetClinic nodes, fewer than all six Deployments were
+    patched in AW #1 §3 — extend the loop there to cover the rest.
+
+### Three more nodes that aren't PetClinic services, and what each one actually means
+
+The map draws three more nodes beyond the six services, none of them things you patched or
+deployed. Two are real; one is the same Zipkin noise AW #1 §3 already fixed, and it's worth
+telling the two apart rather than assuming every unexplained node is that one bug:
+
+**Three inferred database nodes**, one behind each of `customers-service`, `vets-service`
+and `visits-service` — real, and genuinely three separate databases, not one shared
+instance three services happen to connect to. Confirmed directly from the span data, not
+inferred from the architecture diagram: each service's `db.name` attribute is a distinct
+UUID (`customers-service` → `e71dc0a2-6b1e-4fc4-bfee-7b371ee00657`, `vets-service` →
+`c636e54c-52c9-4a7e-aa97-c6f38faad569`, `visits-service` →
+`729ebf50-2ad4-4e35-9524-37b0a7af80df`), and `db.connection_string` reads `hsqldb:mem:` on
+all three — an in-memory HSQLDB instance living inside that service's own JVM, not a
+network call to a shared database server. This is the same "database per service" pattern
+[FW #1](../01-foundational-1/index.md#the-six-services) introduces when the services are
+first deployed — the service map is now showing it back to you as topology, built from
+traffic rather than description.
+
+**A `discovery-server` self-loop, targeting a node called `localhost`.** This one is real
+too, and it's a *different* `localhost` from the Zipkin noise below — don't conflate the
+two just because they render with the same generic label. `discovery-server` continuously
+calls `POST http://localhost:8761/eureka/peerreplication/batch/` — Eureka's **peer
+replication** mechanism. This app's baked-in configuration points a standalone Eureka
+server's `eureka.client.serviceUrl.defaultZone` at itself, the standard pattern for a
+single-node Eureka setup, which makes the server also register as its own client. The call
+is genuine, ongoing traffic, not a failure — it just resolves to the literal string
+`localhost` rather than the pod's real service name, so the map can't tell it apart from
+any other `localhost`-addressed call and draws a generic node instead of a labelled
+`discovery-server → discovery-server` self-loop.
+
+**A `localhost` node that means nothing at all — if you still see it.** This is the one
+AW #1 §3's `SPRING_AUTOCONFIGURE_EXCLUDE` step exists to remove: PetClinic's own bundled
+Zipkin auto-export (Spring Boot Actuator, unrelated to the OTel agent), failing against a
+Zipkin collector on `:9411` that never existed. If that step's fix has reached the running
+pods, this one is simply gone — not renamed, not merged into the Eureka self-loop above,
+absent. If you still see a `localhost` node **and** the Eureka self-loop explanation above
+doesn't account for it (check the port — `:9411` is Zipkin noise, `:8761` is the real
+Eureka self-loop), that fix hasn't landed yet; see AW #1 §3's danger box.
+
+**`config-server` sits with no edges at all, and that's correct, not a gap.** It's a pure
+sink — services fetch their configuration from it *once*, at startup, then cache it; it's
+never itself a source of a call. Real evidence: 3,618 inbound requests over a 24-hour
+window, every one of them tied to a service (re)starting, and zero during a sustained load
+test with no restarts happening. Watching the map during ordinary traffic, `config-server`
+will stay dark the whole time — that's expected. It lights up the moment something rolls or
+restarts, not when load increases.
 
 With no fault injected, expect the error rate to sit near **0%** — Phase 3 of this
 workshop's own migration removed the old `/oups` endpoint that used to guarantee a steady

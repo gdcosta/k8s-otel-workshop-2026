@@ -413,6 +413,16 @@ The operator only touches a pod that carries a specific annotation, naming which
 `Instrumentation` resource to use. Nothing is instrumented automatically — you opt each
 service in. All six PetClinic services get the same annotation:
 
+??? note "Quick reminder — which service is which ([full description in FW #1](../01-foundational-1/index.md#the-six-services))"
+    | Service | Role |
+    |---|---|
+    | `customers-service` | Owners and pets — the one built from source |
+    | `vets-service` | Vet list |
+    | `visits-service` | Visit records |
+    | `api-gateway` | Routes requests, serves the SPA |
+    | `discovery-server` | Eureka service registry |
+    | `config-server` | Serves configuration at startup |
+
 ```bash
 for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
   kubectl patch deployment "$svc" -n petclinic -p \
