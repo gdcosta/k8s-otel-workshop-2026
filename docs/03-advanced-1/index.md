@@ -296,10 +296,17 @@ otelcol      5     ← the Collector's own health
 
     Instead this module uses the **OpenTelemetry Operator**, built into the same
     `splunk-otel-collector` chart you already installed. It runs as a small controller with
-    an admission webhook: when a pod is *created*, the webhook checks for one annotation and,
-    if present, rewrites the pod on the fly — adding an init container that drops the Java
-    agent jar into the pod, and setting `JAVA_TOOL_OPTIONS` plus a full set of `OTEL_*`
-    environment variables before the container ever starts. The agent still attaches through
+    an **admission webhook** — a hook Kubernetes calls on every pod *creation*, letting the
+    webhook inspect and rewrite the pod before it's saved, not just watch it afterward. This
+    one checks for one annotation and, if present, rewrites the pod on the fly — adding an
+    init container that drops the Java agent jar into the pod, and setting `JAVA_TOOL_OPTIONS`
+    plus a full set of `OTEL_*` environment variables before the container ever starts. The
+    operator also teaches Kubernetes a brand-new object type it needs for this,
+    `Instrumentation`, via a **CRD** (Custom Resource Definition) — the mechanism any add-on
+    uses to extend what kinds of objects the cluster understands at all. That CRD is the one
+    piece of this module genuinely worth installing by hand before anything else, below — Helm
+    only auto-installs a chart's CRDs on a brand-new release, never on an upgrade of one that
+    already exists, which is exactly the situation you're in here. The agent still attaches through
     the same JVM `-javaagent` mechanism and instruments the same frameworks — Spring MVC,
     JDBC, HikariCP — for the same reason: it recognises the framework rather than your code,
     so spans for HTTP requests and database calls come for free. What's different is *how it
@@ -401,11 +408,28 @@ instrumentation:
     also calls itself, continuously, on `localhost:8761` — that one is real, meaningful
     Eureka behavior, not noise, and AW #2 §3 explains it rather than silencing it.
 
+**Install the operator's CRDs first, once, by hand.** FW #2 already installed this
+Collector release — you're about to `helm upgrade` it, not create it fresh, and Helm's own
+CRD auto-install only ever runs on a brand-new release. Skip this and the next command
+fails, every time, with `no matches for kind "Instrumentation"`:
+
+```bash
+helm show crds splunk-otel-collector-chart/splunk-otel-collector --version 0.158.0 \
+  | kubectl apply -f -
+```
+
+One-time — every later `helm upgrade` in this module and AW #2 picks the CRDs up
+automatically from here on.
+
 ??? abstract "Full command sequence — collector change"
     ```bash
     cd ~/k8s_workshop/k8s_otel
     ne values-workshop.yaml          # or: vi values-workshop.yaml
     sed -i "s|\${WS_USER}|$WS_USER|g" values-workshop.yaml
+
+    # CRDs, once, before anything else — see above.
+    helm show crds splunk-otel-collector-chart/splunk-otel-collector --version 0.158.0 \
+      | kubectl apply -f -
 
     # Validate first. The chart schema is the only check in this workshop that
     # fails loudly instead of silently doing nothing — this is where a missing
@@ -476,6 +500,13 @@ that carries the new annotation, and *that* creation event is what the webhook i
     original six-pod deploy, showing up again here for the same reason: six JVMs starting
     at once, now each also loading a Java agent. Staging them costs a few extra seconds
     total and avoids it entirely.
+
+    If load is running in your other terminal, expect a real, brief error spike while each
+    service restarts in turn — `api-gateway`'s own composite calls fail against whichever
+    backend is mid-restart at that moment. Confirmed live: a 66% error rate for about two
+    minutes during the full loop, clearing to 0% within 90 seconds once all six pods
+    stabilize. That's the restart, not a sign anything's actually broken — don't stop the
+    loop or start debugging based on it.
 
     Every one of the five pulled images instruments identically to `customers-service`
     (the one hand-built image) — same init container, same env wiring, confirmed live
@@ -1348,15 +1379,20 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     The top-level `environment:` key from step 3 is missing or empty. Add it — this is a real
     chart-schema guard, not something you can work around another way.
 
-??? failure "`helm upgrade` fails with `no matches for kind Instrumentation` or a webhook connection refused"
-    Two different first-install races, both one-time:
-    - `no matches for kind "Instrumentation"` means the CRDs aren't installed yet — check
-      `operatorcrds.install: true` is set (not `operator.crds.create`, which must stay
-      `false`).
-    - `failed calling webhook "minstrumentation.kb.io": ... connection refused` means Helm
-      applied the `Instrumentation` resource before the operator pod's webhook was ready.
-      `kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=operator -n otel
-      --timeout=120s`, then re-run the same `helm upgrade` command.
+??? failure "`helm upgrade` fails with `no matches for kind Instrumentation`"
+    You skipped, or need to re-run, the CRD-install step above ("Install the operator's
+    CRDs first, once, by hand") — this is exactly the error `helm upgrade` produces without
+    it, on *every* existing release, not just this one. Run that command, then retry the
+    `helm upgrade`.
+
+??? failure "After that, `helm upgrade` fails with a webhook connection refused"
+    A second, separate one-time race, likely to show up right after fixing the CRD error
+    above: `failed calling webhook "minstrumentation.kb.io": ... connection refused` means
+    Helm applied the `Instrumentation` resource before the operator pod's webhook was
+    ready — plausible right now, since installing the CRDs just now may have also caused
+    the operator pod to restart. `kubectl wait --for=condition=ready pod -l
+    app.kubernetes.io/name=operator -n otel --timeout=120s`, then re-run the same `helm
+    upgrade` command.
 
 ??? failure "A patched Deployment's pods show no `opentelemetry-auto-instrumentation-java` init container"
     Confirm the annotation actually landed and the pod actually rolled:
