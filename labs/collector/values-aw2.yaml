@@ -67,6 +67,14 @@ instrumentation:
           value: "process.executable.path,process.command_args"
         - name: OTEL_JAVA_ENABLED_RESOURCE_PROVIDERS
           value: "io.opentelemetry.instrumentation.resources.ContainerResourceProvider,io.opentelemetry.sdk.autoconfigure.EnvironmentResourceProvider,io.opentelemetry.instrumentation.resources.ProcessResourceProvider"
+        # --- AW1: disable PetClinic's own bundled Zipkin auto-export (Spring
+        # Boot Actuator's ZipkinAutoConfiguration — unrelated to the OTel Java
+        # agent). See values-aw1.yaml's comment for the two fixes tried and
+        # confirmed NOT to work (MANAGEMENT_ZIPKIN_TRACING_EXPORT_ENABLED,
+        # MANAGEMENT_TRACING_ENABLED) before this one. Carried forward here
+        # unchanged, same as the two chart defaults above it. ------------------
+        - name: SPRING_AUTOCONFIGURE_EXCLUDE
+          value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
         # --- AW2: AlwaysOn Profiling. Old approach set these as hand-written
         # env vars in the monolith's Deployment manifest — that mechanism
         # doesn't exist once five of six services are pulled images with no

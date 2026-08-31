@@ -64,13 +64,20 @@ n=$(kubectl logs daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --tail=
 [ "${n:-0}" -eq 0 ] && ok "no auth errors from the collector" \
   || no "$n auth errors in collector logs" "check the access token"
 
+# PetClinic's own bundled Zipkin auto-export (Spring Boot Actuator, unrelated
+# to the OTel Java agent) tries and fails to reach localhost:9411 unless
+# SPRING_AUTOCONFIGURE_EXCLUDE disables it — see values-aw1.yaml's comment
+# for the two fixes that looked plausible and didn't work before this one.
+n=$($SPLUNK search 'index=k8s_ws_traces earliest=-5m "attributes.server.address"=localhost "attributes.server.port"=9411 | stats count' -earliest_time -15m -auth "$SPLUNK_AUTH" 2>/dev/null | tail -1 | tr -dc '0-9')
+[ "${n:-0}" -lt 5 ] \
+  && ok "no meaningful localhost:9411 Zipkin noise ($n spans/5m)" \
+  || no "$n localhost:9411 spans in the last 5 minutes" "check SPRING_AUTOCONFIGURE_EXCLUDE is in instrumentation.spec.java.env and reached the running pods"
+
 # --- profiling ---------------------------------------------------------------
 # Set once, via instrumentation.spec.java.env in values-aw2.yaml — applies to
 # every operator-instrumented pod uniformly, unlike the old per-Deployment env
-# block. Checked per service, same minimum pair AW1 established
-# (customers-service hand-built, vets-service pulled) to prove it's genuinely
-# uniform rather than something that happened to land on one service.
-for svc in customers-service vets-service; do
+# block. Checked across all six PetClinic services.
+for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
   pod=$(kubectl get pod -n petclinic -l app.kubernetes.io/name="$svc" \
           -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
   if [ -z "$pod" ]; then no "$svc: no running pod found" "kubectl get pods -n petclinic"; continue; fi
@@ -178,7 +185,7 @@ if [ -n "${SPLUNK_AUTH:-}" ]; then
   [ "${n:-0}" -gt 0 ] && ok "logs carry trace_id ($n events/15m)" \
     || no "no trace_id on logs" "check LOGGING_PATTERN_LEVEL in instrumentation.spec.java.env (step 5)"
 
-  for svc in customers-service vets-service; do
+  for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
     pod=$(kubectl get pod -n petclinic -l app.kubernetes.io/name="$svc" \
             -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
     if [ -z "$pod" ]; then no "$svc: no running pod found" "kubectl get pods -n petclinic"; continue; fi

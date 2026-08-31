@@ -327,7 +327,52 @@ operator:
 
 instrumentation:
   enabled: true
+  spec:
+    java:
+      env:
+        # This list REPLACES the chart's own default env list — it does not
+        # merge. Omit these two and the agent silently runs without them, no
+        # error, no warning. Keep them here verbatim alongside every addition
+        # this workshop makes, in AW #1 and AW #2 alike.
+        - name: OTEL_RESOURCE_DISABLED_KEYS
+          value: "process.executable.path,process.command_args"
+        - name: OTEL_JAVA_ENABLED_RESOURCE_PROVIDERS
+          value: "io.opentelemetry.instrumentation.resources.ContainerResourceProvider,io.opentelemetry.sdk.autoconfigure.EnvironmentResourceProvider,io.opentelemetry.instrumentation.resources.ProcessResourceProvider"
+        - name: SPRING_AUTOCONFIGURE_EXCLUDE
+          value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
 ```
+
+!!! danger "That last line silences a real, separate source of noise — worth understanding before you move on"
+    Every PetClinic service also runs Spring Boot Actuator's *own* bundled Zipkin
+    auto-export (Micrometer Tracing) — a completely different mechanism from the Splunk
+    Java agent this module attaches, and one nobody ever disabled. Left running, every
+    instrumented service continuously tries and fails to reach a Zipkin collector at
+    `localhost:9411` that doesn't exist: confirmed live, **17,294** failing
+    `SPAN_KIND_CLIENT` spans in a 12-hour window, `STATUS_CODE_ERROR`,
+    `HttpHostConnectException: Connection refused`. It costs nothing functionally, but it
+    clutters every trace search with spans that mean nothing, and Observability Cloud's
+    service-map inference (AW #2 §3) draws a meaningless **"localhost" node** from it —
+    real, and confusing, unless you know what it is.
+
+    Two properties that look like the obvious fix were tried live and confirmed **not**
+    to work, worth knowing so you don't re-guess them:
+
+    - `MANAGEMENT_ZIPKIN_TRACING_EXPORT_ENABLED=false` — that property doesn't exist in
+      this app's Spring Boot version at all.
+    - `MANAGEMENT_TRACING_ENABLED=false` — present in the environment, confirmed via
+      `/actuator/env`, and made no difference whatsoever; the Zipkin sender bean isn't
+      gated by this flag here.
+
+    `SPRING_AUTOCONFIGURE_EXCLUDE`, naming the autoconfiguration class outright, is the
+    one confirmed live to actually work — **0** `localhost:9411` spans in repeated
+    checks afterward, with real HTTP/DB spans and `jvm.*` metrics unaffected on the same
+    pods. Bonus finding along the way: the app's own bundled ConfigMap already sets
+    `management.tracing.export.zipkin.endpoint` pointing at a real host
+    (`http://tracing-server:9411`) — but that's an older, pre-Micrometer property path
+    for this Spring Boot version, so it silently never applies. That's a latent bug in
+    the upstream sample app's own config, not something this workshop needs to fix; it's
+    also *why* the noise heads to `localhost` specifically rather than some other
+    address.
 
 ??? abstract "Full command sequence — collector change"
     ```bash
@@ -366,18 +411,16 @@ instrumentation:
 
 The operator only touches a pod that carries a specific annotation, naming which
 `Instrumentation` resource to use. Nothing is instrumented automatically — you opt each
-service in:
+service in. All six PetClinic services get the same annotation:
 
 ```bash
-kubectl patch deployment customers-service -n petclinic -p \
-  '{"spec":{"template":{"metadata":{"annotations":
-    {"instrumentation.opentelemetry.io/inject-java":
-     "default/${WS_USER}-k8s-ws-splunk-otel-collector"}}}}}'
-
-kubectl patch deployment vets-service -n petclinic -p \
-  '{"spec":{"template":{"metadata":{"annotations":
-    {"instrumentation.opentelemetry.io/inject-java":
-     "default/${WS_USER}-k8s-ws-splunk-otel-collector"}}}}}'
+for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
+  kubectl patch deployment "$svc" -n petclinic -p \
+    '{"spec":{"template":{"metadata":{"annotations":
+      {"instrumentation.opentelemetry.io/inject-java":
+       "default/${WS_USER}-k8s-ws-splunk-otel-collector"}}}}}'
+  kubectl rollout status deployment/"$svc" -n petclinic --timeout=120s
+done
 ```
 
 The annotation's value is `<namespace>/<release-name>-splunk-otel-collector` — the
@@ -386,32 +429,28 @@ not in `petclinic` alongside the app. Patching a Deployment's pod template chang
 it produces, so this triggers a real rollout — Kubernetes replaces the running pod with one
 that carries the new annotation, and *that* creation event is what the webhook intercepts.
 
-!!! tip "Two services here, not all six"
-    `customers-service` and `vets-service` are enough to prove the point that matters: one
-    is built from source, the other is a pulled image, and the same annotation instruments
-    both identically. Repeat the same `kubectl patch` for `visits-service`, `api-gateway`,
-    `discovery-server` and `config-server` if you want traces from all six — nothing about
-    the mechanism changes per service.
+!!! warning "One service at a time, waiting for each rollout — not all six at once"
+    The loop above patches and waits for each Deployment in turn on purpose. Restarting
+    all six simultaneously (`kubectl rollout restart deployment -n petclinic --all`, or six
+    parallel `kubectl patch` calls with no wait between them) was tried live on this
+    instance size and transiently overloaded the control plane — even a plain `kubectl get
+    pods` timed out for a few seconds before it recovered on its own. It's the same
+    concurrent-cold-start pressure [FW #1](../01-foundational-1/index.md) found with the
+    original six-pod deploy, showing up again here for the same reason: six JVMs starting
+    at once, now each also loading a Java agent. Staging them costs a few extra seconds
+    total and avoids it entirely.
 
-??? abstract "Full command sequence — patch and confirm"
-    ```bash
-    kubectl patch deployment customers-service -n petclinic -p \
-      '{"spec":{"template":{"metadata":{"annotations":
-        {"instrumentation.opentelemetry.io/inject-java":
-         "default/'"$WS_USER"'-k8s-ws-splunk-otel-collector"}}}}}'
-    kubectl patch deployment vets-service -n petclinic -p \
-      '{"spec":{"template":{"metadata":{"annotations":
-        {"instrumentation.opentelemetry.io/inject-java":
-         "default/'"$WS_USER"'-k8s-ws-splunk-otel-collector"}}}}}'
+    Every one of the five pulled images instruments identically to `customers-service`
+    (the one hand-built image) — same init container, same env wiring, confirmed live
+    across all six, including the two infrastructure services (`discovery-server`,
+    `config-server`) that don't handle PetClinic's own business traffic. Nothing about the
+    mechanism changes per service; the loop above is the whole difference from patching
+    just one.
 
-    kubectl rollout status deployment/customers-service -n petclinic --timeout=120s
-    kubectl rollout status deployment/vets-service -n petclinic --timeout=120s
-    ```
-
-### ✅ Checkpoint — is the agent attached, on both a built and a pulled image?
+### ✅ Checkpoint — is the agent attached, across a hand-built image, five pulled ones, and two infrastructure services?
 
 ```bash
-for svc in customers-service vets-service; do
+for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
   echo "--- $svc ---"
   POD=$(kubectl get pod -n petclinic -l app.kubernetes.io/name=$svc -o jsonpath='{.items[0].metadata.name}')
   kubectl get pod -n petclinic "$POD" -o jsonpath='{.spec.initContainers[*].name}'; echo
@@ -421,7 +460,7 @@ done
 ```
 
 <details>
-<summary>Expected output — same shape for both services</summary>
+<summary>Expected output — same shape for all six (two shown; the rest are identical but for the service name)</summary>
 
 ```
 --- customers-service ---
@@ -442,7 +481,9 @@ webhook alongside FW #1's own `wait-for-config-server` — the operator did not 
 anything, it inserted itself. `OTEL_SERVICE_NAME` and the OTLP endpoint were derived and
 set automatically; nothing in the Deployment manifest names either value. This is the
 webhook doing exactly what a hand-written Dockerfile did before, generated per-service
-instead of typed once per image.
+instead of typed once per image. `config-server` is the one exception worth expecting, not
+worrying about: it has no `wait-for-config-server` init container, because it doesn't wait
+on itself.
 </details>
 
 There is no more `SPLUNK_OTEL_AGENT` downward-API dance to wire up by hand — the operator's
@@ -462,7 +503,7 @@ traffic. If it has finished, start it again.
 ```
 
 <details>
-<summary>Expected — 14 JVM metrics, times two services</summary>
+<summary>Expected — 14 JVM metrics, from every one of the six services</summary>
 
 ```
 jvm.class.count             jvm.gc.duration_sum
@@ -475,11 +516,21 @@ jvm.gc.duration_bucket
 jvm.gc.duration_count
 ```
 
-Plus `db.client.connections.*` from HikariCP on `customers-service` — the agent
-instrumented the connection pool without being told about it. `vets-service` reads
-read-only reference data through Spring Data JPA rather than HikariCP directly, so its
-connection-pool series may differ slightly; the `jvm.*` family is the one to expect
-identically from every instrumented service.
+This is a catalog of distinct metric *names*, not a per-service count — `mcatalog` shows
+you these 14 names once, however many of the six services are emitting them underneath.
+Split by `service.name` if you want to confirm all six are actually reporting rather than
+just one:
+
+```
+| mstats count(jvm.memory.used) WHERE index=k8s_ws_petclinic_metrics BY service.name span=1m
+| stats count by service.name
+```
+
+Plus `db.client.connections.*` from HikariCP on services that hold their own connection
+pool (`customers-service`, `visits-service`); `vets-service` reads read-only reference data
+through Spring Data JPA rather than HikariCP directly, so its connection-pool series may
+differ slightly. The `jvm.*` family is the one to expect identically from every
+instrumented service, business logic or infrastructure alike.
 </details>
 
 !!! warning "There is no metric called `jvm.gc.duration`"
@@ -666,13 +717,16 @@ tree. This one happens to be a `kube-probe` health check rather than user traffi
 independently-probed services now in the cluster, expect a much larger share of root spans
 to be `/actuator/health` than a single-pod deployment ever produced.
 
-Two more span shapes you'll see once you look past the first few: `SPAN_KIND_CLIENT` spans
+One more span shape you'll see once you look past the first few: `SPAN_KIND_CLIENT` spans
 named after the HTTP verb (`PUT`, `POST`) for every outbound call the agent didn't
 recognise a route for — Eureka's own heartbeat (`PUT /eureka/apps/<SERVICE>/<instance>`)
-being the most frequent — and, if a service's Zipkin auto-config finds nothing listening on
-`localhost:9411`, a `STATUS_CODE_ERROR` client span for the failed Zipkin export itself. That
-last one is Spring Boot's own bundled tracing trying to also self-export, unrelated to the
-Splunk agent; it's noise, not a sign anything is broken.
+being the most frequent, now from all six services registering and renewing their leases.
+
+If you skipped §3's `SPRING_AUTOCONFIGURE_EXCLUDE` step, you'll also see a
+`STATUS_CODE_ERROR` client span aimed at `localhost:9411` on every service — Spring Boot's
+own bundled Zipkin auto-export, a completely separate mechanism from the Splunk agent,
+continuously failing to reach a Zipkin collector that doesn't exist. §3 disables it; if
+you're seeing it here, that step didn't reach the running pods yet.
 </details>
 
 `service.name`, `k8s.deployment.name`, `k8s.namespace.name` and the rest of the resource
@@ -704,7 +758,7 @@ index=k8s_ws_traces
 ```
 
 <details>
-<summary>Real output, two services instrumented, brief run</summary>
+<summary>Real output, captured early with just two services instrumented — shown for the query shape, not as today's expected scope</summary>
 
 ```
   service.name         route       count avg_ms max_ms
@@ -728,12 +782,14 @@ on every pod, all the time — that's expected, not a sign load isn't reaching t
 for the routes JMeter actually drives (`/owners`, `/vets`, and so on) to judge real traffic.
 </details>
 
-!!! note "Exact numbers depend on how many services you instrumented and how long load ran"
-    Step 3 instrumented two services as a minimum proof; the table above will only show
-    routes from whichever Deployments actually carry the injection annotation. Extend the
-    `kubectl patch` from step 3 to `visits-service` and `api-gateway` if you want their
-    routes in this table too — `service.name` is exactly the `OTEL_SERVICE_NAME` each one
-    reports, so nothing else about either query needs to change as you add more.
+!!! note "Six rows of service.name now, not two"
+    Step 3 instruments all six services by default, so the cross-service query above will
+    return every one of them once load has reached each — `service.name` is exactly the
+    `OTEL_SERVICE_NAME` each reports, and this query needs no per-service edit as services
+    are added or removed from the annotation. `discovery-server` and `config-server` will
+    show mostly Eureka/`PUT` and `/actuator/health` traffic rather than user-facing routes
+    — that's expected; they're infrastructure services, not ones JMeter's own samplers
+    target directly.
 
 !!! warning "If the only row is `/actuator/health`, your load generator has stopped"
     kube-probe hits `/actuator/health` every five seconds, so that one route keeps arriving
@@ -988,8 +1044,49 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     operator:
       enabled: true
 
+    # [AW1] instrumentation.spec.java.env REPLACES the chart's own default env
+    # list — it does not merge. Verified live 2026-08-29 (see values-aw2.yaml,
+    # where this was first found) and confirmed again here 2026-08-30: every
+    # entry below is explicit, the chart's own two defaults verbatim, PLUS one
+    # addition of AW1's own.
+    #
+    # SPRING_AUTOCONFIGURE_EXCLUDE disables PetClinic's own bundled Zipkin
+    # auto-export (Spring Boot Actuator's ZipkinAutoConfiguration/Micrometer
+    # Tracing — a completely separate mechanism from the OTel Java agent this
+    # module attaches). Left enabled, every instrumented service continuously
+    # tries and fails to reach a Zipkin collector at localhost:9411 that was
+    # never disabled and doesn't exist — confirmed live: 17,294 failing
+    # SPAN_KIND_CLIENT spans in a 12h window, STATUS_CODE_ERROR,
+    # HttpHostConnectException: Connection refused. Two plausible-looking fixes
+    # were tried and confirmed NOT to work before this one, live, via
+    # /actuator/env — worth knowing if you're ever tempted to re-guess this:
+    #   MANAGEMENT_ZIPKIN_TRACING_EXPORT_ENABLED=false  -- that property doesn't
+    #     exist in this app; /actuator/env/management.zipkin.tracing.endpoint
+    #     returns nothing at all, and the ConfigMap's own
+    #     management.tracing.export.zipkin.endpoint override (an older,
+    #     Sleuth-era property path) is what actually resolves — a separate,
+    #     latent bug in the upstream sample app's own config, not something
+    #     this workshop needs to fix.
+    #   MANAGEMENT_TRACING_ENABLED=false  -- confirmed present in
+    #     systemEnvironment via /actuator/env, and made no difference at all;
+    #     the Zipkin sender bean isn't gated by this flag in this app's Spring
+    #     Boot version.
+    # SPRING_AUTOCONFIGURE_EXCLUDE, naming the autoconfiguration class outright,
+    # is the one confirmed live to actually work: 0 localhost:9411 spans in
+    # repeated post-fix checks, while real HTTP/DB spans and jvm.* metrics kept
+    # flowing normally on the same pods.
     instrumentation:
       enabled: true
+      spec:
+        java:
+          env:
+            # --- chart defaults (would silently vanish if omitted — see above) ---
+            - name: OTEL_RESOURCE_DISABLED_KEYS
+              value: "process.executable.path,process.command_args"
+            - name: OTEL_JAVA_ENABLED_RESOURCE_PROVIDERS
+              value: "io.opentelemetry.instrumentation.resources.ContainerResourceProvider,io.opentelemetry.sdk.autoconfigure.EnvironmentResourceProvider,io.opentelemetry.instrumentation.resources.ProcessResourceProvider"
+            - name: SPRING_AUTOCONFIGURE_EXCLUDE
+              value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
 
     # [FW2] Splunk Enterprise via HEC.  [AW1] adds metricsIndex / tracesIndex.
     splunkPlatform:
@@ -1204,6 +1301,25 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     `petclinic`. A typo there (or the release name, if you didn't install with
     `${WS_USER}-k8s-ws`) fails silently: the pod rolls, but the webhook finds no matching
     resource to inject and leaves the pod alone.
+
+??? failure "A meaningless `localhost` node keeps showing up wherever services are drawn (this module's trace search, or AW #2's service map)"
+    That's PetClinic's own bundled Zipkin auto-export, not the OTel agent — see §3's danger
+    box. Confirm the exclude reached the running pods:
+    ```
+    index=k8s_ws_traces earliest=-5m "attributes.server.address"=localhost "attributes.server.port"=9411 | stats count
+    ```
+    A large, steady count means `SPRING_AUTOCONFIGURE_EXCLUDE` either isn't in
+    `instrumentation.spec.java.env`, or the change hasn't reached pods that were already
+    running before you added it — `instrumentation.spec.java.env` changes don't roll
+    running pods automatically; `kubectl rollout restart deployment -n petclinic <service>`
+    to pick it up (one at a time — see the staged-rollout warning in §3).
+
+??? failure "`kubectl get pods` (or any kubectl command) hangs or times out while patching all six services"
+    A real, transient control-plane overload on this instance size, not a sign anything is
+    broken — the same concurrent-cold-start pressure FW #1 found with the original six-pod
+    deploy. It recovers on its own within seconds. If you hit this, you likely restarted or
+    patched all six Deployments at once instead of one at a time — see §3's warning; the
+    loop given there staggers them for exactly this reason.
 
 ??? failure "No `jvm.*` metrics anywhere"
     Work outward. Is the agent attached to this pod at all?

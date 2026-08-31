@@ -41,8 +41,49 @@ operatorcrds:
 operator:
   enabled: true
 
+# [AW1] instrumentation.spec.java.env REPLACES the chart's own default env
+# list — it does not merge. Verified live 2026-08-29 (see values-aw2.yaml,
+# where this was first found) and confirmed again here 2026-08-30: every
+# entry below is explicit, the chart's own two defaults verbatim, PLUS one
+# addition of AW1's own.
+#
+# SPRING_AUTOCONFIGURE_EXCLUDE disables PetClinic's own bundled Zipkin
+# auto-export (Spring Boot Actuator's ZipkinAutoConfiguration/Micrometer
+# Tracing — a completely separate mechanism from the OTel Java agent this
+# module attaches). Left enabled, every instrumented service continuously
+# tries and fails to reach a Zipkin collector at localhost:9411 that was
+# never disabled and doesn't exist — confirmed live: 17,294 failing
+# SPAN_KIND_CLIENT spans in a 12h window, STATUS_CODE_ERROR,
+# HttpHostConnectException: Connection refused. Two plausible-looking fixes
+# were tried and confirmed NOT to work before this one, live, via
+# /actuator/env — worth knowing if you're ever tempted to re-guess this:
+#   MANAGEMENT_ZIPKIN_TRACING_EXPORT_ENABLED=false  -- that property doesn't
+#     exist in this app; /actuator/env/management.zipkin.tracing.endpoint
+#     returns nothing at all, and the ConfigMap's own
+#     management.tracing.export.zipkin.endpoint override (an older,
+#     Sleuth-era property path) is what actually resolves — a separate,
+#     latent bug in the upstream sample app's own config, not something
+#     this workshop needs to fix.
+#   MANAGEMENT_TRACING_ENABLED=false  -- confirmed present in
+#     systemEnvironment via /actuator/env, and made no difference at all;
+#     the Zipkin sender bean isn't gated by this flag in this app's Spring
+#     Boot version.
+# SPRING_AUTOCONFIGURE_EXCLUDE, naming the autoconfiguration class outright,
+# is the one confirmed live to actually work: 0 localhost:9411 spans in
+# repeated post-fix checks, while real HTTP/DB spans and jvm.* metrics kept
+# flowing normally on the same pods.
 instrumentation:
   enabled: true
+  spec:
+    java:
+      env:
+        # --- chart defaults (would silently vanish if omitted — see above) ---
+        - name: OTEL_RESOURCE_DISABLED_KEYS
+          value: "process.executable.path,process.command_args"
+        - name: OTEL_JAVA_ENABLED_RESOURCE_PROVIDERS
+          value: "io.opentelemetry.instrumentation.resources.ContainerResourceProvider,io.opentelemetry.sdk.autoconfigure.EnvironmentResourceProvider,io.opentelemetry.instrumentation.resources.ProcessResourceProvider"
+        - name: SPRING_AUTOCONFIGURE_EXCLUDE
+          value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
 
 # [FW2] Splunk Enterprise via HEC.  [AW1] adds metricsIndex / tracesIndex.
 splunkPlatform:

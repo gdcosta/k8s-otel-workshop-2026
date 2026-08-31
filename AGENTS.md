@@ -137,6 +137,59 @@ here's where things stand:
   read of the Splunk-side XML, not yet re-verified for the Observability Cloud JSON).
   **Do not run FW #2 through to AW #2 on a live instance right now and expect the
   dashboards to reflect the current topology** — that gap is expected mid-migration.
+- **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
+  services by default, not two.** User-directed, with the reasoning worth preserving:
+  the original "patch `customers-service`/`vets-service` as a minimum proof, extend if
+  you want" framing in AW #1 §3 was inherited straight from the old monolith's shape —
+  one app plus one inferred database dependency — and never got re-examined after the
+  migration to six real services, undermining the entire point of the migration (a real
+  six-node service map). `docs/03-advanced-1/index.md` §3's `kubectl patch` loop and
+  every downstream checkpoint now cover all six; `docs/04-advanced-2/index.md`'s
+  profiling/correlation checkpoints and its service-map checkpoint follow the same
+  change. Confirmed live, all six carry the injection annotation and report their own
+  `service.name`, `jvm.*` metrics and real spans — including the two infrastructure
+  services (`discovery-server`, `config-server`), which needed no different treatment
+  than the four business services (`config-server` correctly has no
+  `wait-for-config-server` init container, since it doesn't wait on itself).
+
+  Also fixed in this pass, same user direction: the meaningless **"localhost" node**
+  cluttering the Observability Cloud service map. Root cause is PetClinic's own bundled
+  Zipkin auto-export (Spring Boot Actuator's `ZipkinAutoConfiguration`/Micrometer
+  Tracing — a completely separate mechanism from the OTel Java agent), continuously
+  failing to reach a Zipkin collector at `localhost:9411` that never existed — confirmed
+  live at 17,294 failing spans in a 12h window before the fix. Two plausible env vars
+  were tried and confirmed live NOT to work
+  (`MANAGEMENT_ZIPKIN_TRACING_EXPORT_ENABLED`, `MANAGEMENT_TRACING_ENABLED`) before
+  landing on the one that does: `SPRING_AUTOCONFIGURE_EXCLUDE=org.springframework.boot.
+  actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration`, added to
+  `instrumentation.spec.java.env` in `values-aw1.yaml` (introduced there for the first
+  time — AW1 had been running on pure chart defaults until now) and carried forward into
+  `values-aw2.yaml`. Confirmed live: 80 → 44 → 0 `localhost:9411` spans across
+  iterations, with real HTTP/DB spans and `jvm.*` metrics unaffected throughout. Bonus
+  finding along the way, not something this workshop needs to fix: the upstream sample
+  app's own bundled ConfigMap sets `management.tracing.export.zipkin.endpoint` — an
+  older, pre-Micrometer property path that silently never applies on this Spring Boot
+  version, which is *why* the noise heads to `localhost` rather than the real host the
+  ConfigMap actually names.
+
+  `labs/collector/values-final.yaml` turned out to be genuinely stale in the same sweep —
+  last touched before the operator rewrite (Phase 4a/4b) even though FW #2's own doc
+  links it as the "final state" reference; it was missing the entire
+  `environment:`/`operatorcrds:`/`operator:`/`instrumentation:` block. Brought to full
+  parity with `values-aw2.yaml` and live-tested (dry-run plus a real install, confirmed
+  via `/actuator/env` and direct Splunk queries, not dry-run alone).
+
+  `scripts/verify-aw1.sh` (15/15 live) and `scripts/verify-aw2.sh` (30/30 live) both
+  expanded their per-service loops to all six and added a Zipkin-noise assertion each.
+  One operational finding worth carrying forward: restarting or patching all six
+  Deployments **simultaneously** transiently overloaded the control plane on this
+  instance size (even a plain `kubectl get pods` timed out for a few seconds, recovering
+  on its own) — the same concurrent-cold-start pressure FW #1 found with the original
+  six-pod deploy, now showing up again with six JVMs each also loading a Java agent.
+  Both docs' patch/restart instructions now stage services one at a time with a
+  `rollout status` wait between each, rather than issuing all six as a tight parallel
+  batch. This pass used sub-agents throughout (live validation/config finalization, then
+  doc-writing), continuing the working-method change from Phase 4b.
 - **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
   the manifest again:** Config Server defaults to a live, unpinned `git pull` from
   GitHub on every restart (fixed via the `native` profile + a baked-in ConfigMap — see

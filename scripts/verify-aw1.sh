@@ -31,10 +31,10 @@ kubectl get instrumentation -n default "${RELEASE}-splunk-otel-collector" >/dev/
   && ok "Instrumentation CR present (${RELEASE}-splunk-otel-collector)" \
   || no "Instrumentation CR missing" "instrumentation.enabled must be true in values-aw1.yaml"
 
-# --- Auto-instrumentation actually injected, on BOTH a hand-built and a
-#     pulled image — the whole point of using the operator instead of a
-#     hand-built Dockerfile is that it doesn't care which one it is.
-for svc in customers-service vets-service; do
+# --- Auto-instrumentation actually injected, on all six services — both
+#     the one hand-built image and the five pulled ones alike, which is the
+#     whole point of using the operator instead of a hand-built Dockerfile.
+for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
   pod=$(kubectl get pod -n petclinic -l app.kubernetes.io/name="$svc" \
           -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
   if [ -z "$pod" ]; then
@@ -65,10 +65,21 @@ n=$(num '| tstats count where index=k8s_ws_traces'); [ "${n:-0}" -gt 0 ] \
 n=$(num 'index=k8s_ws_traces trace_id=* | stats count'); [ "${n:-0}" -gt 0 ] \
   && ok "spans carry trace_id" || no "spans lack trace_id" "check the traces pipeline exporter"
 
-n=$(num 'index=k8s_ws_traces "service.name"=customers-service OR "service.name"=vets-service | stats dc("service.name") as c | fields c'); \
-[ "${n:-0}" -ge 1 ] \
+n=$(num 'index=k8s_ws_traces | stats dc("service.name") as c | fields c'); \
+[ "${n:-0}" -ge 6 ] \
   && ok "spans carry the per-service service.name the agent reports ($n distinct)" \
-  || no "no per-service service.name found on spans" "the operator sets OTEL_SERVICE_NAME per Deployment automatically — check step 3's checkpoint"
+  || no "only $n distinct service.name values on spans, expected 6" "the operator sets OTEL_SERVICE_NAME per Deployment automatically — check step 3's checkpoint, and that every Deployment carries the inject-java annotation"
+
+# PetClinic's own bundled Zipkin auto-export (Spring Boot Actuator,
+# unrelated to the OTel Java agent) tries and fails to reach localhost:9411
+# unless SPRING_AUTOCONFIGURE_EXCLUDE disables it — see values-aw1.yaml's
+# comment for the two fixes that looked plausible and didn't work before
+# this one. A handful of leftover spans from before the fix landed is fine;
+# a large, steady count means the exclude isn't actually reaching the pods.
+n=$(num 'index=k8s_ws_traces earliest=-5m "attributes.server.address"=localhost "attributes.server.port"=9411 | stats count'); \
+[ "${n:-0}" -lt 5 ] \
+  && ok "no meaningful localhost:9411 Zipkin noise ($n spans/5m)" \
+  || no "$n localhost:9411 spans in the last 5 minutes" "check SPRING_AUTOCONFIGURE_EXCLUDE is in instrumentation.spec.java.env and reached the running pods (kubectl rollout restart if you just added it)"
 
 n=$(num '| tstats count where index=k8s_ws_petclinic_logs'); [ "${n:-0}" -gt 0 ] \
   && ok "app logs still isolated ($n events/15m)" || no "no app logs" "FW2 routing regressed"

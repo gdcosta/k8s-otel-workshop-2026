@@ -266,19 +266,24 @@ cd ~/k8s_workshop/jmeter
 ### ✅ Checkpoint
 
 You should see one service **per Deployment you patched with the injection annotation** in
-AW #1 §3 — at minimum `customers-service` and `vets-service`, more if you extended the
-annotation to the rest.
+AW #1 §3 — all six PetClinic services, if you followed that module's default flow.
 
-!!! abstract "Learning moment — where do the extra edges on the map come from?"
-    You never instrumented `discovery-server`. Look at the service map anyway and you'll
-    likely see an edge to it regardless — every instrumented service registers with Eureka
-    and sends a heartbeat every few seconds, and the Java agent captures that as a real
-    `CLIENT` span (`PUT /eureka/apps/<SERVICE>/<instance>`), the same as any other outbound
-    HTTP call. Observability Cloud draws the edge from the span alone; `discovery-server`
-    itself doesn't have to be instrumented for the dependency to show up as **inferred**.
+!!! abstract "Learning moment — the map assembles itself from what's actually happening"
+    Nobody drew this map. Every edge between the six nodes exists because a real `CLIENT`
+    span was captured somewhere — a JDBC call, an HTTP call through the gateway, Eureka's
+    own heartbeat (`PUT /eureka/apps/<SERVICE>/<instance>`) from every service registering
+    and renewing its lease every few seconds. Observability Cloud draws the topology purely
+    from that traffic. Scale a service down, stop sending it traffic, or add a seventh
+    service tomorrow, and the map changes on its own — the alternative, a diagram someone
+    drew once, goes stale the moment anything about the architecture does.
 
-    This is why traces matter. The service map assembles itself from what's actually
-    happening, rather than from a diagram someone drew and stopped updating.
+    If you don't see this level of detail — say, only two or three nodes, or a node called
+    **`localhost`** that isn't a real PetClinic service — one of two things happened: either
+    fewer than all six Deployments were patched in AW #1 §3, or that module's
+    `SPRING_AUTOCONFIGURE_EXCLUDE` step (silencing PetClinic's own bundled Zipkin
+    auto-export) hasn't reached the running pods yet. `localhost` specifically is that
+    Zipkin noise, not a real dependency — see AW #1 §3's danger box for what it is and how
+    to confirm the fix landed.
 
 With no fault injected, expect the error rate to sit near **0%** — Phase 3 of this
 workshop's own migration removed the old `/oups` endpoint that used to guarantee a steady
@@ -730,7 +735,9 @@ instrumentation:
   spec:
     java:
       env:
-        # ...chart defaults, must stay listed — see step 6...
+        # ...chart defaults, and AW #1's SPRING_AUTOCONFIGURE_EXCLUDE, must
+        # stay listed — this list replaces, not merges. See step 6 for the
+        # profiler vars this module adds alongside this one...
         - name: LOGGING_PATTERN_LEVEL
           value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
 ```
@@ -750,10 +757,13 @@ instrumentation:
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     # instrumentation.spec.java.env changes don't roll running pods automatically —
-    # restart to pick it up:
-    kubectl rollout restart deployment -n petclinic customers-service vets-service
-    kubectl rollout status  deployment -n petclinic customers-service
-    kubectl rollout status  deployment -n petclinic vets-service
+    # restart to pick it up. One service at a time, waiting for each — restarting
+    # all six simultaneously was tried live and transiently overloaded the control
+    # plane on this instance size (see AW #1 §3's staged-rollout warning):
+    for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
+      kubectl rollout restart deployment/"$svc" -n petclinic
+      kubectl rollout status  deployment/"$svc" -n petclinic --timeout=120s
+    done
 
     # Confirm a real log line now carries real IDs:
     kubectl logs -n petclinic deploy/customers-service --tail=50 | grep -o 'trace_id=[0-9a-f]*'
@@ -999,10 +1009,12 @@ instrumentation:
       --version 0.158.0 -f values-workshop.yaml \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
-    # instrumentation.spec.java.env changes need a rollout to reach running pods:
-    kubectl rollout restart deployment -n petclinic customers-service vets-service
-    kubectl rollout status  deployment -n petclinic customers-service
-    kubectl rollout status  deployment -n petclinic vets-service
+    # instrumentation.spec.java.env changes need a rollout to reach running pods.
+    # One at a time — see AW #1 §3's staged-rollout warning:
+    for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
+      kubectl rollout restart deployment/"$svc" -n petclinic
+      kubectl rollout status  deployment/"$svc" -n petclinic --timeout=120s
+    done
     ```
 
 ### ✅ Checkpoint
@@ -1010,7 +1022,7 @@ instrumentation:
 Per service, since profiling is now enabled uniformly rather than on one Deployment:
 
 ```bash
-for svc in customers-service vets-service; do
+for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
   echo "--- $svc ---"
   pod=$(kubectl get pod -n petclinic -l app.kubernetes.io/name=$svc -o jsonpath='{.items[0].metadata.name}')
   kubectl get pod -n petclinic "$pod" \
@@ -1020,7 +1032,7 @@ done
 ```
 
 <details>
-<summary>Expected — protocol and endpoint transport must agree</summary>
+<summary>Expected — protocol and endpoint transport must agree, same shape on all six (two shown)</summary>
 
 ```
 --- customers-service ---
@@ -1038,6 +1050,10 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://wsuser01-k8s-ws-splunk-otel-collector-agent.d
 
 `http/protobuf` and a `:4318` endpoint — HTTP paired with HTTP. `grpc` here, against this
 same `:4318` endpoint, is the silent-failure combination the danger box above warns about.
+`discovery-server` and `config-server` show the same four lines as the four business
+services — the mechanism doesn't distinguish infrastructure services from application
+ones, since `instrumentation.spec.java.env` applies uniformly to anything the inject-java
+annotation touches.
 </details>
 
 In Observability Cloud: **APM → your service → AlwaysOn Profiling**. With load running,
@@ -1515,6 +1531,13 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
               value: "process.executable.path,process.command_args"
             - name: OTEL_JAVA_ENABLED_RESOURCE_PROVIDERS
               value: "io.opentelemetry.instrumentation.resources.ContainerResourceProvider,io.opentelemetry.sdk.autoconfigure.EnvironmentResourceProvider,io.opentelemetry.instrumentation.resources.ProcessResourceProvider"
+            # --- AW1: disable PetClinic's own bundled Zipkin auto-export
+            # (Spring Boot Actuator's ZipkinAutoConfiguration — unrelated to
+            # the OTel Java agent). See AW1 §3's danger box for the two fixes
+            # tried and confirmed NOT to work before this one. Carried forward
+            # here unchanged, same as the two chart defaults above it. -------
+            - name: SPRING_AUTOCONFIGURE_EXCLUDE
+              value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
             # --- AW2: AlwaysOn Profiling. Applies to every operator-instrumented
             # pod uniformly, with no per-service edit needed. ---------------------
             - name: SPLUNK_PROFILER_ENABLED
