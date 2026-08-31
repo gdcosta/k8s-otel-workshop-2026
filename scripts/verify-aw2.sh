@@ -7,6 +7,9 @@ set -u
 REALM=${REALM:-us1}
 SPLUNK=${SPLUNK:-/opt/splunk/bin/splunk}
 REPO_DIR=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
+# The Collector/operator live in their own namespace, not default — see the
+# real 2026-08-31 incident the Helm-status check below exists for.
+OTEL_NS=${OTEL_NS:-otel}
 
 # The workshop ships fixed lab credentials (00-setup), so the log-side checks no
 # longer silently skip. Override if you changed the admin password:
@@ -32,10 +35,10 @@ echo "Verifying Advanced Workshop #2 (WS_USER=$WS_USER, realm=$REALM)"; echo
 # AGENTS.md's Phase 4c notes for the exact incident). No check below would
 # have caught the cause, only a downstream symptom of it — this one catches
 # it directly, first, before chasing anything else.
-hs=$(helm status "${WS_USER}-k8s-ws" -n default -o json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["info"]["status"])' 2>/dev/null)
+hs=$(helm status "${WS_USER}-k8s-ws" -n "$OTEL_NS" -o json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["info"]["status"])' 2>/dev/null)
 [ "$hs" = "deployed" ] \
   && ok "Helm release '${WS_USER}-k8s-ws' is deployed (not failed/pending)" \
-  || no "Helm release status is '${hs:-unknown}', not deployed" "run 'helm history ${WS_USER}-k8s-ws -n default' to see what failed and why; a field-manager conflict on the Instrumentation CR usually means deleting it and letting the next 'helm upgrade' recreate it cleanly"
+  || no "Helm release status is '${hs:-unknown}', not deployed" "run 'helm history ${WS_USER}-k8s-ws -n $OTEL_NS' to see what failed and why; a field-manager conflict on the Instrumentation CR usually means deleting it and letting the next 'helm upgrade' recreate it cleanly"
 
 # --- warm-up -----------------------------------------------------------------
 # These checks read data the application only produces under traffic. With an
@@ -68,7 +71,7 @@ if [ -r ~/.o11y-token ]; then
 else no "~/.o11y-token not found" "see step 1"; fi
 
 # --- collector -> observability ---------------------------------------------
-CM=$(kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+CM=$(kubectl get cm -n "$OTEL_NS" ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
       -o go-template='{{index .data "relay"}}' 2>/dev/null)
 echo "$CM" | grep -q 'signalfx' \
   && ok "collector has signalfx exporters" \
@@ -78,7 +81,7 @@ echo "$CM" | grep -q 'signalfx' \
 # an unrelated retry-interval value ("4.641401346s") in a transient, already-
 # recovered "connection refused" line — nothing to do with auth at all. Word
 # boundaries stop the pattern from matching digits embedded in a longer number.
-n=$(kubectl logs daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --tail=400 2>/dev/null \
+n=$(kubectl logs -n "$OTEL_NS" daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --tail=400 2>/dev/null \
     | grep -ciE '\b401\b|\b403\b|unauthorized')
 [ "${n:-0}" -eq 0 ] && ok "no auth errors from the collector" \
   || no "$n auth errors in collector logs" "check the access token"

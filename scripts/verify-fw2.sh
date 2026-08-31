@@ -55,12 +55,15 @@ warmup(){
 
 $SPLUNK status >/dev/null 2>&1 && ok "Splunk Enterprise running" || no "Splunk not running" "$SPLUNK start"
 
-helm status "${WS_USER}-k8s-ws" >/dev/null 2>&1 \
-  && ok "helm release ${WS_USER}-k8s-ws deployed" || no "release missing" "helm install ..."
+# The Collector lives in its own otel namespace, not default — a bare
+# `helm status`/`kubectl get pods` here would silently check the wrong
+# (empty) namespace once the collector moved out of default.
+helm status "${WS_USER}-k8s-ws" -n otel >/dev/null 2>&1 \
+  && ok "helm release ${WS_USER}-k8s-ws deployed" || no "release missing" "helm install ... --namespace otel --create-namespace"
 
 for d in agent k8s-cluster-receiver; do
-  kubectl get pods 2>/dev/null | grep -q "${WS_USER}-k8s-ws-splunk-otel-collector-${d}.*Running" \
-    && ok "collector ${d} pod Running" || no "collector ${d} not Running" "kubectl get pods"
+  kubectl get pods -n otel 2>/dev/null | grep -q "${WS_USER}-k8s-ws-splunk-otel-collector-${d}.*Running" \
+    && ok "collector ${d} pod Running" || no "collector ${d} not Running" "kubectl get pods -n otel"
 done
 
 n=$(cnt '| tstats count where index=k8s_ws_logs')

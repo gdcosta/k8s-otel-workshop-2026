@@ -5,7 +5,8 @@
 # Render:  WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) HEC_TOKEN=<hec> \
 #          envsubst < values-workshop.yaml > my-values.yaml
 # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-#            --version 0.158.0 -f my-values.yaml
+#            --version 0.158.0 -f my-values.yaml \
+#            --namespace otel --create-namespace
 #
 # Validate first — the chart schema is the only check that fails loudly:
 #          helm upgrade ... --dry-run=client

@@ -10,6 +10,7 @@
 # passed at install time, straight out of ~/.o11y-token:
 # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
 #            --version 0.158.0 -f my-values.yaml \
+#            --namespace otel --create-namespace \
 #            --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 #
 # Validate first — the chart schema is the only check that fails loudly:
@@ -55,7 +56,7 @@ operator:
 # below is therefore explicit: the chart's own two defaults, verbatim, PLUS
 # AW2's four additions. Drop this file's "chart defaults" entries only if
 # you've confirmed the chart's own default list hasn't changed:
-#   kubectl get instrumentation -n default \
+#   kubectl get instrumentation -n otel \
 #     <release>-splunk-otel-collector -o jsonpath='{.spec.java.env}'
 instrumentation:
   enabled: true

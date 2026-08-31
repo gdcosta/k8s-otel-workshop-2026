@@ -6,6 +6,9 @@ set -u
 : "${WS_USER:?export WS_USER=<your-username>}"
 SPLUNK=${SPLUNK:-/opt/splunk/bin/splunk}
 RELEASE="${WS_USER}-k8s-ws"
+# The Collector/operator live in their own namespace, not default — see the
+# real 2026-08-31 incident this whole Helm-status check exists for.
+OTEL_NS=${OTEL_NS:-otel}
 
 # The workshop ships fixed lab credentials (00-setup), so this no longer has to
 # hard-fail on a variable no module ever mentions. Override it if you changed
@@ -30,18 +33,18 @@ echo "Verifying Advanced Workshop #1 (WS_USER=$WS_USER)"; echo
 # that was missing a real statement (see values-final.yaml's git history). No
 # check below would have caught the cause, only a downstream symptom of it —
 # this one catches it directly, first, before chasing anything else.
-hs=$(helm status "$RELEASE" -n default -o json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["info"]["status"])' 2>/dev/null)
+hs=$(helm status "$RELEASE" -n "$OTEL_NS" -o json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["info"]["status"])' 2>/dev/null)
 [ "$hs" = "deployed" ] \
   && ok "Helm release '$RELEASE' is deployed (not failed/pending)" \
-  || no "Helm release status is '${hs:-unknown}', not deployed" "run 'helm history $RELEASE -n default' to see what failed and why; a field-manager conflict on the Instrumentation CR usually means deleting and letting the next 'helm upgrade' recreate it cleanly — see AGENTS.md's Phase 4c notes for the exact incident this check exists for"
+  || no "Helm release status is '${hs:-unknown}', not deployed" "run 'helm history $RELEASE -n $OTEL_NS' to see what failed and why; a field-manager conflict on the Instrumentation CR usually means deleting and letting the next 'helm upgrade' recreate it cleanly — see AGENTS.md's Phase 4c notes for the exact incident this check exists for"
 
 # --- Operator infrastructure ---------------------------------------------
-kubectl get pod -n default -l app.kubernetes.io/name=operator 2>/dev/null \
+kubectl get pod -n "$OTEL_NS" -l app.kubernetes.io/name=operator 2>/dev/null \
   | grep -q '1/1.*Running' \
   && ok "OpenTelemetry Operator pod healthy" \
   || no "operator pod not Running/Ready" "check operator.enabled + operatorcrds.install: true, and that the webhook race didn't strand the first install — see step 3's troubleshooting"
 
-kubectl get instrumentation -n default "${RELEASE}-splunk-otel-collector" >/dev/null 2>&1 \
+kubectl get instrumentation -n "$OTEL_NS" "${RELEASE}-splunk-otel-collector" >/dev/null 2>&1 \
   && ok "Instrumentation CR present (${RELEASE}-splunk-otel-collector)" \
   || no "Instrumentation CR missing" "instrumentation.enabled must be true in values-aw1.yaml"
 
