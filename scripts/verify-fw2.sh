@@ -44,9 +44,17 @@ echo "Verifying Foundational Workshop #2 (WS_USER=$WS_USER)"; echo
 warmup(){
   BURST_START=$(date +%s)
   printf '  … generating a short burst of traffic\n'
-  for _ in $(seq 1 20); do
+  # Real bug caught during a full clean-instance run-through, 2026-08-31: hitting
+  # only customers-service left the distinct-service.name check below with just
+  # ~3 values in a 15-minute window (not the 4+ it expects), reading as a broken
+  # promotion when it was really just this warmup's narrow scope. Touch four of
+  # the six services directly — api-gateway and discovery-server both still show
+  # up too, from routing and Eureka traffic these calls generate along the way.
+  for _ in $(seq 1 15); do
     curl -s -o /dev/null --max-time 5 http://minikube:30000/api/customer/owners      || true
     curl -s -o /dev/null --max-time 5 http://minikube:30000/api/customer/owners/abc  || true
+    curl -s -o /dev/null --max-time 5 http://minikube:30000/api/vet/vets             || true
+    curl -s -o /dev/null --max-time 5 http://minikube:30000/api/visit/owners/1/pets/1/visits || true
   done
   printf '  … waiting %ss for ingest\n\n' "${WARMUP_WAIT:-50}"
   sleep "${WARMUP_WAIT:-50}"

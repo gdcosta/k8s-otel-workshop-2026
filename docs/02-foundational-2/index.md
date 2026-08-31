@@ -683,11 +683,17 @@ kubectl wait --for=condition=available deployment/visits-service -n petclinic --
 
 Look at the terminal running JMeter. Two of this test plan's seven samplers touch
 `visits-service` — "Visits for pet" and "New visit" — so **2/7 of all traffic fails while
-it's down**, a clean **28.57%**:
+it's down**, a **28.57%** ceiling if every sample landed exactly on that ratio:
 
 ```
 summary =    315 in 00:01:10 = 4.5/s ... Err:    90 (28.57%)
 ```
+
+!!! note "That's one real run, not a fixed constant"
+    28.57% is the arithmetic ceiling (2/7), and a run this long tends to land close to it —
+    but thread-group timing and concurrency mean your own number will legitimately differ,
+    sometimes by a wide margin on a shorter or busier run. Treat "near 2/7 of requests
+    failing" as the thing to confirm, not the specific digits after the decimal point.
 
 Recorded 2026-08-29, real run. JMeter knows this precisely because it knows, for every
 request it made, whether that request succeeded — no log parsing required. That's the
@@ -696,9 +702,17 @@ baseline every other view has to reconcile against.
 ### What Splunk sees
 
 ```
-index=k8s_ws_petclinic_logs service.name="api-gateway" earliest=-10m
+index=k8s_ws_petclinic_logs sourcetype="kube:container:api-gateway" earliest=-10m
 | stats count by severity
 ```
+
+!!! note "`sourcetype`, not `service.name` — that promotion doesn't exist yet"
+    `service.name` is a real, useful field, but step 10 is what promotes it — using it here,
+    ahead of that step, would return an empty table with no error, for a reason nothing on
+    this page yet explains. `sourcetype` is already scoped per-container by the Collector
+    itself and needs no extra config, which is exactly why it's the right tool for this
+    checkpoint specifically. Once you've done step 10, the equivalent
+    `service.name="api-gateway"` filter works too — feel free to come back and try it.
 
 `api-gateway` is the right place to look, not `visits-service` — a service at zero
 replicas produces no logs of its own, but the gateway trying to reach it very much does:
@@ -945,11 +959,13 @@ for i in $(seq 1 15); do curl -s -o /dev/null http://minikube:30000/api/vet/vets
 ```
 
 ```
-index=k8s_ws_logs service.name="vets-service" | stats count
-index=k8s_ws_petclinic_logs service.name="vets-service" | stats count
+index=k8s_ws_logs sourcetype="kube:container:vets-service" | stats count
+index=k8s_ws_petclinic_logs sourcetype="kube:container:vets-service" | stats count
 ```
 
-`vets-service`'s new events land in `k8s_ws_logs`, the default — everything else still
+Same reasoning as step 8: `sourcetype` rather than `service.name`, since the promotion that
+makes `service.name` usable is still two subsections away. `vets-service`'s new events land
+in `k8s_ws_logs`, the default — everything else still
 lands in `k8s_ws_petclinic_logs`. Nothing else changed: same Collector, same OTTL, same
 five other services untouched. Index routing is decided **per pod**, and this is what that
 looks like in practice, not just in theory.
@@ -961,12 +977,21 @@ kubectl apply -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-ma
 kubectl rollout status deployment/vets-service -n petclinic --timeout=90s
 ```
 
-### Now the part that's actually new: promoting `docker_image_author`
+### Now the part that's actually new: promoting `docker_image_author` — and giving every service a name
 
-Tell the Collector to pick that annotation up — add to `values-workshop.yaml`:
+Tell the Collector to pick that annotation up — add to `values-workshop.yaml`. While you're in
+here, add one more promotion at the same time: `app.kubernetes.io/name`, the label every one of
+the six PetClinic pods already carries, promoted onto `service.name`. Scraped container logs
+carry no `service.name` of their own — without this, every log event from all six services is
+indistinguishable by service in a search, and every checkpoint from here through Advanced
+Workshop #2 that filters by `service.name` returns nothing, silently, with no error to point at:
 
 ```yaml
 extraAttributes:
+  fromLabels:
+    - key: app.kubernetes.io/name
+      from: pod
+      tag_name: service.name
   fromAnnotations:
     - key: docker_image_author
       from: pod
@@ -976,7 +1001,9 @@ extraAttributes:
 !!! tip "`tag_name` gives you a clean field name"
     Without it the attribute arrives as `k8s.pod.annotations.docker_image_author`.
     `tag_name` sets the final name directly, so no post-processing is needed to strip the
-    prefix.
+    prefix. Same reasoning for `service.name` above — a promoted label with no `tag_name`
+    would land as `k8s.pod.labels.app.kubernetes.io/name`, not something any later checkpoint
+    filters on.
 
 ```bash
 helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
@@ -989,10 +1016,15 @@ kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -
 ```
 | tstats count where index=k8s_ws_logs OR index=k8s_ws_petclinic_logs by index
 index=k8s_ws_petclinic_logs | stats count by docker_image_author
+index=k8s_ws_petclinic_logs | stats count by service.name
 ```
 
-The `splunk.com/index` annotation **rerouted PetClinic logs to their own index**, and
-`docker_image_author` is now a field on every one of those events.
+The `splunk.com/index` annotation **rerouted PetClinic logs to their own index**,
+`docker_image_author` is now a field on every one of those events, and the third query should
+show up to six distinct `service.name` values — however many of the six services have logged
+something in your search window. A narrow burst of traffic against just one or two services is
+enough to make this look like fewer than six; that's the window, not a broken promotion — widen
+`earliest` or generate broader traffic if you want to see all six at once.
 
 ---
 
