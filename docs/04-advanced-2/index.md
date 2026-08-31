@@ -283,8 +283,8 @@ AW #1 §3 — all six PetClinic services, if you followed that module's default 
 ### More nodes that aren't PetClinic services, and what each one actually means
 
 The map draws more nodes beyond the six services, none of them things you patched or
-deployed. Two are real; two are noise AW #1 §3 already fixes, and it's worth telling all
-four apart rather than assuming every unexplained node is the same one bug:
+deployed. Three are real; two are noise AW #1 §3 already fixes, and it's worth telling
+them apart rather than assuming every unexplained node is the same one bug:
 
 **Three inferred database nodes**, one behind each of `customers-service`, `vets-service`
 and `visits-service` — real, and genuinely three separate databases, not one shared
@@ -299,17 +299,19 @@ network call to a shared database server. This is the same "database per service
 first deployed — the service map is now showing it back to you as topology, built from
 traffic rather than description.
 
-**A `discovery-server` self-loop, targeting a node called `localhost`.** This one is real
-too, and it's a *different* `localhost` from the Zipkin noise below — don't conflate the
-two just because they render with the same generic label. `discovery-server` continuously
-calls `POST http://localhost:8761/eureka/peerreplication/batch/` — Eureka's **peer
-replication** mechanism. This app's baked-in configuration points a standalone Eureka
-server's `eureka.client.serviceUrl.defaultZone` at itself, the standard pattern for a
-single-node Eureka setup, which makes the server also register as its own client. The call
-is genuine, ongoing traffic, not a failure — it just resolves to the literal string
-`localhost` rather than the pod's real service name, so the map can't tell it apart from
-any other `localhost`-addressed call and draws a generic node instead of a labelled
-`discovery-server → discovery-server` self-loop.
+**A real `discovery-server → discovery-server` self-loop.** `discovery-server`
+continuously calls `POST http://localhost:8761/eureka/peerreplication/batch/` — Eureka's
+**peer replication** mechanism. This app's baked-in configuration points a standalone
+Eureka server's `eureka.client.serviceUrl.defaultZone` at itself, the standard pattern for
+a single-node Eureka setup, which makes the server also register as its own client. The
+raw span data shows the call's target address as the literal string `localhost`, which
+looks at first like it should draw a meaningless `localhost` node the same way the two
+real bugs below do — it doesn't. Confirmed directly against Observability Cloud's own APM
+dependency data (`get_apm_service_dependencies`, not inferred from the span attribute
+alone): the platform correlates the call by trace context, resolves it to the *receiving*
+span's own `service.name`, and draws a properly labelled `discovery-server →
+discovery-server` edge — 120 requests in the same 15-minute window this was checked.
+Nothing to fix here; it just isn't the failure mode it superficially resembles.
 
 **A `localhost` node on `:9411` that means nothing at all — if you still see it.** This is
 the one AW #1 §3's `SPRING_AUTOCONFIGURE_EXCLUDE` step exists to remove: PetClinic's own
@@ -326,18 +328,22 @@ above (continuous, on every request path) this one only fires once per pod resta
 easy to miss on a quiet cluster and easy to mistake for a fresh instance of the Eureka
 self-loop right after you scale something — check the port before assuming which bug it is.
 
-If you still see any `localhost` node **and** the Eureka self-loop explanation above doesn't
-account for it, check the port — `:9411` is Zipkin noise, `:8888` is the config-client
-noise, `:8761` is the real Eureka self-loop — then see AW #1 §3's danger box for whichever
-fix hasn't landed yet.
+If you still see a `localhost` node at all, it's one of the two bugs above, not the Eureka
+self-loop — check the port (`:9411` Zipkin, `:8888` config-client) and see AW #1 §3's
+danger box for whichever fix hasn't landed yet.
 
-**`config-server` sits with no edges at all, and that's correct, not a gap.** It's a pure
-sink — services fetch their configuration from it *once*, at startup, then cache it; it's
-never itself a source of a call. Real evidence: 3,618 inbound requests over a 24-hour
-window, every one of them tied to a service (re)starting, and zero during a sustained load
-test with no restarts happening. Watching the map during ordinary traffic, `config-server`
-will stay dark the whole time — that's expected. It lights up the moment something rolls or
-restarts, not when load increases.
+**`config-server` sits with no edges at all — confirmed by the platform's own dependency
+data, not just inferred from span sampling.** It's a pure sink — services fetch their
+configuration from it *once*, at startup, then cache it; it's never itself a source of a
+call. Real evidence: 3,618 inbound requests over a 24-hour window, every one of them tied
+to a service (re)starting, and zero during a sustained load test with no restarts
+happening. `get_apm_service_dependencies` against Observability Cloud directly confirms
+this — both `inboundDependencies` and `outboundDependencies` come back as empty arrays for
+`config-server`, even in a window where the service itself has real request volume
+(kube-probe health checks, not dependency traffic — health checks don't create edges).
+Watching the map during ordinary traffic, `config-server` will stay dark the whole time —
+that's expected. It lights up the moment something rolls or restarts, not when load
+increases.
 
 With no fault injected, expect the error rate to sit near **0%** — Phase 3 of this
 workshop's own migration removed the old `/oups` endpoint that used to guarantee a steady
