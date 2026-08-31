@@ -135,7 +135,7 @@ splunkObservability:
 
     ```bash
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
     ```
 
@@ -189,18 +189,18 @@ splunkObservability:
     # Validate first. The chart schema is the only check in this workshop that
     # fails loudly instead of silently doing nothing.
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     # Apply
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
-    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
+    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel --timeout=300s
 
     # Confirm the change actually reached the running config
-    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
       -o go-template='{{index .data "relay"}}' | grep -A5 'transform/'
     ```
 
@@ -220,7 +220,7 @@ splunkObservability:
 
     ```bash
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
     ```
 
@@ -230,15 +230,15 @@ splunkObservability:
 ```bash
 cd ~/k8s_workshop/k8s_otel
 helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-  --version 0.158.0 -f values-workshop.yaml \
+  --version 0.158.0 -f values-workshop.yaml --namespace otel \
   --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
-kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel
 ```
 
 Confirm the `signalfx` exporters now exist in the running configuration:
 
 ```bash
-kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
   -o go-template='{{index .data "relay"}}' | grep -E '^\s+signalfx'
 ```
 
@@ -804,11 +804,11 @@ instrumentation:
     sed -i "s|\${WS_USER}|$WS_USER|g" values-workshop.yaml
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     # instrumentation.spec.java.env changes don't roll running pods automatically —
@@ -844,7 +844,7 @@ Log lines then carry the trace context:
     same way. Confirm what the chart actually ships by default before trusting this list
     has stayed current:
     ```bash
-    kubectl get instrumentation -n default \
+    kubectl get instrumentation -n otel \
       ${WS_USER}-k8s-ws-splunk-otel-collector -o jsonpath='{.spec.java.env}'
     ```
 
@@ -993,11 +993,11 @@ splunkObservability:
     grep -n "$WS_USER" values-workshop.yaml | head    # confirm
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
@@ -1029,7 +1029,7 @@ instrumentation:
     alongside every addition this module makes, for exactly this reason. Drop them only
     after confirming the chart's own default list hasn't changed:
     ```bash
-    kubectl get instrumentation -n default \
+    kubectl get instrumentation -n otel \
       ${WS_USER}-k8s-ws-splunk-otel-collector -o jsonpath='{.spec.java.env}'
     ```
 
@@ -1057,11 +1057,11 @@ instrumentation:
     sed -i "s|\${WS_USER}|$WS_USER|g" values-workshop.yaml
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel \
       --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
 
     # instrumentation.spec.java.env changes need a rollout to reach running pods.
@@ -1094,13 +1094,13 @@ done
 SPLUNK_PROFILER_ENABLED=true
 SPLUNK_PROFILER_MEMORY_ENABLED=true
 SPLUNK_PROFILER_OTLP_PROTOCOL=http/protobuf
-OTEL_EXPORTER_OTLP_ENDPOINT=http://wsuser01-k8s-ws-splunk-otel-collector-agent.default.svc.cluster.local:4318
+OTEL_EXPORTER_OTLP_ENDPOINT=http://wsuser01-k8s-ws-splunk-otel-collector-agent.otel.svc.cluster.local:4318
 
 --- vets-service ---
 SPLUNK_PROFILER_ENABLED=true
 SPLUNK_PROFILER_MEMORY_ENABLED=true
 SPLUNK_PROFILER_OTLP_PROTOCOL=http/protobuf
-OTEL_EXPORTER_OTLP_ENDPOINT=http://wsuser01-k8s-ws-splunk-otel-collector-agent.default.svc.cluster.local:4318
+OTEL_EXPORTER_OTLP_ENDPOINT=http://wsuser01-k8s-ws-splunk-otel-collector-agent.otel.svc.cluster.local:4318
 ```
 
 `http/protobuf` and a `:4318` endpoint — HTTP paired with HTTP. `grpc` here, against this
@@ -1539,6 +1539,7 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
     # passed at install time, straight out of ~/.o11y-token:
     # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
     #            --version 0.158.0 -f my-values.yaml \
+    #            --namespace otel --create-namespace \
     #            --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
     #
     # Validate first — the chart schema is the only check that fails loudly:
@@ -1548,17 +1549,27 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
     clusterName: ${WS_USER}-minikube-cluster
 
     # [AW1] Required once operator.enabled=true + tracesEnabled=true + agent.enabled=true —
-    # the chart's schema refuses to render without it. Sets the newer
-    # deployment.environment.name resource attribute.
-    # [AW2] Also reconciled onto the OLD-semconv deployment.environment (no ".name")
-    # that transform/petclinic_logs sets on logs by hand — see transform/traces_index
-    # and transform/app_metrics_index below. AW2 is the module about correlation
-    # fields matching exactly, so the two attributes carrying the same value under
-    # two different names was worth fixing now. Verified live.
+    # the chart's schema refuses to render without it (a real dry-run error, not a
+    # guess). Sets the newer deployment.environment.name resource attribute.
+    # [AW2] This is now also reconciled onto the OLD-semconv deployment.environment
+    # (no ".name") that transform/petclinic_logs sets on logs by hand — see
+    # transform/traces_index and transform/app_metrics_index below. AW2 is the
+    # module about correlation fields matching exactly, so the two attributes
+    # carrying the same value under two different names was worth fixing now
+    # rather than leaving as an open question. Verified live 2026-08-29.
     environment: "${WS_USER}-k8s-petclinic-env"
 
-    # [AW1] Auto-instrumentation via the OpenTelemetry Operator's admission webhook,
-    # instead of a hand-built -javaagent + Dockerfile — see AW1 §3 for why.
+    # [AW1] Auto-instrumentation via the OpenTelemetry Operator's admission
+    # webhook, instead of a hand-built -javaagent + Dockerfile. Chosen because
+    # only customers-service is built from source here — the other five are
+    # pulled prebuilt images with no Dockerfile to edit. The operator injects the
+    # Java agent at pod-creation time regardless of where the image came from;
+    # verified live 2026-08-29 on both customers-service (hand-built) and
+    # vets-service (pulled) — identical init container, identical env wiring.
+    # operator.crds.create must stay false (chart default) — CRD install goes
+    # through the separate operatorcrds.install key below instead, to avoid a
+    # race with Helm's own resource ordering (the chart's own values.yaml docs
+    # this explicitly).
     operatorcrds:
       install: true
 
@@ -1566,16 +1577,15 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
       enabled: true
 
     # [AW2] instrumentation.spec.java.env REPLACES the chart's own default env
-    # list — it does not merge. Verified live: installing with only the
-    # profiler/logging vars below (no chart defaults re-listed) produced an
+    # list — it does not merge. Verified live 2026-08-29: installing with only
+    # the profiler/logging vars below (no chart defaults re-listed) produced an
     # Instrumentation CR missing OTEL_RESOURCE_DISABLED_KEYS and
     # OTEL_JAVA_ENABLED_RESOURCE_PROVIDERS entirely, silently — no error, no
     # warning, just an agent running without those two settings. Every entry
     # below is therefore explicit: the chart's own two defaults, verbatim, PLUS
-    # every addition AW #1 and AW #2 make between them. Drop the "chart
-    # defaults" entries only if you've confirmed the chart's own default list
-    # hasn't changed:
-    #   kubectl get instrumentation -n default \
+    # AW2's four additions. Drop this file's "chart defaults" entries only if
+    # you've confirmed the chart's own default list hasn't changed:
+    #   kubectl get instrumentation -n otel \
     #     <release>-splunk-otel-collector -o jsonpath='{.spec.java.env}'
     instrumentation:
       enabled: true
@@ -1587,42 +1597,56 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
               value: "process.executable.path,process.command_args"
             - name: OTEL_JAVA_ENABLED_RESOURCE_PROVIDERS
               value: "io.opentelemetry.instrumentation.resources.ContainerResourceProvider,io.opentelemetry.sdk.autoconfigure.EnvironmentResourceProvider,io.opentelemetry.instrumentation.resources.ProcessResourceProvider"
-            # --- AW1: disable PetClinic's own bundled Zipkin auto-export
-            # (Spring Boot Actuator's ZipkinAutoConfiguration — unrelated to
-            # the OTel Java agent). See AW1 §3's danger box for the two fixes
-            # tried and confirmed NOT to work before this one. Carried forward
-            # here unchanged, same as the two chart defaults above it. -------
+            # --- AW1: disable PetClinic's own bundled Zipkin auto-export (Spring
+            # Boot Actuator's ZipkinAutoConfiguration — unrelated to the OTel Java
+            # agent). See values-aw1.yaml's comment for the two fixes tried and
+            # confirmed NOT to work (MANAGEMENT_ZIPKIN_TRACING_EXPORT_ENABLED,
+            # MANAGEMENT_TRACING_ENABLED) before this one. Carried forward here
+            # unchanged, same as the two chart defaults above it. ------------------
             - name: SPRING_AUTOCONFIGURE_EXCLUDE
               value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
-            # --- AW1: a second, unrelated localhost source — every service's
-            # own spring.config.import briefly tries http://localhost:8888 at
-            # startup and fails before succeeding against the real
-            # config-server. See AW1 §3's danger box for the confirmed root
-            # cause (read from the upstream app's own source, not guessed) and
-            # the wrong first guess (SPRING_CLOUD_CONFIG_URI — does nothing)
-            # ruled out before this one. Carried forward here unchanged. -----
+            # --- AW1: a second, unrelated localhost source — every service's own
+            # spring.config.import briefly tries http://localhost:8888 at startup
+            # and fails before succeeding against the real config-server. See
+            # values-aw1.yaml's comment for the confirmed root cause (read from
+            # the upstream app's own source, not guessed) and the wrong first
+            # guess (SPRING_CLOUD_CONFIG_URI — does nothing) ruled out before
+            # this one. Carried forward here unchanged. ----------------------------
             - name: CONFIG_SERVER_URL
               value: "http://config-server:8888/"
-            # --- AW2: AlwaysOn Profiling. Applies to every operator-instrumented
-            # pod uniformly, with no per-service edit needed. ---------------------
+            # --- AW2: AlwaysOn Profiling. Old approach set these as hand-written
+            # env vars in the monolith's Deployment manifest — that mechanism
+            # doesn't exist once five of six services are pulled images with no
+            # manifest env block worth hand-editing per service. This applies to
+            # every operator-instrumented pod uniformly, with no per-service edit
+            # needed, the same way the base Java-agent attach does in AW1. ------
             - name: SPLUNK_PROFILER_ENABLED
               value: "true"
             - name: SPLUNK_PROFILER_MEMORY_ENABLED
               value: "true"
-            # Real gotcha, caught live by verify-aw2.sh failing: the OLD manual
-            # approach's OTEL_EXPORTER_OTLP_ENDPOINT was hand-set to gRPC on
-            # :4317, so an earlier version of this workshop set "grpc" here. The
-            # OPERATOR's own default endpoint is different — confirmed live as
-            # http://<collector-agent-svc>:4318, i.e. HTTP, not gRPC. Left as
-            # "grpc" it looks plausible and matches nothing: the profiler starts,
-            # sends nothing, no error either side.
+            # Real gotcha, corrected after being caught live by verify-aw2.sh: the
+            # OLD manual approach's OTEL_EXPORTER_OTLP_ENDPOINT was hand-set to
+            # gRPC on :4317, so that version of this workshop set "grpc" here.
+            # The OPERATOR's own default endpoint is different — confirmed live
+            # 2026-08-29 as http://<collector-agent-svc>:4318, i.e. HTTP, not
+            # gRPC. Left as "grpc" here it looks plausible and matches nothing:
+            # the profiler starts, sends nothing, no error either side. Set to
+            # match whatever OTEL_EXPORTER_OTLP_ENDPOINT actually resolves to —
+            # check it per pod if this chart version's default ever changes:
+            #   kubectl get pod -n petclinic <pod> \
+            #     -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' \
+            #     | grep OTEL_EXPORTER_OTLP_ENDPOINT
             - name: SPLUNK_PROFILER_OTLP_PROTOCOL
               value: "http/protobuf"
             # --- AW2: trace context in the log line. The agent already puts
             # trace_id/span_id in the MDC; Spring Boot's default pattern just
-            # never prints them. Works identically via the Instrumentation CR as
-            # a hand-written manifest env var would — Spring Boot's relaxed env
-            # binding doesn't care which mechanism set it.
+            # never prints them. Without this there is no trace_id on the logs
+            # and APM <-> Logs correlation cannot work. Verified live 2026-08-29:
+            # works identically via the Instrumentation CR as it did as a
+            # hand-written manifest env var — Spring Boot's relaxed env binding
+            # doesn't care which mechanism set it. Real captured example:
+            # trace_id=7820ac2fac93e572d074c76b33c86ec5 span_id=b64efdf9a4a1d17c
+            # on customers-service, matching a real span in k8s_ws_traces.
             - name: LOGGING_PATTERN_LEVEL
               value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
 
@@ -1631,6 +1655,8 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
       realm: "us1"          # your realm — see AW2 step 1
       # accessToken is deliberately absent. It is supplied at install time with
       #   --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
+      # so the ingest token never lands in a file that gets compared, pasted or
+      # published — which is what makes this reference file safe to share.
       metricsEnabled: true
       tracesEnabled: true
       profilingEnabled: true     # enabled in step 6
@@ -1652,6 +1678,12 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
     logsCollection:
       containers:
         excludeAgentLogs: false
+        # FW2: recombine Java stack traces into a single event.
+        # A new event starts at a line beginning with a non-whitespace char.
+        # Scoped to the petclinic namespace only, not a single container — six
+        # services now share this namespace and all of them are Spring Boot, so one
+        # broad rule recombines stack traces from any of them without narrowing by
+        # pod or container name. Nothing else lives in this namespace.
         multilineConfigs:
           - namespaceName:
               value: petclinic
@@ -1661,9 +1693,15 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
             firstEntryRegex: ^[^\s].*
 
     # [FW2] Promote pod annotations onto events.
+    # tag_name gives a clean field name directly — no regex prefix-stripping needed.
     extraAttributes:
-      # Promotes each pod's app.kubernetes.io/name label to service.name — see
-      # AW1 §2's comment for the full reasoning.
+      # Promotes each pod's app.kubernetes.io/name label to service.name. Scraped
+      # container logs carry no service.name of their own, so this gives each of
+      # the six services a distinct name — customers-service, api-gateway, and so
+      # on — automatically, with no per-service OTTL statement. It does NOT
+      # overwrite service.name on traces: k8sattributes only sets an attribute
+      # that isn't already present, and the Java agent already supplies traces'
+      # service.name. Verified live 2026-08-29.
       fromLabels:
         - key: app.kubernetes.io/name
           from: pod
@@ -1684,41 +1722,86 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
           mode: watch
 
     # [FW2] OTTL transforms.  [AW1] metric/trace index routing.
-    # [AW2] deployment.environment reconciled onto one attribute name.
+    # [AW2] service.name + deployment.environment for Related Content.
+    # NOTE: modern OTTL requires context-prefixed paths (log.* / resource.*).
+    # sourcetype and k8s.* are RESOURCE attributes, not log-record attributes.
     agent:
       config:
         processors:
+          # [AW1] App metrics -> their own index. Namespace, not service.name — six
+          # services now report six different names (see extraAttributes.fromLabels
+          # below), so namespace membership is the simpler, single predicate that
+          # still catches all of them. The splunk.com/metricsIndex annotation does
+          # NOT cover OTLP metrics from the app — it only moves cluster-receiver
+          # metrics (k8s.container.*, k8s.pod.phase).
+          # k8s.namespace.name comes from the same k8s_attributes processor
+          # regardless of signal type.
           transform/app_metrics_index:
             metric_statements:
               - set(resource.attributes["com.splunk.index"], "k8s_ws_petclinic_metrics")
                   where resource.attributes["k8s.namespace.name"] == "petclinic"
+              # [AW2] Reconcile onto the OLD-semconv deployment.environment (no
+              # ".name") that logs use — see the top-level environment: key's
+              # comment for why the two names existed separately until now.
               - set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
                   where resource.attributes["k8s.namespace.name"] == "petclinic"
 
+          # [AW1] There is no splunk.com/tracesIndex annotation, so traces inherit
+          # splunk.com/index from the pod, which overrides splunkPlatform.tracesIndex.
+          # Override it for traces only. Verified live 2026-08-29 on the operator
+          # spike: without this override, every span from the auto-instrumented
+          # Java agent landed silently in k8s_ws_petclinic_logs instead — same
+          # com.splunk.index resource attribute, same k8s_attributes processor,
+          # shared across all three signal pipelines. No exporter error either
+          # way; the only tell was an empty k8s_ws_traces despite the collector's
+          # own otelcol_exporter_sent_spans counter climbing normally.
           transform/traces_index:
             trace_statements:
               - set(resource.attributes["com.splunk.index"], "k8s_ws_traces")
+              # [AW2] Reconcile onto the OLD-semconv deployment.environment (no
+              # ".name") that logs use — see the top-level environment: key's
+              # comment for why the two names existed separately until now.
               - set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
 
           transform/petclinic_logs:
             log_statements:
               - set(resource.attributes["com.splunk.sourcetype"], "petclinic:app:log")
                   where resource.attributes["k8s.namespace.name"] == "petclinic"
+
+              # Related Content correlates on host.name, service.name and trace_id.
+              # host.name arrives from resource detection; trace_id is printed by
+              # the app and auto-extracted by Splunk. service.name itself is NOT
+              # set here anymore — extraAttributes.fromLabels below promotes each
+              # pod's own name instead, and k8s_attributes runs before this
+              # transform, so a set() here would unconditionally overwrite that
+              # per-service value with one shared string. deployment.environment
+              # has no such per-service meaning, so it stays a single value.
               - set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
                   where resource.attributes["k8s.namespace.name"] == "petclinic"
+
               - merge_maps(log.attributes,
                   ExtractPatterns(log.body, "(?P<log_level>INFO|WARN|ERROR|DEBUG|TRACE)"),
                   "upsert")
                   where resource.attributes["k8s.namespace.name"] == "petclinic"
+
+              # Log Observer's Severity column reads the record's severity_text, NOT a
+              # custom attribute. An attribute named "severity" leaves it UNKNOWN.
               - set(log.severity_text, log.attributes["log_level"])
                   where log.attributes["log_level"] != nil
               - set(log.severity_number, SEVERITY_NUMBER_ERROR) where log.attributes["log_level"] == "ERROR"
               - set(log.severity_number, SEVERITY_NUMBER_WARN)  where log.attributes["log_level"] == "WARN"
               - set(log.severity_number, SEVERITY_NUMBER_INFO)  where log.attributes["log_level"] == "INFO"
               - set(log.severity_number, SEVERITY_NUMBER_DEBUG) where log.attributes["log_level"] == "DEBUG"
+
+              # A recombined stack trace starts with the exception class and carries no
+              # level token, so classify it explicitly.
               - set(log.severity_text, "ERROR")
                   where log.attributes["log_level"] == nil and IsMatch(log.body, "Exception")
               - set(log.severity_number, SEVERITY_NUMBER_ERROR) where log.severity_text == "ERROR"
+
+              # Tomcat access logs carry no level token. Parse them, then derive a
+              # severity from the HTTP status — 5xx is an error even though the line
+              # never says so.
               - merge_maps(log.attributes,
                   ExtractPatterns(log.body,
                     "^\\S+ \\S+ \\S+ \\[[^\\]]+\\] \"(?P<http_method>[A-Z]+) (?P<http_path>\\S+)[^\"]*\" (?P<http_status>\\d{3}) (?P<http_bytes>\\S+) (?P<http_duration_us>\\d+)"),
@@ -1729,6 +1812,8 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
               - set(log.severity_text, "ERROR") where IsMatch(log.attributes["http_status"], "^5")
               - set(log.severity_number, SEVERITY_NUMBER_INFO)  where log.severity_text == "INFO"
               - set(log.severity_number, SEVERITY_NUMBER_WARN)  where log.severity_text == "WARN"
+
+              # Mirror to an attribute so the value is searchable as a field too.
               - set(log.attributes["severity"], log.severity_text) where log.severity_text != nil
         service:
           pipelines:
@@ -1789,7 +1874,7 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
     Test the token directly with the `curl` from step 1. `401` means the token or realm is
     wrong. If that returns `200`, check the Collector:
     ```bash
-    kubectl logs daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent | grep -iE 'signalfx|401|403'
+    kubectl logs daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel | grep -iE 'signalfx|401|403'
     ```
 
 ??? failure "Log Observer Connect shows `0/7` indexes with mappings"
@@ -1870,7 +1955,7 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
     it — a list that omits the chart's own defaults silently drops them, with no error.
     Compare against what the chart actually ships:
     ```bash
-    kubectl get instrumentation -n default \
+    kubectl get instrumentation -n otel \
       ${WS_USER}-k8s-ws-splunk-otel-collector -o jsonpath='{.spec.java.env}'
     ```
     and make sure `values-aw2.yaml` lists every entry you need, not just the ones you

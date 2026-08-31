@@ -149,7 +149,7 @@ The hardest class of problem here. Three real examples, all of which report succ
 actually running, rather than the values you think you supplied:
 
 ```bash
-kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
   -o go-template='{{index .data "relay"}}'
 ```
 

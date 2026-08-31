@@ -283,14 +283,16 @@ helm template t splunk-otel-collector-chart/splunk-otel-collector \
   --version 0.158.0 -f values-workshop.yaml | grep -A3 'splunk_hec/platform_logs'
 ```
 
-Install it:
+Install it — the Collector gets its own `otel` namespace, kept separate from the
+`petclinic` namespace the app lives in, so infrastructure and application never share one:
 
 ```bash
 helm install ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-  --version 0.158.0 -f values-workshop.yaml
+  --version 0.158.0 -f values-workshop.yaml \
+  --namespace otel --create-namespace
 
-kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent
-kubectl get pods -o wide
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel
+kubectl get pods -n otel -o wide
 ```
 
 !!! warning "Always pass `--version`"
@@ -820,23 +822,23 @@ logsCollection:
     # Validate first. The chart schema is the only check in this workshop that
     # fails loudly instead of silently doing nothing.
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client
 
     # Apply
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml
+      --version 0.158.0 -f values-workshop.yaml --namespace otel
 
-    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
+    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel --timeout=300s
 
     # Confirm the change actually reached the running config
-    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
       -o go-template='{{index .data "relay"}}' | grep -A5 'transform/'
     ```
 
 ```bash
 helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-  --version 0.158.0 -f values-workshop.yaml
-kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent
+  --version 0.158.0 -f values-workshop.yaml --namespace otel
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel
 ```
 
 Now produce a real multi-line stack trace to prove the recombine works. Every service here
@@ -978,8 +980,8 @@ extraAttributes:
 
 ```bash
 helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-  --version 0.158.0 -f values-workshop.yaml
-kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
+  --version 0.158.0 -f values-workshop.yaml --namespace otel
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel --timeout=300s
 ```
 
 ### ✅ Checkpoint
@@ -1086,16 +1088,16 @@ agent:
     # Validate first. The chart schema is the only check in this workshop that
     # fails loudly instead of silently doing nothing.
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client
 
     # Apply
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml
+      --version 0.158.0 -f values-workshop.yaml --namespace otel
 
-    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
+    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel --timeout=300s
 
     # Confirm the change actually reached the running config
-    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
       -o go-template='{{index .data "relay"}}' | grep -A5 'transform/'
     ```
 
@@ -1123,8 +1125,8 @@ agent:
 
 ```bash
 helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-  --version 0.158.0 -f values-workshop.yaml
-kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent
+  --version 0.158.0 -f values-workshop.yaml --namespace otel
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel
 ```
 
 ### ✅ Checkpoint
@@ -1197,7 +1199,7 @@ Still seeing `kube:container:...`? The transform didn't apply. Read the *generat
 — this is the debugging move that resolves it:
 
 ```bash
-kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
   -o go-template='{{index .data "relay"}}' | grep -A15 'transform/petclinic'
 ```
 </details>
@@ -1310,7 +1312,12 @@ steps. They're the exact files this module was tested with.
     with `envsubst`; substitute your own values by hand if you prefer.
     ```yaml
     # Splunk OTel Collector — final workshop overlay (FW2 + AW1 + AW2).
-    # TESTED end to end on 2026-08-19 against chart 0.158.0.
+    # Snapshot after AW2 — same operator/instrumentation config as
+    # values-aw2.yaml, since AW2 is this workshop's most-evolved state.
+    # Brought back into parity 2026-08-30: this file had not been touched
+    # since before the operator rewrite (Phase 4a/4b) even though FW2's own
+    # doc links here as the "final state" reference — it was missing the
+    # entire environment:/operatorcrds:/operator:/instrumentation: block.
     #
     # Render:  WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) \
     #          HEC_TOKEN=<hec> \
@@ -1320,12 +1327,115 @@ steps. They're the exact files this module was tested with.
     # passed at install time, straight out of ~/.o11y-token:
     # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
     #            --version 0.158.0 -f my-values.yaml \
+    #            --namespace otel --create-namespace \
     #            --set splunkObservability.accessToken="$(cat ~/.o11y-token)"
     #
     # Validate first — the chart schema is the only check that fails loudly:
     #          helm upgrade ... --dry-run=client
     # [FW2] Identifies this cluster on every metric, trace and log.
     clusterName: ${WS_USER}-minikube-cluster
+
+    # [AW1] Required once operator.enabled=true + tracesEnabled=true + agent.enabled=true —
+    # the chart's schema refuses to render without it (a real dry-run error, not a
+    # guess). Sets the newer deployment.environment.name resource attribute.
+    # [AW2] This is now also reconciled onto the OLD-semconv deployment.environment
+    # (no ".name") that transform/petclinic_logs sets on logs by hand — see
+    # transform/traces_index and transform/app_metrics_index below. AW2 is the
+    # module about correlation fields matching exactly, so the two attributes
+    # carrying the same value under two different names was worth fixing now
+    # rather than leaving as an open question. Verified live 2026-08-29.
+    environment: "${WS_USER}-k8s-petclinic-env"
+
+    # [AW1] Auto-instrumentation via the OpenTelemetry Operator's admission
+    # webhook, instead of a hand-built -javaagent + Dockerfile. Chosen because
+    # only customers-service is built from source here — the other five are
+    # pulled prebuilt images with no Dockerfile to edit. The operator injects the
+    # Java agent at pod-creation time regardless of where the image came from;
+    # verified live 2026-08-29 on both customers-service (hand-built) and
+    # vets-service (pulled) — identical init container, identical env wiring.
+    # operator.crds.create must stay false (chart default) — CRD install goes
+    # through the separate operatorcrds.install key below instead, to avoid a
+    # race with Helm's own resource ordering (the chart's own values.yaml docs
+    # this explicitly).
+    operatorcrds:
+      install: true
+
+    operator:
+      enabled: true
+
+    # [AW2] instrumentation.spec.java.env REPLACES the chart's own default env
+    # list — it does not merge. Verified live 2026-08-29: installing with only
+    # the profiler/logging vars below (no chart defaults re-listed) produced an
+    # Instrumentation CR missing OTEL_RESOURCE_DISABLED_KEYS and
+    # OTEL_JAVA_ENABLED_RESOURCE_PROVIDERS entirely, silently — no error, no
+    # warning, just an agent running without those two settings. Every entry
+    # below is therefore explicit: the chart's own two defaults, verbatim, PLUS
+    # AW2's four additions. Drop this file's "chart defaults" entries only if
+    # you've confirmed the chart's own default list hasn't changed:
+    #   kubectl get instrumentation -n otel \
+    #     <release>-splunk-otel-collector -o jsonpath='{.spec.java.env}'
+    instrumentation:
+      enabled: true
+      spec:
+        java:
+          env:
+            # --- chart defaults (would silently vanish if omitted — see above) ---
+            - name: OTEL_RESOURCE_DISABLED_KEYS
+              value: "process.executable.path,process.command_args"
+            - name: OTEL_JAVA_ENABLED_RESOURCE_PROVIDERS
+              value: "io.opentelemetry.instrumentation.resources.ContainerResourceProvider,io.opentelemetry.sdk.autoconfigure.EnvironmentResourceProvider,io.opentelemetry.instrumentation.resources.ProcessResourceProvider"
+            # --- AW1: disable PetClinic's own bundled Zipkin auto-export (Spring
+            # Boot Actuator's ZipkinAutoConfiguration — unrelated to the OTel Java
+            # agent). See values-aw1.yaml's comment for the two fixes tried and
+            # confirmed NOT to work (MANAGEMENT_ZIPKIN_TRACING_EXPORT_ENABLED,
+            # MANAGEMENT_TRACING_ENABLED) before this one. Carried forward here
+            # unchanged, same as the two chart defaults above it. ------------------
+            - name: SPRING_AUTOCONFIGURE_EXCLUDE
+              value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
+            # --- AW1: a second, unrelated localhost source — every service's own
+            # spring.config.import briefly tries http://localhost:8888 at startup
+            # and fails before succeeding against the real config-server. See
+            # values-aw1.yaml's comment for the confirmed root cause (read from
+            # the upstream app's own source, not guessed) and the wrong first
+            # guess (SPRING_CLOUD_CONFIG_URI — does nothing) ruled out before
+            # this one. Carried forward here unchanged. ----------------------------
+            - name: CONFIG_SERVER_URL
+              value: "http://config-server:8888/"
+            # --- AW2: AlwaysOn Profiling. Old approach set these as hand-written
+            # env vars in the monolith's Deployment manifest — that mechanism
+            # doesn't exist once five of six services are pulled images with no
+            # manifest env block worth hand-editing per service. This applies to
+            # every operator-instrumented pod uniformly, with no per-service edit
+            # needed, the same way the base Java-agent attach does in AW1. ------
+            - name: SPLUNK_PROFILER_ENABLED
+              value: "true"
+            - name: SPLUNK_PROFILER_MEMORY_ENABLED
+              value: "true"
+            # Real gotcha, corrected after being caught live by verify-aw2.sh: the
+            # OLD manual approach's OTEL_EXPORTER_OTLP_ENDPOINT was hand-set to
+            # gRPC on :4317, so that version of this workshop set "grpc" here.
+            # The OPERATOR's own default endpoint is different — confirmed live
+            # 2026-08-29 as http://<collector-agent-svc>:4318, i.e. HTTP, not
+            # gRPC. Left as "grpc" here it looks plausible and matches nothing:
+            # the profiler starts, sends nothing, no error either side. Set to
+            # match whatever OTEL_EXPORTER_OTLP_ENDPOINT actually resolves to —
+            # check it per pod if this chart version's default ever changes:
+            #   kubectl get pod -n petclinic <pod> \
+            #     -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' \
+            #     | grep OTEL_EXPORTER_OTLP_ENDPOINT
+            - name: SPLUNK_PROFILER_OTLP_PROTOCOL
+              value: "http/protobuf"
+            # --- AW2: trace context in the log line. The agent already puts
+            # trace_id/span_id in the MDC; Spring Boot's default pattern just
+            # never prints them. Without this there is no trace_id on the logs
+            # and APM <-> Logs correlation cannot work. Verified live 2026-08-29:
+            # works identically via the Instrumentation CR as it did as a
+            # hand-written manifest env var — Spring Boot's relaxed env binding
+            # doesn't care which mechanism set it. Real captured example:
+            # trace_id=7820ac2fac93e572d074c76b33c86ec5 span_id=b64efdf9a4a1d17c
+            # on customers-service, matching a real span in k8s_ws_traces.
+            - name: LOGGING_PATTERN_LEVEL
+              value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
 
     # [AW2] Second destination. Added without changing how anything is collected.
     splunkObservability:
@@ -1397,30 +1507,48 @@ steps. They're the exact files this module was tested with.
         - name: events
           mode: watch
 
-    # FW2: OTTL transform.
-    # NOTE: modern OTTL requires context-prefixed paths (log.* / resource.*).
-    # sourcetype and k8s.* are RESOURCE attributes, not log-record attributes.
     # [FW2] OTTL transforms.  [AW1] metric/trace index routing.
     # [AW2] service.name + deployment.environment for Related Content.
+    # NOTE: modern OTTL requires context-prefixed paths (log.* / resource.*).
+    # sourcetype and k8s.* are RESOURCE attributes, not log-record attributes.
     agent:
       config:
         processors:
-          # There is no splunk.com/tracesIndex annotation, so traces inherit
-          # splunk.com/index from the pod. Override it for traces only.
-          # Route this application's metrics to their own index. Namespace, not
-          # service.name — six services now report six different names (see
-          # extraAttributes.fromLabels below), so namespace membership is the
-          # simpler, single predicate that still catches all of them.
-          # NOT independently verified live for metrics/traces — logs were;
+          # [AW1] App metrics -> their own index. Namespace, not service.name — six
+          # services now report six different names (see extraAttributes.fromLabels
+          # below), so namespace membership is the simpler, single predicate that
+          # still catches all of them. The splunk.com/metricsIndex annotation does
+          # NOT cover OTLP metrics from the app — it only moves cluster-receiver
+          # metrics (k8s.container.*, k8s.pod.phase).
           # k8s.namespace.name comes from the same k8s_attributes processor
-          # regardless of signal type, but confirm when AW1 is rebuilt.
+          # regardless of signal type.
           transform/app_metrics_index:
             metric_statements:
               - set(resource.attributes["com.splunk.index"], "k8s_ws_petclinic_metrics")
                   where resource.attributes["k8s.namespace.name"] == "petclinic"
+              # [AW2] Reconcile onto the OLD-semconv deployment.environment (no
+              # ".name") that logs use — see the top-level environment: key's
+              # comment for why the two names existed separately until now.
+              - set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
+                  where resource.attributes["k8s.namespace.name"] == "petclinic"
+
+          # [AW1] There is no splunk.com/tracesIndex annotation, so traces inherit
+          # splunk.com/index from the pod, which overrides splunkPlatform.tracesIndex.
+          # Override it for traces only. Verified live 2026-08-29 on the operator
+          # spike: without this override, every span from the auto-instrumented
+          # Java agent landed silently in k8s_ws_petclinic_logs instead — same
+          # com.splunk.index resource attribute, same k8s_attributes processor,
+          # shared across all three signal pipelines. No exporter error either
+          # way; the only tell was an empty k8s_ws_traces despite the collector's
+          # own otelcol_exporter_sent_spans counter climbing normally.
           transform/traces_index:
             trace_statements:
               - set(resource.attributes["com.splunk.index"], "k8s_ws_traces")
+              # [AW2] Reconcile onto the OLD-semconv deployment.environment (no
+              # ".name") that logs use — see the top-level environment: key's
+              # comment for why the two names existed separately until now.
+              - set(resource.attributes["deployment.environment"], "${WS_USER}-k8s-petclinic-env")
+
           transform/petclinic_logs:
             log_statements:
               - set(resource.attributes["com.splunk.sourcetype"], "petclinic:app:log")
@@ -2169,7 +2297,7 @@ export SPLUNK_AUTH=admin:<your-admin-password>
     that fails, it's Splunk-side (SSL, token, index permissions), not the Collector. If it
     succeeds, check the Collector's export errors:
     ```bash
-    kubectl logs daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent | grep -i error
+    kubectl logs daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel | grep -i error
     ```
 
 ??? failure "`received a 410 ... resourceVersion is too old`"
@@ -2180,7 +2308,7 @@ export SPLUNK_AUTH=admin:<your-admin-password>
     The most common failure in this module, and it's always silent. Read the generated
     config and confirm your change is actually present:
     ```bash
-    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
       -o go-template='{{index .data "relay"}}'
     ```
     If it isn't there, the overlay didn't apply — check indentation and re-run

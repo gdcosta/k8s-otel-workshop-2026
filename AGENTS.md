@@ -262,6 +262,41 @@ here's where things stand:
   failure turned out to be exactly the timing-window flake the check's own hint text
   already predicted, confirmed by a follow-up query finding the span seconds later —
   no fix needed, the check's existing hint was already correct.
+- **The Collector moved from the `default` namespace into its own `otel` namespace,
+  2026-08-31** — user direction: infrastructure components shouldn't share `default`
+  with anything else, same reasoning `petclinic` already had for the app. Migrated live
+  before landing anything (commit `0ced607`): uninstalled from `default`, reinstalled
+  into `otel` (`--namespace otel --create-namespace`), all six PetClinic Deployments'
+  `instrumentation.opentelemetry.io/inject-java` annotation updated to
+  `"otel/<release>-splunk-otel-collector"`, staged one at a time per Phase 4c's own
+  control-plane-load lesson. Confirmed live: `OTEL_EXPORTER_OTLP_ENDPOINT` resolves
+  itself to `*.otel.svc.cluster.local` with no manual config needed — the operator
+  derives it from wherever it's actually installed — and fresh spans landed for all six
+  services after the move. Hit the same one-time operator-webhook race AW1's own
+  troubleshooting already documents (Helm applies the `Instrumentation` CR before the
+  webhook's ready on a truly fresh namespace); same fix, wait for the operator pod
+  Ready and re-run the identical `helm upgrade`. Cluster-scoped resources (the
+  operator's `ClusterRole`) blocked a same-release-name install in a second namespace
+  while the `default` install was still up — the old install had to come down before
+  `otel` could go up clean, not run alongside it.
+
+  `labs/collector/values-{workshop,aw1,aw2,final}.yaml`, `scripts/verify-{fw2,aw1,aw2}.sh`
+  (`verify-fw1.sh` needed no change — it never touches the collector), and
+  `versions.env` (new `OTEL_NAMESPACE="otel"`, not `WS_USER`-prefixed for the same
+  reason the six PetClinic Service names aren't) all updated and live-verified:
+  `verify-fw1.sh` 15/15, `verify-aw1.sh` 17/17, `verify-aw2.sh` 32/32.
+  `verify-fw2.sh` 12/16 — the 4 failures are a pre-existing, unrelated spike-box state
+  artifact (`customers-service` running from the base manifest rather than FW2's
+  access-logging variant), not something this migration touched.
+
+  Doc pass (commit pending as of this writing) covers every `helm upgrade`/`install`
+  across FW2/AW1/AW2 (`--namespace otel`, plus `--create-namespace` on FW2's first
+  install only), every bare `kubectl get cm .../logs daemonset/...` targeting the
+  Collector, the `inject-java` annotation's namespace prefix in AW1 §3, both expected
+  `OTEL_EXPORTER_OTLP_ENDPOINT` DNS strings, every `values-{workshop,aw1,aw2,final}.yaml`
+  Reference-section splice re-synced from the real current files, and FW1's own
+  "later modules assume `default`" note rewritten to name `otel` explicitly instead of
+  leaving a claim that would have read as wrong once this shipped.
 - **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
   the manifest again:** Config Server defaults to a live, unpinned `git pull` from
   GitHub on every restart (fixed via the `native` profile + a baked-in ConfigMap — see

@@ -365,9 +365,13 @@ JRE-vs-JDK saving as before, this time without a layered/extracted jar.
     `kubectl delete namespace petclinic` as a single step is worth having, the same way
     you'd want it in a cluster shared with other workloads. This module still uses
     `kubectl ... -n petclinic` explicitly on every command below rather than switching
-    your shell's default namespace — later modules assume `default` for things unrelated
-    to PetClinic, and a silently-changed default would make those commands fail for a
-    reason that isn't obvious from the error.
+    your shell's default namespace — a later module ([FW #2](../02-foundational-2/index.md))
+    installs the Collector into its own `otel` namespace for the identical reason
+    (infrastructure shouldn't share a namespace with anything else either), so a
+    silently-changed default would make commands in *both* directions fail for a reason
+    that isn't obvious from the error. `default` itself ends up holding none of this
+    workshop's own resources at all — every explicit `-n` you type is deliberate, not
+    incidental.
 
 Download the manifest and substitute your username:
 

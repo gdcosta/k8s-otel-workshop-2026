@@ -220,24 +220,24 @@ splunkPlatform:
     # Validate first. The chart schema is the only check in this workshop that
     # fails loudly instead of silently doing nothing.
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client
 
     # Apply
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml
+      --version 0.158.0 -f values-workshop.yaml --namespace otel
 
-    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
+    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel --timeout=300s
 
     # Confirm the change actually reached the running config
-    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
       -o go-template='{{index .data "relay"}}' | grep -A5 'transform/'
     ```
 
 ```bash
 cd ~/k8s_workshop/k8s_otel
 helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-  --version 0.158.0 -f values-workshop.yaml
-kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent
+  --version 0.158.0 -f values-workshop.yaml --namespace otel
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel
 ```
 
 ### ✅ Checkpoint
@@ -411,15 +411,15 @@ instrumentation:
     # fails loudly instead of silently doing nothing — this is where a missing
     # `environment:` key gets caught, before it becomes a confusing runtime gap.
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client
 
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml
+      --version 0.158.0 -f values-workshop.yaml --namespace otel
 
     # The operator's admission webhook must be serving before anything gets
     # patched to use it — a fresh install can lose this race by a few seconds.
     kubectl wait --for=condition=ready pod \
-      -l app.kubernetes.io/name=operator -n default --timeout=120s
+      -l app.kubernetes.io/name=operator -n otel --timeout=120s
     ```
 
 !!! danger "A brand-new install can hit the webhook before it's ready"
@@ -455,13 +455,13 @@ for svc in customers-service vets-service visits-service api-gateway discovery-s
   kubectl patch deployment "$svc" -n petclinic -p \
     '{"spec":{"template":{"metadata":{"annotations":
       {"instrumentation.opentelemetry.io/inject-java":
-       "default/${WS_USER}-k8s-ws-splunk-otel-collector"}}}}}'
+       "otel/${WS_USER}-k8s-ws-splunk-otel-collector"}}}}}'
   kubectl rollout status deployment/"$svc" -n petclinic --timeout=120s
 done
 ```
 
 The annotation's value is `<namespace>/<release-name>-splunk-otel-collector` — the
-`Instrumentation` resource lives in the `default` namespace alongside the Collector itself,
+`Instrumentation` resource lives in the `otel` namespace alongside the Collector itself,
 not in `petclinic` alongside the app. Patching a Deployment's pod template changes the pods
 it produces, so this triggers a real rollout — Kubernetes replaces the running pod with one
 that carries the new annotation, and *that* creation event is what the webhook intercepts.
@@ -504,13 +504,13 @@ done
 wait-for-config-server opentelemetry-auto-instrumentation-java
 JAVA_TOOL_OPTIONS= -javaagent:/otel-auto-instrumentation-java-customers-service/javaagent.jar
 OTEL_SERVICE_NAME=customers-service
-OTEL_EXPORTER_OTLP_ENDPOINT=http://${WS_USER}-k8s-ws-splunk-otel-collector-agent.default.svc.cluster.local:4318
+OTEL_EXPORTER_OTLP_ENDPOINT=http://${WS_USER}-k8s-ws-splunk-otel-collector-agent.otel.svc.cluster.local:4318
 
 --- vets-service ---
 wait-for-config-server opentelemetry-auto-instrumentation-java
 JAVA_TOOL_OPTIONS= -javaagent:/otel-auto-instrumentation-java-vets-service/javaagent.jar
 OTEL_SERVICE_NAME=vets-service
-OTEL_EXPORTER_OTLP_ENDPOINT=http://${WS_USER}-k8s-ws-splunk-otel-collector-agent.default.svc.cluster.local:4318
+OTEL_EXPORTER_OTLP_ENDPOINT=http://${WS_USER}-k8s-ws-splunk-otel-collector-agent.otel.svc.cluster.local:4318
 ```
 
 `opentelemetry-auto-instrumentation-java` is a **second** init container, added by the
@@ -665,16 +665,16 @@ agent:
     # Validate first. The chart schema is the only check in this workshop that
     # fails loudly instead of silently doing nothing.
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml --dry-run=client
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client
 
     # Apply
     helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-      --version 0.158.0 -f values-workshop.yaml
+      --version 0.158.0 -f values-workshop.yaml --namespace otel
 
-    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --timeout=300s
+    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel --timeout=300s
 
     # Confirm the change actually reached the running config
-    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
       -o go-template='{{index .data "relay"}}' | grep -A5 'transform/'
     ```
 
@@ -1051,7 +1051,8 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     # Render:  WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) HEC_TOKEN=<hec> \
     #          envsubst < values-aw1.yaml > my-values.yaml
     # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-    #            --version 0.158.0 -f my-values.yaml
+    #            --version 0.158.0 -f my-values.yaml \
+    #            --namespace otel --create-namespace
     #
     # Validate first — the chart schema is the only check that fails loudly:
     #          helm upgrade ... --dry-run=client
@@ -1090,8 +1091,8 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     # [AW1] instrumentation.spec.java.env REPLACES the chart's own default env
     # list — it does not merge. Verified live 2026-08-29 (see values-aw2.yaml,
     # where this was first found) and confirmed again here 2026-08-30: every
-    # entry below is explicit, the chart's own two defaults verbatim, PLUS
-    # AW1's own additions.
+    # entry below is explicit, the chart's own two defaults verbatim, PLUS one
+    # addition of AW1's own.
     #
     # SPRING_AUTOCONFIGURE_EXCLUDE disables PetClinic's own bundled Zipkin
     # auto-export (Spring Boot Actuator's ZipkinAutoConfiguration/Micrometer
@@ -1354,7 +1355,7 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
       `false`).
     - `failed calling webhook "minstrumentation.kb.io": ... connection refused` means Helm
       applied the `Instrumentation` resource before the operator pod's webhook was ready.
-      `kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=operator -n default
+      `kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=operator -n otel
       --timeout=120s`, then re-run the same `helm upgrade` command.
 
 ??? failure "A patched Deployment's pods show no `opentelemetry-auto-instrumentation-java` init container"
@@ -1365,7 +1366,7 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     kubectl get pods -n petclinic -l app.kubernetes.io/name=<service>
     ```
     The annotation value must be `<namespace>/<release-name>-splunk-otel-collector` — the
-    `Instrumentation` resource lives in `default` next to the Collector itself, not in
+    `Instrumentation` resource lives in `otel` next to the Collector itself, not in
     `petclinic`. A typo there (or the release name, if you didn't install with
     `${WS_USER}-k8s-ws`) fails silently: the pod rolls, but the webhook finds no matching
     resource to inject and leaves the pod alone.
@@ -1432,7 +1433,7 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
 ??? failure "App metrics still landing outside `k8s_ws_petclinic_metrics`"
     Confirm the transform reached the running config:
     ```bash
-    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
       -o go-template='{{index .data "relay"}}' | grep -A5 app_metrics_index
     ```
     If it's there but not matching, confirm the namespace the metric actually carries — the
