@@ -190,6 +190,42 @@ here's where things stand:
   `rollout status` wait between each, rather than issuing all six as a tight parallel
   batch. This pass used sub-agents throughout (live validation/config finalization, then
   doc-writing), continuing the working-method change from Phase 4b.
+
+  A follow-on pass, same day, found and fixed a **third**, unrelated `localhost` source
+  the same way: every PetClinic service's default Spring profile briefly calls
+  `http://localhost:8888/<app>/<profile>` at startup and fails, before a second,
+  successful call resolves the real `config-server`. Root cause confirmed by reading the
+  actual upstream `spring-petclinic-microservices` v3.2.0 source (identical across all
+  six services), not guessed: the default profile imports config via
+  `spring.config.import: optional:configserver:${CONFIG_SERVER_URL:http://localhost:8888/}`,
+  while the `docker` profile's own import is already hardcoded correctly to
+  `config-server:8888` — Spring merges `spring.config.import` across active profiles
+  rather than one replacing the other, so both fire every restart. First guess
+  (`SPRING_CLOUD_CONFIG_URI`) was wrong, confirmed live via the app's own `Connection
+  refused` logging still firing with it set. `CONFIG_SERVER_URL` — the literal env var
+  name the app's own placeholder reads — is the real fix; added to
+  `instrumentation.spec.java.env` in `values-aw1.yaml` (canonical), carried into
+  `values-aw2.yaml`/`values-final.yaml`. Confirmed live on both a hand-built
+  (`customers-service`) and pulled (`visits-service`) image: 0 `localhost:8888` spans
+  after the fix, config still genuinely loads (`/actuator/health` stays `UP`, not just
+  "no error"). `scripts/verify-aw1.sh`/`verify-aw2.sh` each got a stricter assertion than
+  the Zipkin one — exactly 0 spans expected, not "under 5", since this fix eliminates the
+  noise entirely rather than reducing its volume.
+
+  **The `discovery-server` Eureka self-loop (`localhost:8761`, peer replication) was
+  deliberately left alone**, on direct user reconsideration mid-cleanup-pass: a fix was
+  scoped (disable `eureka.client.register-with-eureka`/`fetch-registry` — but *only* on
+  `discovery-server`, since the other five genuinely need Eureka client behavior on to
+  find each other, meaning `instrumentation.spec.java.env`'s uniform-application model is
+  the wrong mechanism for it entirely) and live investigation had started, then explicitly
+  stopped before anything was applied. Reasoning, in the user's own words: this
+  workshop's audience isn't app developers and "I don't want to overwhelm them with small
+  concepts like this" — the existing AW #2 §3 callout explaining the self-loop (real,
+  legitimate Eureka behavior, told apart from the Zipkin/config-client noise by port) is
+  judged to serve the workshop better than removing the underlying behavior would.
+  Confirmed nothing was changed on `discovery-server` before the drop landed. If this
+  gets revisited later, the constraint above (per-service, not uniform) is the reason a
+  naive copy of the Zipkin/config-client pattern won't work for it.
 - **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
   the manifest again:** Config Server defaults to a live, unpinned `git pull` from
   GitHub on every restart (fixed via the `native` profile + a baked-in ConfigMap — see

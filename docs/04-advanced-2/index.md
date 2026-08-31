@@ -280,11 +280,11 @@ AW #1 §3 — all six PetClinic services, if you followed that module's default 
     If you see fewer than all six PetClinic nodes, fewer than all six Deployments were
     patched in AW #1 §3 — extend the loop there to cover the rest.
 
-### Three more nodes that aren't PetClinic services, and what each one actually means
+### More nodes that aren't PetClinic services, and what each one actually means
 
-The map draws three more nodes beyond the six services, none of them things you patched or
-deployed. Two are real; one is the same Zipkin noise AW #1 §3 already fixed, and it's worth
-telling the two apart rather than assuming every unexplained node is that one bug:
+The map draws more nodes beyond the six services, none of them things you patched or
+deployed. Two are real; two are noise AW #1 §3 already fixes, and it's worth telling all
+four apart rather than assuming every unexplained node is the same one bug:
 
 **Three inferred database nodes**, one behind each of `customers-service`, `vets-service`
 and `visits-service` — real, and genuinely three separate databases, not one shared
@@ -311,14 +311,25 @@ is genuine, ongoing traffic, not a failure — it just resolves to the literal s
 any other `localhost`-addressed call and draws a generic node instead of a labelled
 `discovery-server → discovery-server` self-loop.
 
-**A `localhost` node that means nothing at all — if you still see it.** This is the one
-AW #1 §3's `SPRING_AUTOCONFIGURE_EXCLUDE` step exists to remove: PetClinic's own bundled
-Zipkin auto-export (Spring Boot Actuator, unrelated to the OTel agent), failing against a
-Zipkin collector on `:9411` that never existed. If that step's fix has reached the running
+**A `localhost` node on `:9411` that means nothing at all — if you still see it.** This is
+the one AW #1 §3's `SPRING_AUTOCONFIGURE_EXCLUDE` step exists to remove: PetClinic's own
+bundled Zipkin auto-export (Spring Boot Actuator, unrelated to the OTel agent), failing
+against a Zipkin collector that never existed. If that step's fix has reached the running
 pods, this one is simply gone — not renamed, not merged into the Eureka self-loop above,
-absent. If you still see a `localhost` node **and** the Eureka self-loop explanation above
-doesn't account for it (check the port — `:9411` is Zipkin noise, `:8761` is the real
-Eureka self-loop), that fix hasn't landed yet; see AW #1 §3's danger box.
+absent.
+
+**A `localhost` node on `:8888` that also means nothing — restart-tied, not continuous.**
+This is `CONFIG_SERVER_URL`'s target, also fixed in AW #1 §3: every service's own default
+Spring profile briefly tries `http://localhost:8888/<app>/<profile>` at startup and fails,
+before a second, successful call resolves the real `config-server`. Unlike the Zipkin noise
+above (continuous, on every request path) this one only fires once per pod restart, so it's
+easy to miss on a quiet cluster and easy to mistake for a fresh instance of the Eureka
+self-loop right after you scale something — check the port before assuming which bug it is.
+
+If you still see any `localhost` node **and** the Eureka self-loop explanation above doesn't
+account for it, check the port — `:9411` is Zipkin noise, `:8888` is the config-client
+noise, `:8761` is the real Eureka self-loop — then see AW #1 §3's danger box for whichever
+fix hasn't landed yet.
 
 **`config-server` sits with no edges at all, and that's correct, not a gap.** It's a pure
 sink — services fetch their configuration from it *once*, at startup, then cache it; it's
@@ -778,9 +789,10 @@ instrumentation:
   spec:
     java:
       env:
-        # ...chart defaults, and AW #1's SPRING_AUTOCONFIGURE_EXCLUDE, must
-        # stay listed — this list replaces, not merges. See step 6 for the
-        # profiler vars this module adds alongside this one...
+        # ...chart defaults, and AW #1's SPRING_AUTOCONFIGURE_EXCLUDE and
+        # CONFIG_SERVER_URL, must stay listed — this list replaces, not
+        # merges. See step 6 for the profiler vars this module adds
+        # alongside this one...
         - name: LOGGING_PATTERN_LEVEL
           value: "%5p [trace_id=%X{trace_id:-} span_id=%X{span_id:-}]"
 ```
@@ -1560,8 +1572,9 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
     # OTEL_JAVA_ENABLED_RESOURCE_PROVIDERS entirely, silently — no error, no
     # warning, just an agent running without those two settings. Every entry
     # below is therefore explicit: the chart's own two defaults, verbatim, PLUS
-    # AW2's four additions. Drop the "chart defaults" entries only if you've
-    # confirmed the chart's own default list hasn't changed:
+    # every addition AW #1 and AW #2 make between them. Drop the "chart
+    # defaults" entries only if you've confirmed the chart's own default list
+    # hasn't changed:
     #   kubectl get instrumentation -n default \
     #     <release>-splunk-otel-collector -o jsonpath='{.spec.java.env}'
     instrumentation:
@@ -1581,6 +1594,15 @@ for the base manifest, and step 7 above for exactly what the RUM script does to
             # here unchanged, same as the two chart defaults above it. -------
             - name: SPRING_AUTOCONFIGURE_EXCLUDE
               value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
+            # --- AW1: a second, unrelated localhost source — every service's
+            # own spring.config.import briefly tries http://localhost:8888 at
+            # startup and fails before succeeding against the real
+            # config-server. See AW1 §3's danger box for the confirmed root
+            # cause (read from the upstream app's own source, not guessed) and
+            # the wrong first guess (SPRING_CLOUD_CONFIG_URI — does nothing)
+            # ruled out before this one. Carried forward here unchanged. -----
+            - name: CONFIG_SERVER_URL
+              value: "http://config-server:8888/"
             # --- AW2: AlwaysOn Profiling. Applies to every operator-instrumented
             # pod uniformly, with no per-service edit needed. ---------------------
             - name: SPLUNK_PROFILER_ENABLED

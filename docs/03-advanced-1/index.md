@@ -340,9 +340,11 @@ instrumentation:
           value: "io.opentelemetry.instrumentation.resources.ContainerResourceProvider,io.opentelemetry.sdk.autoconfigure.EnvironmentResourceProvider,io.opentelemetry.instrumentation.resources.ProcessResourceProvider"
         - name: SPRING_AUTOCONFIGURE_EXCLUDE
           value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
+        - name: CONFIG_SERVER_URL
+          value: "http://config-server:8888/"
 ```
 
-!!! danger "That last line silences a real, separate source of noise — worth understanding before you move on"
+!!! danger "Two more lines that each silence a real, separate source of noise — worth understanding before you move on"
     Every PetClinic service also runs Spring Boot Actuator's *own* bundled Zipkin
     auto-export (Micrometer Tracing) — a completely different mechanism from the Splunk
     Java agent this module attaches, and one nobody ever disabled. Left running, every
@@ -373,6 +375,31 @@ instrumentation:
     the upstream sample app's own config, not something this workshop needs to fix; it's
     also *why* the noise heads to `localhost` specifically rather than some other
     address.
+
+    **`CONFIG_SERVER_URL` fixes a second, unrelated one.** Every service briefly calls
+    `http://localhost:8888/<app>/<profile>` at startup and fails — `Connection refused`,
+    right in the app's own logs — before a second, successful call to the real
+    `config-server`. The cause is in the upstream sample app itself, confirmed by reading
+    its actual source (every service's `application.yml`, identical across all six): the
+    default Spring profile imports config via
+    `spring.config.import: optional:configserver:${CONFIG_SERVER_URL:http://localhost:8888/}`,
+    while the `docker` profile's own import is already hardcoded correctly to
+    `config-server:8888`. Spring merges `spring.config.import` entries across every
+    active profile rather than letting one replace the other, so **both** fire on every
+    restart — one succeeds, one fails.
+
+    `SPRING_CLOUD_CONFIG_URI` looks like the obvious fix and was tried live first — it
+    does **nothing** here, confirmed by the same `Connection refused` line still firing
+    in the app's own logs with it set. `CONFIG_SERVER_URL` is the literal name of the
+    placeholder the app's own YAML reads — not a general Spring Cloud Config property, so
+    don't reach for the usual relaxed-binding name. With it set: **0** `localhost:8888`
+    spans afterward, and config genuinely still loads correctly on every service — not
+    just "no error," the app's real configuration values are present, confirmed on both
+    a hand-built (`customers-service`) and pulled (`visits-service`) image.
+
+    This module leaves one more `localhost` source alone, deliberately: `discovery-server`
+    also calls itself, continuously, on `localhost:8761` — that one is real, meaningful
+    Eureka behavior, not noise, and AW #2 §3 explains it rather than silencing it.
 
 ??? abstract "Full command sequence — collector change"
     ```bash
@@ -737,6 +764,12 @@ If you skipped §3's `SPRING_AUTOCONFIGURE_EXCLUDE` step, you'll also see a
 own bundled Zipkin auto-export, a completely separate mechanism from the Splunk agent,
 continuously failing to reach a Zipkin collector that doesn't exist. §3 disables it; if
 you're seeing it here, that step didn't reach the running pods yet.
+
+The same applies to a `STATUS_CODE_ERROR` client span aimed at `localhost:8888` right after
+any service restarts — that's the config-client noise §3's `CONFIG_SERVER_URL` fixes, and
+it should be gone after that step lands. A continuous, ongoing client span aimed at
+`localhost:8761`, by contrast, is `discovery-server`'s own Eureka self-registration — real,
+expected, and deliberately not silenced; see AW #2 §3 for why.
 </details>
 
 `service.name`, `k8s.deployment.name`, `k8s.namespace.name` and the rest of the resource
@@ -1057,8 +1090,8 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     # [AW1] instrumentation.spec.java.env REPLACES the chart's own default env
     # list — it does not merge. Verified live 2026-08-29 (see values-aw2.yaml,
     # where this was first found) and confirmed again here 2026-08-30: every
-    # entry below is explicit, the chart's own two defaults verbatim, PLUS one
-    # addition of AW1's own.
+    # entry below is explicit, the chart's own two defaults verbatim, PLUS
+    # AW1's own additions.
     #
     # SPRING_AUTOCONFIGURE_EXCLUDE disables PetClinic's own bundled Zipkin
     # auto-export (Spring Boot Actuator's ZipkinAutoConfiguration/Micrometer
@@ -1085,6 +1118,29 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     # is the one confirmed live to actually work: 0 localhost:9411 spans in
     # repeated post-fix checks, while real HTTP/DB spans and jvm.* metrics kept
     # flowing normally on the same pods.
+    #
+    # CONFIG_SERVER_URL fixes a second, unrelated localhost source: every service
+    # briefly calls http://localhost:8888/<app>/<profile> at startup and fails —
+    # confirmed live, STATUS_CODE_ERROR, "Connection refused" in the app's own
+    # logs, before a second, successful call to the real config-server. Root
+    # cause, confirmed by reading the upstream source (spring-petclinic-
+    # microservices v3.2.0, every service's application.yml): the default
+    # profile imports config via
+    #   spring.config.import: optional:configserver:${CONFIG_SERVER_URL:http://localhost:8888/}
+    # — a real Spring property, not something this workshop's config broke. The
+    # docker profile's own import is already hardcoded correctly to
+    # http://config-server:8888, and Spring merges spring.config.import entries
+    # across active profiles rather than letting the later one replace the
+    # earlier one — so both fire, one succeeds and one fails, every restart.
+    # First guess here was wrong and worth recording: SPRING_CLOUD_CONFIG_URI
+    # does nothing — that's not the property this YAML placeholder reads, and
+    # setting it left the localhost attempt completely unaffected, confirmed via
+    # the app's own DEBUG-level "Exception on Url - http://localhost:8888/"
+    # logging still firing. CONFIG_SERVER_URL is the literal env var name the
+    # ${...} placeholder itself reads. Confirmed live on customers-service
+    # (hand-built) and visits-service (pulled): 0 localhost:8888 spans after the
+    # fix, config still loads correctly (real values reach the app, not just "no
+    # error" — /actuator/health stays UP throughout).
     instrumentation:
       enabled: true
       spec:
@@ -1097,6 +1153,8 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
               value: "io.opentelemetry.instrumentation.resources.ContainerResourceProvider,io.opentelemetry.sdk.autoconfigure.EnvironmentResourceProvider,io.opentelemetry.instrumentation.resources.ProcessResourceProvider"
             - name: SPRING_AUTOCONFIGURE_EXCLUDE
               value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
+            - name: CONFIG_SERVER_URL
+              value: "http://config-server:8888/"
 
     # [FW2] Splunk Enterprise via HEC.  [AW1] adds metricsIndex / tracesIndex.
     splunkPlatform:
@@ -1313,8 +1371,11 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     resource to inject and leaves the pod alone.
 
 ??? failure "A meaningless `localhost` node keeps showing up wherever services are drawn (this module's trace search, or AW #2's service map)"
-    That's PetClinic's own bundled Zipkin auto-export, not the OTel agent — see §3's danger
-    box. Confirm the exclude reached the running pods:
+    Two different fixes, depending on the port — check which one before assuming it's the
+    same bug twice.
+
+    `localhost:9411` is PetClinic's own bundled Zipkin auto-export, not the OTel agent —
+    see §3's danger box. Confirm the exclude reached the running pods:
     ```
     index=k8s_ws_traces earliest=-5m "attributes.server.address"=localhost "attributes.server.port"=9411 | stats count
     ```
@@ -1323,6 +1384,17 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     running before you added it — `instrumentation.spec.java.env` changes don't roll
     running pods automatically; `kubectl rollout restart deployment -n petclinic <service>`
     to pick it up (one at a time — see the staged-rollout warning in §3).
+
+    `localhost:8888` is the config-client noise §3's `CONFIG_SERVER_URL` fixes — restart-only,
+    not continuous, so check over a longer window:
+    ```
+    index=k8s_ws_traces earliest=-60m "attributes.server.address"=localhost "attributes.server.port"=8888 | stats count
+    ```
+    Any count above zero here means `CONFIG_SERVER_URL` hasn't reached the running pods yet
+    — same rollout-restart fix as above.
+
+    `localhost:8761`, by contrast, is **not a bug** — that's `discovery-server`'s own real
+    Eureka self-registration, deliberately left as-is. See AW #2 §3.
 
 ??? failure "`kubectl get pods` (or any kubectl command) hangs or times out while patching all six services"
     A real, transient control-plane overload on this instance size, not a sign anything is
