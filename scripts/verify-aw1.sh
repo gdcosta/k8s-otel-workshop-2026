@@ -81,6 +81,16 @@ n=$(num 'index=k8s_ws_traces earliest=-5m "attributes.server.address"=localhost 
   && ok "no meaningful localhost:9411 Zipkin noise ($n spans/5m)" \
   || no "$n localhost:9411 spans in the last 5 minutes" "check SPRING_AUTOCONFIGURE_EXCLUDE is in instrumentation.spec.java.env and reached the running pods (kubectl rollout restart if you just added it)"
 
+# Every service's own spring.config.import briefly tries http://localhost:8888
+# at startup before succeeding against the real config-server — restart-only,
+# not continuous like the Zipkin noise above, so this checks a wider window.
+# Unlike the Zipkin check, CONFIG_SERVER_URL fixes this to exactly zero, ever
+# — any count here at all means the fix hasn't reached the running pods.
+n=$(num 'index=k8s_ws_traces earliest=-60m "attributes.server.address"=localhost "attributes.server.port"=8888 | stats count'); \
+[ "${n:-0}" -eq 0 ] \
+  && ok "no localhost:8888 config-client noise (0 spans/60m)" \
+  || no "$n localhost:8888 spans in the last 60 minutes" "check CONFIG_SERVER_URL is in instrumentation.spec.java.env and reached the running pods (kubectl rollout restart if you just added it)"
+
 n=$(num '| tstats count where index=k8s_ws_petclinic_logs'); [ "${n:-0}" -gt 0 ] \
   && ok "app logs still isolated ($n events/15m)" || no "no app logs" "FW2 routing regressed"
 

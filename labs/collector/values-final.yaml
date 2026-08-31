@@ -78,6 +78,15 @@ instrumentation:
         # unchanged, same as the two chart defaults above it. ------------------
         - name: SPRING_AUTOCONFIGURE_EXCLUDE
           value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
+        # --- AW1: a second, unrelated localhost source — every service's own
+        # spring.config.import briefly tries http://localhost:8888 at startup
+        # and fails before succeeding against the real config-server. See
+        # values-aw1.yaml's comment for the confirmed root cause (read from
+        # the upstream app's own source, not guessed) and the wrong first
+        # guess (SPRING_CLOUD_CONFIG_URI — does nothing) ruled out before
+        # this one. Carried forward here unchanged. ----------------------------
+        - name: CONFIG_SERVER_URL
+          value: "http://config-server:8888/"
         # --- AW2: AlwaysOn Profiling. Old approach set these as hand-written
         # env vars in the monolith's Deployment manifest — that mechanism
         # doesn't exist once five of six services are pulled images with no

@@ -73,6 +73,16 @@ n=$($SPLUNK search 'index=k8s_ws_traces earliest=-5m "attributes.server.address"
   && ok "no meaningful localhost:9411 Zipkin noise ($n spans/5m)" \
   || no "$n localhost:9411 spans in the last 5 minutes" "check SPRING_AUTOCONFIGURE_EXCLUDE is in instrumentation.spec.java.env and reached the running pods"
 
+# Every service's own spring.config.import briefly tries http://localhost:8888
+# at startup before succeeding against the real config-server — restart-only,
+# not continuous, so this checks a wider window. CONFIG_SERVER_URL fixes it
+# to exactly zero, ever — unlike the Zipkin check above, any count at all
+# here means the fix hasn't reached the running pods.
+n=$($SPLUNK search 'index=k8s_ws_traces earliest=-60m "attributes.server.address"=localhost "attributes.server.port"=8888 | stats count' -earliest_time -60m -auth "$SPLUNK_AUTH" 2>/dev/null | tail -1 | tr -dc '0-9')
+[ "${n:-0}" -eq 0 ] \
+  && ok "no localhost:8888 config-client noise (0 spans/60m)" \
+  || no "$n localhost:8888 spans in the last 60 minutes" "check CONFIG_SERVER_URL is in instrumentation.spec.java.env and reached the running pods"
+
 # --- profiling ---------------------------------------------------------------
 # Set once, via instrumentation.spec.java.env in values-aw2.yaml — applies to
 # every operator-instrumented pod uniformly, unlike the old per-Deployment env

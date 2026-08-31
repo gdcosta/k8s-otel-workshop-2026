@@ -72,6 +72,29 @@ operator:
 # is the one confirmed live to actually work: 0 localhost:9411 spans in
 # repeated post-fix checks, while real HTTP/DB spans and jvm.* metrics kept
 # flowing normally on the same pods.
+#
+# CONFIG_SERVER_URL fixes a second, unrelated localhost source: every service
+# briefly calls http://localhost:8888/<app>/<profile> at startup and fails —
+# confirmed live, STATUS_CODE_ERROR, "Connection refused" in the app's own
+# logs, before a second, successful call to the real config-server. Root
+# cause, confirmed by reading the upstream source (spring-petclinic-
+# microservices v3.2.0, every service's application.yml): the default
+# profile imports config via
+#   spring.config.import: optional:configserver:${CONFIG_SERVER_URL:http://localhost:8888/}
+# — a real Spring property, not something this workshop's config broke. The
+# docker profile's own import is already hardcoded correctly to
+# http://config-server:8888, and Spring merges spring.config.import entries
+# across active profiles rather than letting the later one replace the
+# earlier one — so both fire, one succeeds and one fails, every restart.
+# First guess here was wrong and worth recording: SPRING_CLOUD_CONFIG_URI
+# does nothing — that's not the property this YAML placeholder reads, and
+# setting it left the localhost attempt completely unaffected, confirmed via
+# the app's own DEBUG-level "Exception on Url - http://localhost:8888/"
+# logging still firing. CONFIG_SERVER_URL is the literal env var name the
+# ${...} placeholder itself reads. Confirmed live on customers-service
+# (hand-built) and visits-service (pulled): 0 localhost:8888 spans after the
+# fix, config still loads correctly (real values reach the app, not just "no
+# error" — /actuator/health stays UP throughout).
 instrumentation:
   enabled: true
   spec:
@@ -84,6 +107,8 @@ instrumentation:
           value: "io.opentelemetry.instrumentation.resources.ContainerResourceProvider,io.opentelemetry.sdk.autoconfigure.EnvironmentResourceProvider,io.opentelemetry.instrumentation.resources.ProcessResourceProvider"
         - name: SPRING_AUTOCONFIGURE_EXCLUDE
           value: "org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration"
+        - name: CONFIG_SERVER_URL
+          value: "http://config-server:8888/"
 
 # [FW2] Splunk Enterprise via HEC.  [AW1] adds metricsIndex / tracesIndex.
 splunkPlatform:
