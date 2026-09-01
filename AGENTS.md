@@ -372,8 +372,9 @@ here's where things stand:
   `kubectl apply`, zero restarts, 72 seconds to ready) is the number that went in the
   guide. Don't mistake a noisy validation instance for a real defect; check what's
   actually consuming CPU before concluding the app is at fault.
-- Remaining phases (dashboards rework, Cilium) are unstarted. See the migration plan for
-  the full phase breakdown and gates.
+- Remaining phases (dashboards rework, Cilium, then an always-on Playwright load
+  generator — this order is deliberate, see the two bullets below) are unstarted. See
+  the migration plan for the full phase breakdown and gates.
 - **Considered and rejected: switching FW1 to Splunk's own reference PetClinic
   microservices deployment** (`splunk/observability-workshop`, "Ninja Workshops" ->
   `automatic-discovery` -> `petclinic-kubernetes`). Its images
@@ -416,6 +417,59 @@ here's where things stand:
   diagnose, and something the current fault has no equivalent demonstration of. Do not
   build this exercise without Cilium actually deployed and the policy actually tested
   live — same "tested, not transcribed" rule as everything else here.
+
+  **Sequencing decision, 2026-09-01: Cilium/the new fault scenario must be built
+  *before* the always-on Playwright load generator below, not after or in parallel.**
+  Three reasons, all pointing the same way: (1) Cilium-on-minikube is the biggest
+  untested unknown left in this whole migration — nothing about the CNI swap, whether
+  it disturbs anything already working (Service DNS resolution, the latency numbers
+  existing dashboards were captured against), or whether NetworkPolicy enforcement
+  needs anything beyond a plain install has been live-verified, unlike everything else
+  in this repo. Better to find that out before docs or a second piece of
+  infrastructure get built around today's assumptions. (2) Cilium was already slated to
+  touch part of FW1 too (see the top of this doc), not just swap one command in AW2
+  §8 — it's a real infrastructure phase, not a small edit. (3) The new fault's actual
+  observable behavior (connection timeouts, not a fast-fail) needs real captured
+  numbers before §8 gets rewritten — building the Playwright generator against the
+  *current* topology first would mean re-verifying its integration once the CNI
+  changes underneath it. Whatever order these land in, keep an on-demand, countable
+  load tool for §8's own reconciliation exercise regardless of which fault type is
+  live there — that constraint doesn't depend on the sequencing, see the Playwright
+  bullet below.
+
+- **Always-on Playwright load generator — approved direction, 2026-09-01, explicitly
+  after the Cilium phase above, not before.** Supersedes the "in-cluster load
+  generation" idea two bullets up: Playwright instead of JMeter, specifically because
+  a real headless browser gives backend load AND real RUM telemetry from the same
+  running process — `docs/04-advanced-2/index.md`'s own `petclinic_browser_test.py`
+  already proves the navigate-the-real-SPA mechanism works, this just loops it
+  indefinitely instead of running for a fixed `--duration`. Confirmed live 2026-09-01
+  that the current instance size has real headroom for it: 22GiB available / 8vCPU,
+  against a headless Chromium context's ~150-300MB footprint — plenty for several
+  concurrent contexts in one pod.
+
+  **Hybrid, not a full replacement — keep an on-demand tool for AW2 §8.** The
+  reconciliation exercise (§8) depends on a controllable, countable load run — start
+  it, run a fault window, read its own exact tally afterward — the same way
+  JMeter's own summary line is one of the exercise's three compared numbers today. An
+  always-on background pod makes that specific lesson harder to reason about (you'd
+  be diffing counters over a window instead of reading a clean summary). Playwright
+  covers FW2 through most of AW2; JMeter (or something like it) stays as the
+  deliberately-triggered tool for §8 specifically, whatever the new fault type turns
+  out to be.
+
+  **No custom image needed.** Pull the official `mcr.microsoft.com/playwright/python`
+  (or `:node`) image — it already bundles Chromium and every OS dependency — and mount
+  the loop script via a ConfigMap + volume, the same pattern AW2's
+  `inject-rum-snippet.sh` already uses for the RUM snippet itself. Keeps the
+  "prebuilt images, no Dockerfiles" approach AW1/AW2 already established for the six
+  app services; would otherwise be the first custom-built container in the whole
+  workshop. The real effort is extending the existing read-only navigation flow to
+  also drive the owner-edit and add-visit forms (JMeter's test plan today round-trips
+  a full owner object and posts new visits — matching that coverage through the UI is
+  the bulk of the work, not the containerization). Same "introduce it only after the
+  app is already confirmed healthy" timing rule as the deferred JMeter-in-cluster idea
+  above.
 
 ---
 
