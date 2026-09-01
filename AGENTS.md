@@ -437,6 +437,49 @@ here's where things stand:
   live there — that constraint doesn't depend on the sequencing, see the Playwright
   bullet below.
 
+  **Finalized 2026-09-01: this ships as a new, mandatory module, `FW #1b` — not
+  optional, not folded into FW #1, and not just the single fault-scenario idea above.**
+  The primary audience for this workshop is architects who need Kubernetes specifically
+  to deploy the Splunk Operator, and Cilium is a required component of that real
+  deployment — not deferrable taught content. Scope is bigger than the fault scenario
+  alone: participants build the real required-traffic graph across all six services
+  from live evidence (Eureka registration/heartbeat, config-server fetch, the
+  api-gateway proxy paths, DNS) and write `CiliumNetworkPolicy` rules — both ingress
+  and egress direction — that allow only that traffic; the misconfigured-policy fault
+  scenario above becomes a natural corollary demo inside that exercise, not the whole
+  of it. FW #1b also adds Ingress via Cilium's own Envoy-based controller (no separate
+  ingress-nginx install) so participants can reach the PetClinic GUI from their own
+  laptop, tunnel-based only — replacing FW1 §7's direct `ssh -L
+  8080:192.168.49.2:30000 ...` tunnel to the raw NodePort as the path a human browser
+  uses. `curl` against the NodePort stays fine for quick testing; every other form of
+  access goes through a tunnel to the Ingress controller. Never a newly-opened public
+  port — same posture as Splunk Web (:8000) everywhere else in this workshop, not the
+  one narrow, deliberately-scoped exception Log Observer Connect (:8089) is.
+
+  **Structure:** inserted right after FW #1 and before FW #2 (mkdocs nav order is
+  explicit in `mkdocs.yml`, not derived from directory numeric prefixes, so this needs
+  no renumbering of FW2/AW1/AW2 — new directory `docs/01b-foundational-1b/`, nav label
+  `'FW #1b — Kubernetes Networking with Cilium'`). FW1 §2 keeps only a small footprint
+  — the CNI choice itself, since it's picked at cluster creation and can't be swapped
+  without recreating the cluster — everything else lives in the new module. Reasoning
+  for a separate module over new FW1 sections: FW1 is a complete, self-contained arc
+  today (605 lines against 1,500–2,300 for the other three modules — it has raw
+  headroom, but that's not the deciding factor); NetworkPolicy/Ingress is a genuinely
+  different theme (network security, not cluster basics) that deserves its own
+  checkpoint structure and honest duration estimate, the same way every other module
+  gets one. Real, necessary consequence: `docs/facilitator/index.md`'s "Foundational =
+  Setup + FW1 + FW2 = half day" format no longer holds once this is mandatory — update
+  it to say so plainly (a full day, realistically) rather than compress this content to
+  protect a stale estimate.
+
+  **In progress:** a fresh EC2 instance (`3.145.97.98`, same key) is being used for the
+  first live spike — 00-setup, then Cilium via Helm (pinned `1.20.1`, not `minikube
+  start --cni=cilium`, kube-proxy left in place) as the CNI, then the six-service app
+  verified healthy on top of it, dispatched to a sub-agent per the user's explicit
+  request to use sub-agents for this work. NetworkPolicy design and Ingress setup are
+  the next stages once that's confirmed. Nothing has been committed to the repo for
+  this yet — the spike runs on the box only.
+
 - **Always-on Playwright load generator — approved direction, 2026-09-01, explicitly
   after the Cilium phase above, not before.** Supersedes the "in-cluster load
   generation" idea two bullets up: Playwright instead of JMeter, specifically because
