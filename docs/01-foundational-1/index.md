@@ -133,13 +133,22 @@ minikube config set driver docker
 minikube start \
   --driver=docker \
   --container-runtime=docker \
-  --subnet=192.168.49.0/24
+  --subnet=192.168.49.0/24 \
+  --cni=false
 ```
 
 !!! warning "Why `--container-runtime=docker` is explicit"
     From minikube v1.39 the default runtime becomes `containerd`. This workshop builds
     images directly into minikube's Docker daemon, so we pin the runtime rather than
     depending on the default of whichever version you installed.
+
+!!! abstract "Learning moment — why `--cni=false`"
+    This cluster runs [Cilium](https://cilium.io) as its CNI instead of minikube's built-in
+    one — [Foundational Workshop #1b](../01b-foundational-1b/index.md) covers why in depth
+    (in short: the primary audience needs it for real Splunk Operator deployments). The CNI
+    is chosen at cluster **creation** and can't be swapped without recreating the cluster, so
+    it's set here, at the earliest possible point, even though everything else about Cilium —
+    NetworkPolicy, Hubble, Ingress — is FW #1b's content, not this module's.
 
 Check the cluster is up:
 
@@ -165,6 +174,51 @@ minikube   Ready    control-plane   61s   v1.35.1
 
 If `STATUS` shows `NotReady`, wait 30 seconds and re-run — the network plugin takes a
 moment to initialise.
+</details>
+
+!!! note "The node is `Ready` above even before Cilium is installed — that's expected, not a bug"
+    `--cni=false` stops minikube from installing its **own** default CNI, but minikube's base
+    image still carries a fallback bridge CNI config
+    (`/etc/cni/net.d/87-podman-bridge.conflist`) that stays active regardless — so the node
+    isn't truly network-less at this point, and `kubectl get nodes` reporting `Ready` here
+    doesn't mean Cilium is running yet. Cilium's own install is exclusive by default: it
+    cleanly takes over from that fallback (renaming the file to `.cilium_bak` and installing
+    its own `05-cilium.conflist`), not a conflict to troubleshoot if you happen to check
+    `/etc/cni/net.d/` mid-install.
+
+Install Cilium as the CNI:
+
+```bash
+helm repo add cilium https://helm.cilium.io/
+helm repo update
+helm install cilium cilium/cilium --version 1.20.1 -n kube-system \
+  --set operator.replicas=1
+cilium status --wait
+```
+
+`operator.replicas` defaults to `2` in the chart — redundant scheduling that a single-node
+cluster can't use, so it's pinned to `1` here. Leave kube-proxy running for now: FW #1b
+revisits that decision once Ingress makes it necessary, not before.
+
+<details>
+<summary>Expected output</summary>
+
+```
+    /¯¯\
+ /¯¯\__/¯¯\    Cilium:             OK
+ \__/¯¯\__/    Operator:           OK
+ /¯¯\__/¯¯\    Envoy DaemonSet:    OK
+ \__/¯¯\__/    Hubble Relay:       disabled
+    \__/       ClusterMesh:        disabled
+
+DaemonSet              cilium                   Desired: 1, Ready: 1/1, Available: 1/1
+DaemonSet              cilium-envoy             Desired: 1, Ready: 1/1, Available: 1/1
+Deployment             cilium-operator          Desired: 1, Ready: 1/1, Available: 1/1
+Cluster Pods:          1/1 managed by Cilium
+```
+
+`Cluster Pods` climbs as you deploy PetClinic later in this module — 1/1 here just reflects
+`coredns`, the only pod that exists yet.
 </details>
 
 ---
@@ -207,6 +261,11 @@ minikube start \
   --extra-config=apiserver.audit-policy-file=/etc/ssl/certs/audit-policy.yaml \
   --extra-config=apiserver.audit-log-path=-
 ```
+
+!!! note "Cilium survives this restart untouched"
+    `--cni=false` isn't repeated here — minikube persists it per-profile from §2, and this
+    was confirmed live: the restart comes back with Cilium already managing the node, nothing
+    to reinstall.
 
 ### ✅ Checkpoint
 

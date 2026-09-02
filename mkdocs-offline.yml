@@ -53,6 +53,7 @@ nav:
       - The OTel Collector & Helm: concepts/otel-collector.md
   - 'Host setup': 00-setup/index.md
   - 'FW #1 — Containers & Kubernetes': 01-foundational-1/index.md
+  - 'FW #1b — Kubernetes Networking with Cilium': 01b-foundational-1b/index.md
   - 'FW #2 — Log collection': 02-foundational-2/index.md
   - 'AW #1 — Metrics & traces': 03-advanced-1/index.md
   - 'AW #2 — Observability Cloud': 04-advanced-2/index.md

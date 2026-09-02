@@ -1,7 +1,7 @@
 # Foundational Workshop #2 — Collecting logs with OpenTelemetry
 
-**Duration:** ~2 hours · **Prerequisite:** [FW #1](../01-foundational-1/index.md) complete
-(`./scripts/verify-fw1.sh` passes)
+**Duration:** ~2 hours · **Prerequisite:** [FW #1b](../01b-foundational-1b/index.md) complete
+(`./scripts/verify-fw1b.sh` passes)
 
 In FW #1 you got an application running on Kubernetes. It's generating logs, the API server
 is generating an audit trail — and none of it is going anywhere. In this module you'll

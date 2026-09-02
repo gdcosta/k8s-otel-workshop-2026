@@ -14,10 +14,18 @@ the next one starts from, so you can stop after any of them.
 
 | Format | Modules | Time | Good for |
 |---|---|---|---|
-| Foundational | Setup + FW #1 + FW #2 | Half day | Teams new to Kubernetes |
-| Advanced | + AW #1 | Full day | Existing Splunk platform users |
-| Complete | + AW #2 | Two half-days | Observability Cloud evaluations |
+| Foundational | Setup + FW #1 + FW #1b + FW #2 | Full day | Teams new to Kubernetes |
+| Advanced | + AW #1 | Full day + | Existing Splunk platform users |
+| Complete | + AW #2 | Two days | Observability Cloud evaluations |
 | AW #2 only | Setup → FW #2 pre-built, then AW #2 | 2 hours | Audiences who only care about O11y |
+
+!!! warning "Foundational is now a full day, not a half day — FW #1b is mandatory, not optional"
+    FW #1b was added after the "Foundational = half day" estimate was first written. It isn't
+    a detour or a bonus module — Cilium is a required component of a real Splunk Operator
+    deployment, which is the primary reason this workshop's audience needs Kubernetes at all.
+    Compressing it to protect the old half-day estimate would mean cutting taught content, not
+    trimming padding. Budget accordingly: Setup (45 min) + FW #1 (1.5–2 hr) + FW #1b (2–3 hr)
+    + FW #2 (2–2.5 hr) is 6.25–8.25 hours before AW #1 is even in scope.
 
 For anything short of the complete series, **pre-build the environment to the starting
 state** — see [Fast-forwarding](#fast-forwarding-to-a-later-module). Nobody enjoys watching
@@ -194,7 +202,8 @@ export WS_USER=<participant>
 source ~/.workshop-env
 
 ./scripts/verify-setup.sh     # host ready
-./scripts/verify-fw1.sh       # FW1 complete  -> snapshot here to start at FW2
+./scripts/verify-fw1.sh       # FW1 complete  -> snapshot here to start at FW1b
+./scripts/verify-fw1b.sh      # FW1b complete -> snapshot here to start at FW2
 ./scripts/verify-fw2.sh       # FW2 complete  -> snapshot here to start at AW1
 ```
 
@@ -224,6 +233,7 @@ source ~/.workshop-env
 |---|---|---|
 | Host setup | 45 min | pre-build it |
 | FW #1 | 1.5 hr | 2 hr with a mixed-ability group |
+| FW #1b | 2.5 hr | 3 hr — six policies applied and checked one at a time, plus Ingress |
 | FW #2 | 2 hr | 2.5 hr — the Collector config is the densest part |
 | AW #1 | 2 hr | 2 hr |
 | AW #2 | 2 hr | 2.5 hr if participants create their own O11y trials |
@@ -260,10 +270,13 @@ export SPLUNK_AUTH=admin:'Workshop2026!'
 
 The single quotes around the password matter — `!` is history expansion in an interactive
 `bash` shell. `verify-fw2.sh`, `verify-aw1.sh` and `verify-aw2.sh` all hard-require
-`SPLUNK_AUTH` and exit immediately without it.
+`SPLUNK_AUTH` and exit immediately without it. `verify-fw1b.sh` doesn't — it only asserts
+cluster/network state, nothing in Splunk.
 
-**55 assertions across the five scripts.** They're also the check to run against a new
-Collector releases.
+**66 assertions across the six scripts** — the original 55 plus `verify-fw1b.sh`'s own 11
+(Cilium health, all six `CiliumNetworkPolicy` objects, kube-proxy stopped, Ingress up with a
+real NodePort, a real `curl` through it). They're also the check to run against a new
+Collector or Cilium chart release.
 
 ---
 
