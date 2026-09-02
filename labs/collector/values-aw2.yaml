@@ -162,6 +162,23 @@ logsCollection:
           value: .*
           useRegexp: true
         firstEntryRegex: ^[^\s].*
+  # [FW2 §12] Tail Cilium's own Hubble flow-log JSON export (hubble.export.static,
+  # enabled on the Cilium release itself). The chart's purpose-built "extra file
+  # on the node" mechanism — auto-creates its own logs/host pipeline (memory_limiter,
+  # batch, resource_detection, resource -> splunk_hec/platform_logs), so it lands in
+  # splunkPlatform.index (k8s_ws_logs) without touching the existing `logs` pipeline.
+  # Requires agent.extraVolumes/extraVolumeMounts below. Verified live 2026-09-02:
+  # sourcetype cilium:hubble:flow, real flow JSON nested under a top-level "flow" key.
+  extraFileLogs:
+    file_log/hubble_flows:
+      include: [/var/run/cilium/hubble/events.log]
+      start_at: beginning
+      include_file_path: true
+      include_file_name: false
+      resource:
+        com.splunk.source: /var/run/cilium/hubble/events.log
+        host.name: 'EXPR(env("K8S_NODE_NAME"))'
+        com.splunk.sourcetype: cilium:hubble:flow
 
 # [FW2] Promote pod annotations onto events.
 # tag_name gives a clean field name directly — no regex prefix-stripping needed.
@@ -197,7 +214,37 @@ clusterReceiver:
 # NOTE: modern OTTL requires context-prefixed paths (log.* / resource.*).
 # sourcetype and k8s.* are RESOURCE attributes, not log-record attributes.
 agent:
+  # [FW2 §12] hostPath into the same directory Cilium's own DaemonSet mounts as
+  # `cilium-run` (/var/run/cilium, DirectoryOrCreate) — events.log lives at
+  # /var/run/cilium/hubble/events.log on the node.
+  extraVolumes:
+    - name: cilium-hubble-flows
+      hostPath:
+        path: /var/run/cilium/hubble
+        type: DirectoryOrCreate
+  extraVolumeMounts:
+    - name: cilium-hubble-flows
+      mountPath: /var/run/cilium/hubble
+      readOnly: true
   config:
+    receivers:
+      # [AW1] Two separate Prometheus scrape targets: Hubble's own flow metrics
+      # (hubble.metrics.enabled on the Cilium release, port 9965, a headless
+      # kube-system Service) and Cilium agent's own health/perf metrics
+      # (prometheus.enabled on the Cilium release, port 9962 — no Service; the
+      # agent runs hostNetwork, so ${K8S_NODE_IP} reaches it directly, the same
+      # env var the chart's own kubelet_stats receiver already uses).
+      prometheus/cilium:
+        config:
+          scrape_configs:
+            - job_name: cilium-agent
+              scrape_interval: 30s
+              static_configs:
+                - targets: ["${K8S_NODE_IP}:9962"]
+            - job_name: hubble-metrics
+              scrape_interval: 30s
+              static_configs:
+                - targets: ["hubble-metrics.kube-system.svc.cluster.local:9965"]
     processors:
       # [AW1] App metrics -> their own index. Namespace, not service.name — six
       # services now report six different names (see extraAttributes.fromLabels
@@ -314,3 +361,20 @@ agent:
             - resource_detection
             - resource
             - resource/logs
+        # [AW1] New pipeline, not an edit to `metrics` — these are node/agent-
+        # scoped Prometheus scrapes, not k8s_attributes-enrichable pod metrics,
+        # so it mirrors the chart's own `metrics/agent` self-telemetry pipeline
+        # shape rather than the app `metrics` one above. Splunk Platform only
+        # (k8s_ws_metrics), deliberately no signalfx export here — this first
+        # pass targets the index the plan called for; adding it to O11y too is
+        # a separate call once real cardinality/cost is known.
+        metrics/cilium:
+          receivers:
+            - prometheus/cilium
+          processors:
+            - memory_limiter
+            - batch
+            - resource_detection
+            - resource
+          exporters:
+            - splunk_hec/platform_metrics

@@ -75,6 +75,19 @@ n=$(mcount k8s_ws_petclinic_metrics '| search m="jvm*"'); [ "${n:-0}" -ge 10 ] \
   && ok "JVM metrics routed to app index ($n jvm.* metrics)" \
   || no "only ${n:-0} jvm metrics in k8s_ws_petclinic_metrics" "check transform/app_metrics_index — its predicate is k8s.namespace.name == petclinic, not a service name"
 
+# --- Cilium/Hubble metrics (step 6) ------------------------------------------
+# A separate scrape path from everything above — prometheus/cilium, not the
+# operator/Java-agent chain the JVM check just exercised — so it needs its
+# own assertion. ~175 cilium_* names and 8 real hubble_* families observed
+# live 2026-09-02; thresholds below leave real margin either side.
+n=$(mcount k8s_ws_metrics '| search m="cilium_*"'); [ "${n:-0}" -gt 50 ] \
+  && ok "Cilium agent metrics present ($n distinct cilium_* names)" \
+  || no "only ${n:-0} cilium_* metrics in k8s_ws_metrics" "check prometheus/cilium receiver + metrics/cilium pipeline in values-aw1.yaml, and prometheus.enabled on the Cilium release — step 6"
+
+n=$(mcount k8s_ws_metrics '| search m="hubble_*"'); [ "${n:-0}" -ge 5 ] \
+  && ok "Hubble metrics present ($n distinct hubble_* names)" \
+  || no "only ${n:-0} hubble_* metrics in k8s_ws_metrics" "check hubble.metrics.enabled on the Cilium release and the hubble-metrics scrape job in prometheus/cilium — step 6 (dns/http families never populate; that's expected, not this check's concern)"
+
 n=$(num '| tstats count where index=k8s_ws_traces'); [ "${n:-0}" -gt 0 ] \
   && ok "traces landing in k8s_ws_traces ($n spans/15m)" \
   || no "k8s_ws_traces empty" "splunk.com/index overrides traces onto k8s_ws_petclinic_logs unless transform/traces_index is present — see step 5"

@@ -101,7 +101,7 @@ if it's healthy, move on.
 
 !!! danger "If the pod stops, the rest of this module looks like broken telemetry"
     With no traffic, the only thing left is kube-probe hitting `/actuator/health` every five
-    seconds. Step 6's endpoint query then returns a single `/actuator/health` row, step 7's
+    seconds. Step 7's endpoint query then returns a single `/actuator/health` row, step 8's
     charts flatten, and **nothing reports an error anywhere** — it is indistinguishable from
     a Collector that isn't collecting. This happened during testing (with JMeter, before this
     module moved to Playwright) and cost real time.
@@ -822,7 +822,233 @@ With the load test still running, wait a minute for data to arrive, then:
 
 ---
 
-## 6. Look at a trace
+## 6. Cilium/Hubble metrics — the network layer, in numbers
+
+!!! abstract "Learning moment — why this sits here, not somewhere else"
+    §2 turned on `k8s_ws_metrics` and confirmed three families already flowing:
+    `system`, `k8s`, `otelcol`. §5 established the module's own lesson about metric
+    routing — deliberate, done in the Collector, not left to chance. Cilium and Hubble
+    expose their own Prometheus endpoints already, independent of anything the operator or
+    the Java agent do — no auto-instrumentation involved, just two more scrape targets for
+    the Collector's existing metrics machinery. This section adds them here, once the
+    signal-routing story from the sections above is complete, as one more source landing in
+    the same index by the same deliberate-routing reasoning.
+
+### Turn on the metrics, on the Cilium release itself
+
+Two genuinely separate things, both configured on the Cilium Helm release
+[FW #1b](../01b-foundational-1b/index.md) installed — neither is a Collector setting:
+
+- **Hubble's own flow metrics** — `hubble.metrics.enabled`, a list of metric *families* to
+  turn on. Cilium 1.20.1 supports more families than this; the seven enabled here are the
+  ones relevant to this workshop's traffic:
+- **Cilium agent's own health/perf metrics** — a separate `prometheus.enabled` flag, nothing
+  to do with Hubble at all. This is the agent reporting on itself — BPF map pressure, API
+  request latency, endpoint counts — the same category of self-telemetry the Collector's own
+  `otelcol_*` metrics are for the Collector.
+
+```bash
+helm upgrade cilium cilium/cilium --version 1.20.1 --namespace kube-system \
+  --reuse-values \
+  --set hubble.metrics.enabled="{dns,drop,tcp,flow,icmp,http,policy}" \
+  --set prometheus.enabled=true \
+  --set prometheus.port=9962
+```
+
+`--reuse-values` matters here exactly as it did for [FW #2 §12](../02-foundational-2/index.md#12-hubble-flow-logs-a-second-log-source-from-a-different-layer)'s
+`hubble.export.static` change — this merges on top of FW #1b's `ingressController`,
+`kubeProxyReplacement` and `k8sServiceHost`/`k8sServicePort`, and on top of FW #2's own
+`hubble.export.static.enabled`, rather than replacing the release's values wholesale.
+
+!!! danger "Cilium's own agent metrics have no Service — reach them by node IP, not DNS"
+    Hubble's flow metrics get a real Service (`hubble-metrics.kube-system.svc.cluster.local`,
+    port 9965) because Hubble Relay-style components are meant to be reached generically.
+    Cilium's own agent metrics on port 9962 do **not** — the chart deliberately doesn't
+    create a Service for them, because the agent runs `hostNetwork: true` on every node and
+    is meant to be scraped node-by-node, not load-balanced across nodes as if it were one
+    logical target. Reach it at `${K8S_NODE_IP}:9962` — the same downward-API node-IP
+    environment variable the chart's own `kubelet_stats` receiver already uses, not a DNS
+    name you'd otherwise reach for by habit.
+
+### Add the `prometheus/cilium` receiver and its own metrics pipeline
+
+Same `agent:` key §5 already told you never to duplicate. Add a new receiver and a new
+pipeline — two scrape jobs, one for each metrics source above:
+
+```yaml
+agent:
+  config:
+    receivers:
+      # Two separate Prometheus scrape targets: Hubble's own flow metrics
+      # (headless kube-system Service) and Cilium agent's own health/perf
+      # metrics (no Service — hostNetwork, reached by node IP).
+      prometheus/cilium:
+        config:
+          scrape_configs:
+            - job_name: cilium-agent
+              scrape_interval: 30s
+              static_configs:
+                - targets: ["${K8S_NODE_IP}:9962"]
+            - job_name: hubble-metrics
+              scrape_interval: 30s
+              static_configs:
+                - targets: ["hubble-metrics.kube-system.svc.cluster.local:9965"]
+    # ... existing processors: transform/petclinic_logs, transform/app_metrics_index,
+    # transform/traces_index, all unchanged ...
+    service:
+      pipelines:
+        # ... existing metrics / traces / logs pipelines, unchanged ...
+        # New pipeline, not an edit to `metrics` — these are node/agent-scoped
+        # Prometheus scrapes, not k8s_attributes-enrichable pod metrics, so it
+        # mirrors the chart's own metrics/agent self-telemetry pipeline shape
+        # rather than the app `metrics` pipeline above.
+        metrics/cilium:
+          receivers:
+            - prometheus/cilium
+          processors:
+            - memory_limiter
+            - batch
+            - resource_detection
+            - resource
+          exporters:
+            - splunk_hec/platform_metrics
+```
+
+!!! tip "Splunk Platform only — not also Observability Cloud, and that's deliberate"
+    Every other metric this module produces ends up on two destinations once AW #2 wires up
+    `splunkObservability` (`k8s_ws_metrics`/`k8s_ws_petclinic_metrics` **and** signalfx).
+    `metrics/cilium`'s exporter list is just `splunk_hec/platform_metrics` — Observability
+    Cloud does not exist yet at this point in the sequence, but even once it does in AW #2,
+    this pipeline stays Splunk-only on purpose. Cilium/Hubble metrics are new and largely
+    unexplored territory for this workshop — roughly 175 distinct `cilium_*` series already,
+    before any per-endpoint or per-policy label cardinality is accounted for. Sending an
+    unbounded, not-yet-understood metric surface straight to a billed-on-cardinality backend
+    before real volume and label shape are known is exactly the kind of unplanned cost this
+    workshop's own routing lesson (§5) exists to prevent. Splunk Enterprise's metric index
+    has no such per-series billing concern, which makes it the right place to point an
+    exploratory source first.
+
+??? abstract "Full command sequence — collector change"
+    ```bash
+    cd ~/k8s_workshop/k8s_otel
+    ne values-workshop.yaml          # or: vi values-workshop.yaml
+    sed -i "s|\${WS_USER}|$WS_USER|g" values-workshop.yaml
+    grep -n "$WS_USER" values-workshop.yaml | head    # confirm
+
+    helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client
+
+    helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel
+
+    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel --timeout=300s
+    ```
+
+```bash
+helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+  --version 0.158.0 -f values-workshop.yaml --namespace otel
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel
+```
+
+### ✅ Checkpoint
+
+```
+| mcatalog values(metric_name) WHERE index=k8s_ws_metrics metric_name=cilium_*
+| rename values(metric_name) as m | mvexpand m | stats count
+```
+
+```
+| mcatalog values(metric_name) WHERE index=k8s_ws_metrics metric_name=hubble_*
+| rename values(metric_name) as m | mvexpand m | table m | sort m
+```
+
+<details>
+<summary>Recorded live, 2026-09-02</summary>
+
+175 distinct `cilium_*` metric names — BPF map stats, API limiter timings, endpoint counts,
+and more; this number will drift slightly as the agent version changes, it isn't a fixed
+target to match exactly. The `hubble_*` catalog is short enough to list in full:
+
+```
+hubble_drop_total
+hubble_flows_processed_total
+hubble_icmp_total
+hubble_lost_events_total
+hubble_metrics_http_handler_request_duration_seconds_bucket
+hubble_metrics_http_handler_request_duration_seconds_count
+hubble_metrics_http_handler_request_duration_seconds_sum
+hubble_metrics_http_handler_requests_total
+hubble_policy_verdicts_total
+hubble_tcp_flags_total
+```
+
+Eight real families once the histogram's `_bucket`/`_count`/`_sum` triplet is counted as
+one (`drop`, `flows_processed`, `icmp`, `lost_events`, the metrics-handler's own
+self-instrumentation, `policy_verdicts`, `tcp_flags`). `dns` and `http` are conspicuously
+absent — see the callout immediately below, that's expected, not a missed step.
+</details>
+
+!!! danger "`dns` and `http` never populate — a real, confirmed, out-of-scope gap, not a bug in this pass"
+    `hubble.metrics.enabled` lists seven families, but only five of them ever produce a
+    series on this cluster: `drop`, `tcp`, `flow` (as `hubble_flows_processed_total`),
+    `icmp`, `policy`. `dns` and `http` are configured and never emit anything — confirmed
+    live by scraping Hubble's own `/metrics` endpoint directly (`curl
+    http://hubble-metrics.kube-system.svc.cluster.local:9965/metrics`), not just by an empty
+    Splunk search: there is no `hubble_dns_*` or `hubble_http_*` series in the raw Prometheus
+    output at all, at any point checked.
+
+    The reason is architectural, not a missing setting: **Cilium only generates L7 Hubble
+    metrics for traffic that is actually proxied through Envoy.** DNS and HTTP visibility at
+    that level require L7-aware `CiliumNetworkPolicy` rules — an `l7:` block under `rules:`,
+    or a visibility annotation — that tell Cilium to redirect that traffic through its Envoy
+    proxy in the first place. Confirm this cluster's six policies don't do that:
+    ```bash
+    kubectl get cnp -n petclinic
+    ```
+    All six (`api-gateway`, `config-server`, `customers-service`, `discovery-server`,
+    `vets-service`, `visits-service`) are `VALID`, and every one of them is L3/L4-only —
+    `toPorts`/`fromEntities` matched on port numbers, no `rules: { http: [...] }` block
+    anywhere. `hubble_policy_verdicts_total`'s own `match` label confirms this from the
+    metrics side too: every value observed is `l3-l4`, never `l7`.
+
+    This is a known, deliberate gap for this pass — building the L7 policy rules needed to
+    light up `dns`/`http` visibility is real, separate work (a different kind of
+    `CiliumNetworkPolicy`, not a Collector or Splunk change), out of scope here. If you go
+    looking for DNS query metrics or HTTP status-code breakdowns from Hubble and find
+    nothing, this is why — not a broken pipeline.
+
+### What's actually in this data — a forward-looking note, not a dashboard
+
+This section stops at getting the data in and confirmed. Building panels around it is
+separate, later work, but a short exploration is worth recording now so it doesn't need
+re-discovering:
+
+`hubble_policy_verdicts_total` (labels: `action`, `direction`, `match`) is a clean,
+low-cardinality candidate tied directly to [FW #1b](../01b-foundational-1b/index.md)'s
+six-service lockdown story — it's the metric-side equivalent of counting `hubble observe`
+verdicts, without needing to tail a live stream. Two real gotchas worth knowing before
+anyone builds SPL against the underlying flow-log data (not this metric — the raw
+`cilium:hubble:flow` events from [FW #2 §12](../02-foundational-2/index.md#12-hubble-flow-logs-a-second-log-source-from-a-different-layer)):
+
+- **`DROPPED` flow events frequently lack a resolved source namespace.** A flow that gets
+  dropped is, by definition, caught before Cilium finishes resolving the full identity of
+  what it's looking at — confirmed live: a real `DROPPED` event's `source` object carried no
+  `namespace` field at all, only an `identity` and a raw `labels[]` array (the namespace was
+  recoverable from a `k8s:io.kubernetes.pod.namespace=petclinic` label buried inside that
+  array, not from a clean `source.namespace` field the way a `FORWARDED` event has). "Drop
+  rate by service pair" isn't as clean from raw flow logs as it sounds — plan to parse it out
+  of `labels[]`, not assume `flow.source.namespace` is always populated.
+- **`flow.source.labels{}` is multivalue.** A naive `stats count by "flow.source.labels{}"`
+  fans out one row per label per event rather than one row per event — confirmed live over a
+  10-minute window: 21,074 real flow events produced **184,372** rows once grouped by that
+  field, each event's count duplicated across every label it carries. Any aggregation
+  touching `labels{}` needs to pick one representative label first (`mvindex`, a targeted
+  `mvfilter`, or extracting a single known key), not group on the raw multivalue field
+  directly.
+
+---
+
+## 7. Look at a trace
 
 ```
 index=k8s_ws_traces | head 1
@@ -957,7 +1183,7 @@ real traffic.
 
 ---
 
-## 7. Chart metrics in Analytics Workspace
+## 8. Chart metrics in Analytics Workspace
 
 !!! abstract "Learning moment — why metric indexes are different"
     Metrics go to a **metric index**, not an event index, and are queried with `mstats`
@@ -1001,10 +1227,10 @@ Generate load while watching, and you'll see heap sawtooth as garbage collection
 
 ---
 
-## 8. The capstone dashboards
+## 9. The capstone dashboards
 
 Nothing to download here. You installed the workshop app in
-[FW #2 §12](../02-foundational-2/index.md#12-install-the-workshop-dashboard-app), and the
+[FW #2 §13](../02-foundational-2/index.md#13-install-the-workshop-dashboard-app), and the
 three dashboards below have been sitting there empty, waiting for the data this module just
 produced. Open them from **Search & Reporting → Dashboards**, or from the **K8s + OTel
 Workshop** app.
@@ -1028,7 +1254,7 @@ Splunkbase app required.
 
 The first half is the module's own output: Total Traces, P90 Latency, current JVM Heap
 Used, a trace-volume-and-errors timechart (span-adjustable), the JVM heap sawtooth from
-step 7 — the same `mstats`/`xyseries` query, now a permanent chart instead of a one-off
+step 8 — the same `mstats`/`xyseries` query, now a permanent chart instead of a one-off
 search — top routes by latency, and a HikariCP connection-pool snapshot.
 
 The second half is where tracing starts earning its keep. Everything above that line is

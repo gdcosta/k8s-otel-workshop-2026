@@ -90,6 +90,14 @@ n=$(cnt "| tstats count where index=k8s_ws_petclinic_logs sourcetype=\"petclinic
 [ "${n:-0}" -gt 0 ] && ok "OTTL transform applied ($n events/15m)" \
   || no "sourcetype not rewritten" "OTTL needs context-prefixed paths — see step 11"
 
+# --- Hubble flow logs (step 12) -----------------------------------------------
+# A different pipeline entirely (logsCollection.extraFileLogs, not the
+# container-log path the checks above exercise), so a pass above doesn't
+# imply this one does — confirmed live to need its own check, 2026-09-02.
+n=$(cnt '| tstats count where index=k8s_ws_logs sourcetype="cilium:hubble:flow"')
+[ "${n:-0}" -gt 0 ] && ok "Hubble flow logs landing in k8s_ws_logs ($n events/15m)" \
+  || no "no cilium:hubble:flow events" "confirm hubble.export.static.enabled on the Cilium release and extraFileLogs/extraVolumes in values-workshop.yaml — step 12"
+
 # Each of the six services should report its own service.name — that's the
 # extraAttributes.fromLabels promotion, not an OTTL statement. Fewer than 4
 # distinct names in a 15-minute window usually means only the idle services

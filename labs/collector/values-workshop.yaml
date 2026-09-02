@@ -41,6 +41,25 @@ logsCollection:
           value: .*
           useRegexp: true
         firstEntryRegex: ^[^\s].*
+  # [FW2 §12] Tail Cilium's own Hubble flow-log JSON export (hubble.export.static,
+  # enabled on the Cilium release itself — see §12). This is the chart's
+  # purpose-built "extra file on the node" mechanism — it auto-creates its own
+  # logs/host pipeline (memory_limiter, batch, resource_detection, resource ->
+  # splunk_hec/platform_logs), so it lands in splunkPlatform.index (k8s_ws_logs)
+  # without touching the existing `logs` pipeline at all. Requires
+  # agent.extraVolumes/extraVolumeMounts below to expose the hostPath the file
+  # actually lives on. Verified live 2026-09-02: sourcetype cilium:hubble:flow,
+  # real flow JSON nested under a top-level "flow" key.
+  extraFileLogs:
+    file_log/hubble_flows:
+      include: [/var/run/cilium/hubble/events.log]
+      start_at: beginning
+      include_file_path: true
+      include_file_name: false
+      resource:
+        com.splunk.source: /var/run/cilium/hubble/events.log
+        host.name: 'EXPR(env("K8S_NODE_NAME"))'
+        com.splunk.sourcetype: cilium:hubble:flow
 
 # [FW2] Promote pod annotations onto events.
 # tag_name gives a clean field name directly — no regex prefix-stripping needed.
@@ -75,6 +94,18 @@ clusterReceiver:
 # NOTE: modern OTTL requires context-prefixed paths (log.* / resource.*).
 # sourcetype and k8s.* are RESOURCE attributes, not log-record attributes.
 agent:
+  # [FW2 §12] hostPath into the same directory Cilium's own DaemonSet mounts as
+  # `cilium-run` (/var/run/cilium, DirectoryOrCreate) — events.log lives at
+  # /var/run/cilium/hubble/events.log on the node.
+  extraVolumes:
+    - name: cilium-hubble-flows
+      hostPath:
+        path: /var/run/cilium/hubble
+        type: DirectoryOrCreate
+  extraVolumeMounts:
+    - name: cilium-hubble-flows
+      mountPath: /var/run/cilium/hubble
+      readOnly: true
   config:
     processors:
       transform/petclinic_logs:

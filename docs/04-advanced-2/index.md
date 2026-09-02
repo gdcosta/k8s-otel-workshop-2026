@@ -1665,7 +1665,7 @@ has to be imported separately, since Splunk apps cannot carry Observability Clou
 
 Nothing to download. Open **Advanced Workshop #2 — Correlation** from **Search & Reporting →
 Dashboards** (or the **K8s + OTel Workshop** app) — it came with the app you installed in
-[FW #2 §12](../02-foundational-2/index.md#12-install-the-workshop-dashboard-app) and has been
+[FW #2 §13](../02-foundational-2/index.md#13-install-the-workshop-dashboard-app) and has been
 waiting for the second destination you just configured.
 
 ![AW2 Splunk correlation dashboard](../assets/img/04-aw2/aw2-dashboard.png)

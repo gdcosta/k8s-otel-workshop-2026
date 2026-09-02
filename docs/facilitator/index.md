@@ -611,7 +611,7 @@ The build copies the XML in fresh and parses every view, so a malformed edit fai
 rather than shipping. **Edit an XML and forget this step and participants install the old
 dashboard** — the guides link to the `.tgz` on `raw.githubusercontent.com`, not to the XML.
 Bump `WORKSHOP_APP_VERSION` in `versions.env` when the contents change; the build stamps it
-into `app.conf` and into the filename, so the FW #2 §12 `curl` URL changes with it — search
+into `app.conf` and into the filename, so the FW #2 §13 `curl` URL changes with it — search
 the docs for the old version string and update it.
 
 !!! warning "The app deliberately carries dashboards only"

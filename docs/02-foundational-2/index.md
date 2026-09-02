@@ -1424,7 +1424,279 @@ kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
 
 ---
 
-## 12. Install the workshop dashboard app
+## 12. Hubble flow logs — a second log source, from a different layer
+
+!!! abstract "Learning moment — this module's own thesis, one layer down"
+    Everything so far has been a **container log** — text a process wrote to stdout, whether
+    that's `customers-service`'s Tomcat access log or `kube-apiserver`'s audit trail. This
+    module's title is "Collecting logs with OpenTelemetry," not "collecting *container*
+    logs" — and Cilium's own Hubble already produces a second, genuinely different kind of
+    log for free: one JSON record per network flow the eBPF dataplane forwards or drops,
+    written by the `cilium` agent itself, not by any container. [FW #1b](../01b-foundational-1b/index.md)
+    gave you `hubble observe` for live, in-the-moment viewing during an exercise — that
+    command reads Hubble's in-memory ring buffer and shows you *now*. Nothing from FW #1b has
+    ever piped that data anywhere durable. This section closes that gap the same way the rest
+    of this module closed it for container logs: land it in Splunk, searchable and retained,
+    not just visible for as long as your terminal is open.
+
+### Turn on Hubble's flow-log export
+
+Cilium ships this as `hubble.export.static` — a single file the agent appends one JSON flow
+record to per line, deliberately simpler than the chart's other `hubble.export.dynamic`
+variant (which supports runtime-reconfigurable filters and rotation). Nothing here needs
+runtime reconfiguration, so the static exporter is the right one.
+
+Upgrade the same Cilium release [FW #1b](../01b-foundational-1b/index.md) already installed,
+with `--reuse-values` — exactly the pattern that module used for `kubeProxyReplacement` and
+the Ingress controller:
+
+```bash
+helm upgrade cilium cilium/cilium --version 1.20.1 --namespace kube-system \
+  --reuse-values \
+  --set hubble.export.static.enabled=true \
+  --set hubble.export.static.filePath=/var/run/cilium/hubble/events.log
+```
+
+!!! danger "`--reuse-values`, always — an unqualified `helm upgrade` here would wipe out FW #1b's own config"
+    `helm get values cilium -n kube-system` shows what FW #1b already put on this release
+    before this module ever touched it: `ingressController.enabled`/`loadbalancerMode`,
+    `kubeProxyReplacement`, `k8sServiceHost`/`k8sServicePort`, `operator.replicas`. An
+    `--set`-only upgrade with no `--reuse-values` **replaces** the release's values wholesale
+    — Cilium would fall back to its own chart defaults for every one of those, silently
+    undoing full kube-proxy replacement and the Ingress controller FW #1b spent a whole
+    module building. `--reuse-values` merges your new `--set` flags on top of whatever is
+    already there instead — the same reasoning as this workshop's own overlay-file pattern
+    for the Collector, applied to a chart you don't own the values file for.
+
+Confirm it landed without disturbing anything else:
+
+```bash
+helm get values cilium -n kube-system
+```
+
+<details>
+<summary>Expected — your new keys, plus every one of FW #1b's, untouched</summary>
+
+```yaml
+USER-SUPPLIED VALUES:
+hubble:
+  export:
+    static:
+      enabled: true
+      filePath: /var/run/cilium/hubble/events.log
+ingressController:
+  enabled: true
+  loadbalancerMode: dedicated
+k8sServiceHost: 192.168.49.2
+k8sServicePort: 8443
+kubeProxyReplacement: true
+operator:
+  replicas: 1
+```
+
+Recorded live, 2026-09-02. If `ingressController`, `kubeProxyReplacement` or
+`k8sServiceHost`/`k8sServicePort` are missing here, `--reuse-values` was dropped somewhere —
+re-run the upgrade with it before continuing; PetClinic's Ingress path and kube-proxy-free
+networking depend on those staying in place.
+</details>
+
+Watch a real flow record land on the node, before wiring the Collector to it at all — this
+confirms the file itself is being written, independent of anything downstream:
+
+```bash
+minikube ssh -- sudo tail -n1 /var/run/cilium/hubble/events.log
+```
+
+!!! danger "The record is nested under a top-level `\"flow\"` key — matters the moment you `spath` this"
+    A real captured line looks like this (abridged):
+    ```json
+    {"flow":{"time":"2026-09-02T18:27:21.089747870Z","verdict":"FORWARDED",
+      "IP":{"source":"10.0.0.9","destination":"192.168.49.2"},
+      "l4":{"TCP":{"source_port":44198,"destination_port":4318}},
+      "source":{"namespace":"petclinic","pod_name":"config-server-b5d98b857-rnnnb",
+        "labels":["k8s:app.kubernetes.io/name=config-server", "..."]},
+      "destination":{"labels":["reserved:host","reserved:kube-apiserver"]},
+      "Type":"L3_L4","node_name":"minikube","traffic_direction":"EGRESS"},
+     "node_name":"minikube","time":"2026-09-02T18:27:21.089747870Z"}
+    ```
+    Every field you care about — `verdict`, `source.namespace`, `l4.TCP.destination_port` —
+    lives under `flow.*`, not at the top level. `| spath verdict` against this JSON returns
+    nothing; the field is `flow.verdict`. The top-level `time`/`node_name` pair is Hubble's
+    own export-file envelope, duplicated from inside `flow` for convenience — easy to reach
+    for by habit and get an empty result for no obvious reason.
+
+### Wire the Collector to read it
+
+This is the same purpose-built mechanism the chart already uses for tailing the Kubernetes
+audit log: `logsCollection.extraFileLogs`, plus `agent.extraVolumes`/`extraVolumeMounts` to
+actually expose the hostPath the file lives on to the agent DaemonSet's containers. Add to
+`values-workshop.yaml`:
+
+```yaml
+logsCollection:
+  containers:
+    # ... existing FW #2 config, unchanged ...
+  extraFileLogs:
+    file_log/hubble_flows:
+      include: [/var/run/cilium/hubble/events.log]
+      start_at: beginning
+      include_file_path: true
+      include_file_name: false
+      resource:
+        com.splunk.source: /var/run/cilium/hubble/events.log
+        host.name: 'EXPR(env("K8S_NODE_NAME"))'
+        com.splunk.sourcetype: cilium:hubble:flow
+
+agent:
+  extraVolumes:
+    - name: cilium-hubble-flows
+      hostPath:
+        path: /var/run/cilium/hubble
+        type: DirectoryOrCreate
+  extraVolumeMounts:
+    - name: cilium-hubble-flows
+      mountPath: /var/run/cilium/hubble
+      readOnly: true
+  config:
+    # ... existing FW #2 processors/service config, unchanged ...
+```
+
+!!! tip "This auto-creates its own pipeline — nothing here touches the existing `logs` pipeline"
+    `extraFileLogs` isn't a new receiver you have to wire into `service.pipelines.logs`
+    yourself. The chart generates a complete standalone `logs/host` pipeline for it —
+    `file_log/hubble_flows` as the receiver, `memory_limiter`/`batch`/`resource_detection`/
+    `resource` as processors, `splunk_hec/platform_logs` as the exporter — confirmed live by
+    reading the generated config:
+    ```bash
+    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
+      -o go-template='{{index .data "relay"}}' | grep -A8 'logs/host:'
+    ```
+    That exporter is the same one `splunkPlatform.index` (`k8s_ws_logs`) already feeds, so
+    flow records land there with zero risk of disturbing §11's `transform/petclinic_logs`
+    pipeline — the two pipelines share an exporter, not a processor chain.
+
+`agent.extraVolumes`/`extraVolumeMounts` is the same `agent:` top-level key §11 already put
+in your file — add these two keys alongside `config:`, don't create a second `agent:` block.
+The `hostPath` points at `/var/run/cilium/hubble`, the same directory Cilium's own DaemonSet
+already mounts as `cilium-run` — `events.log` lives inside it on every node.
+
+??? abstract "Full command sequence — collector change"
+    ```bash
+    cd ~/k8s_workshop/k8s_otel
+    ne values-workshop.yaml          # or: vi values-workshop.yaml
+    sed -i "s|\${WS_USER}|$WS_USER|g" values-workshop.yaml
+    grep -n "$WS_USER" values-workshop.yaml | head    # confirm
+
+    # Validate first. The chart schema is the only check in this workshop that
+    # fails loudly instead of silently doing nothing.
+    helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client
+
+    # Apply
+    helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel
+
+    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel --timeout=300s
+    ```
+
+```bash
+helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+  --version 0.158.0 -f values-workshop.yaml --namespace otel
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel
+```
+
+!!! danger "A Helm SSA field-manager conflict on the Instrumentation CR can leave this release `failed` — not caused by anything above, but it can strike here"
+    This chart's `helm upgrade` also reconciles the `Instrumentation` custom resource
+    (untouched by this section — that CR belongs to the auto-instrumentation work AW #1 and
+    AW #2 add later). If something else has ever applied to that CR outside Helm's own
+    tracking — a `kubectl apply --server-side` from an earlier debugging session, for
+    example — a later `helm upgrade` on this release can hit a Server-Side Apply
+    field-manager conflict and leave the release in `STATUS=failed`, even though every
+    *running* resource looks perfectly healthy (spans flowing, zero export failures) because
+    the failure is in reconciling one Kubernetes object, not in anything actually
+    processing data. Confirmed live, more than once on this project, always the same class
+    of problem:
+    ```bash
+    helm status ${WS_USER}-k8s-ws -n otel
+    ```
+    If that shows anything other than `deployed`, the fix is **not** to edit your YAML
+    further — the values are fine, Helm is stuck fighting another field manager for
+    ownership of one object it's trying to reconcile. Identify the conflicting object from
+    the `helm upgrade` error text (it names the object and the field), then re-apply that
+    *exact* object's own manifest with Server-Side Apply, telling Helm's field manager to
+    win the conflict:
+    ```bash
+    kubectl apply --server-side --force-conflicts -f <that-object's-own-manifest.yaml>
+    helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel
+    ```
+    `kubectl apply --server-side --force-conflicts` on the one conflicting object, then a
+    clean re-`upgrade`, is the fix — the same class of fix as this project's original
+    `deployment.environment` field-manager incident. It's rare enough that it may never
+    happen to you, but if a `helm upgrade` in this section (or later, in AW #1) ever fails
+    with a webhook or field-manager error rather than a schema error, check `helm status`
+    before assuming your YAML is wrong.
+
+### ✅ Checkpoint
+
+```
+index=k8s_ws_logs sourcetype="cilium:hubble:flow" earliest=-5m | stats count
+```
+
+<details>
+<summary>Recorded live, 2026-09-02</summary>
+
+```
+count
+11681
+```
+
+Real, confirmed sourcetype (`cilium:hubble:flow`), real index (`k8s_ws_logs` — the default
+`splunkPlatform.index`, exactly as `logs/host`'s exporter above predicts), **11,681 flow
+records in 5 minutes** on this instance's own traffic. Yours will differ with however much
+traffic is actually crossing the node — the row existing at all, with this sourcetype, is
+the thing to confirm, not the exact count.
+</details>
+
+The raw JSON is already searchable with `spath`, remembering the `flow.` prefix from the
+danger box above:
+
+```
+index=k8s_ws_logs sourcetype="cilium:hubble:flow" earliest=-10m
+| spath
+| stats count by "flow.verdict"
+```
+
+<details>
+<summary>Recorded live, 2026-09-02</summary>
+
+```
+flow.verdict  count
+DROPPED               4
+FORWARDED         41064
+TRACED                72
+```
+
+Overwhelmingly `FORWARDED` on this lockdown — [FW #1b](../01b-foundational-1b/index.md)'s
+six `CiliumNetworkPolicy` objects are doing their job of *allowing* the traffic the
+application actually needs, not generating a wall of drops. A handful of `DROPPED` here is
+expected background noise (IPv6 router solicitation and similar housekeeping traffic no
+policy needs to allow), not a sign anything is broken.
+</details>
+
+!!! note "No OTTL transform for this data yet — deliberately"
+    Every other log source in this module got an OTTL transform (§11) — sourcetype rewrite,
+    severity derivation, field extraction. Flow logs don't, yet. The raw JSON is already
+    queryable via `spath` as shown above, which is enough to confirm the pipeline works end
+    to end; turning specific fields (`flow.verdict`, `flow.l4.TCP.destination_port`,
+    `flow.source.namespace`) into indexed, `ExtractPatterns`-free fields the way §11 did for
+    access logs is real, useful follow-up work, intentionally left for a later pass rather
+    than guessed at here. Don't read this section as "flow logs are fully built out" — they
+    reach Splunk correctly and that's genuinely as far as this pass takes them.
+
+---
+
+## 13. Install the workshop dashboard app
 
 Every capstone dashboard in this series ships as one Splunk app, installed once, here.
 You will not download a dashboard again — AW #1 and AW #2 just point you at the ones you
@@ -1694,6 +1966,22 @@ steps. They're the exact files this module was tested with.
               value: .*
               useRegexp: true
             firstEntryRegex: ^[^\s].*
+      # [FW2 §12] Tail Cilium's own Hubble flow-log JSON export
+      # (hubble.export.static, enabled on the Cilium release itself — see
+      # §12). Auto-creates its own logs/host pipeline (memory_limiter, batch,
+      # resource_detection, resource -> splunk_hec/platform_logs), so it lands
+      # in splunkPlatform.index (k8s_ws_logs) without touching the `logs`
+      # pipeline. Requires agent.extraVolumes/extraVolumeMounts below.
+      extraFileLogs:
+        file_log/hubble_flows:
+          include: [/var/run/cilium/hubble/events.log]
+          start_at: beginning
+          include_file_path: true
+          include_file_name: false
+          resource:
+            com.splunk.source: /var/run/cilium/hubble/events.log
+            host.name: 'EXPR(env("K8S_NODE_NAME"))'
+            com.splunk.sourcetype: cilium:hubble:flow
 
     # FW2: promote pod annotations to event attributes.
     # tag_name gives a clean field name directly — no regex prefix-stripping needed.
@@ -1730,7 +2018,37 @@ steps. They're the exact files this module was tested with.
     # NOTE: modern OTTL requires context-prefixed paths (log.* / resource.*).
     # sourcetype and k8s.* are RESOURCE attributes, not log-record attributes.
     agent:
+      # [FW2 §12] hostPath into the same directory Cilium's own DaemonSet
+      # mounts as `cilium-run` (/var/run/cilium, DirectoryOrCreate) —
+      # events.log lives at /var/run/cilium/hubble/events.log on the node.
+      extraVolumes:
+        - name: cilium-hubble-flows
+          hostPath:
+            path: /var/run/cilium/hubble
+            type: DirectoryOrCreate
+      extraVolumeMounts:
+        - name: cilium-hubble-flows
+          mountPath: /var/run/cilium/hubble
+          readOnly: true
       config:
+        receivers:
+          # [AW1] Two separate Prometheus scrape targets: Hubble's own flow
+          # metrics (hubble.metrics.enabled on the Cilium release, port 9965,
+          # a headless kube-system Service) and Cilium agent's own
+          # health/perf metrics (prometheus.enabled on the Cilium release,
+          # port 9962 — no Service; the agent runs hostNetwork, so
+          # ${K8S_NODE_IP} reaches it directly).
+          prometheus/cilium:
+            config:
+              scrape_configs:
+                - job_name: cilium-agent
+                  scrape_interval: 30s
+                  static_configs:
+                    - targets: ["${K8S_NODE_IP}:9962"]
+                - job_name: hubble-metrics
+                  scrape_interval: 30s
+                  static_configs:
+                    - targets: ["hubble-metrics.kube-system.svc.cluster.local:9965"]
         processors:
           # [AW1] App metrics -> their own index. Namespace, not service.name — six
           # services now report six different names (see extraAttributes.fromLabels
@@ -1847,6 +2165,23 @@ steps. They're the exact files this module was tested with.
                 - resource_detection
                 - resource
                 - resource/logs
+            # [AW1] New pipeline, not an edit to `metrics` — these are
+            # node/agent-scoped Prometheus scrapes, not k8s_attributes-
+            # enrichable pod metrics, so it mirrors the chart's own
+            # metrics/agent self-telemetry pipeline shape rather than the app
+            # metrics one above. Splunk Platform only (k8s_ws_metrics),
+            # deliberately no signalfx export — adding it to O11y too is a
+            # separate call once real cardinality/cost is known.
+            metrics/cilium:
+              receivers:
+                - prometheus/cilium
+              processors:
+                - memory_limiter
+                - batch
+                - resource_detection
+                - resource
+              exporters:
+                - splunk_hec/platform_metrics
     ```
 
 ??? example "petclinic manifest"
