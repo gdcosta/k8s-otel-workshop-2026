@@ -472,13 +472,62 @@ here's where things stand:
   it to say so plainly (a full day, realistically) rather than compress this content to
   protect a stale estimate.
 
-  **In progress:** a fresh EC2 instance (`3.145.97.98`, same key) is being used for the
-  first live spike — 00-setup, then Cilium via Helm (pinned `1.20.1`, not `minikube
-  start --cni=cilium`, kube-proxy left in place) as the CNI, then the six-service app
-  verified healthy on top of it, dispatched to a sub-agent per the user's explicit
-  request to use sub-agents for this work. NetworkPolicy design and Ingress setup are
-  the next stages once that's confirmed. Nothing has been committed to the repo for
-  this yet — the spike runs on the box only.
+  **Spike in progress on a fresh EC2 instance (`3.145.97.98`, same key), dispatched to
+  a sub-agent per the user's explicit request to use sub-agents for this work. Nothing
+  has been committed to the repo yet — the spike runs on the box only; the findings
+  below become doc content once FW1b is actually written.**
+
+  **Confirmed live, 2026-09-01:**
+  - **Cilium install**: `--cni=false` is the correct minikube v1.38.1 flag
+    (`--network-plugin` no longer exists in this version). `helm install cilium
+    cilium/cilium --version 1.20.1 -n kube-system --set operator.replicas=1` — that's
+    the only override needed at this stage; `operator.replicas` defaults to 2, which is
+    unschedulable-redundant on this single-node cluster. Real surprise worth a doc note:
+    minikube's base image has its own fallback bridge CNI config active even with
+    `--cni=false`, so pods aren't truly network-less before Cilium installs — Cilium's
+    install is exclusive by default and cleanly takes over (renames the fallback,
+    installs its own config), not a bug, but looks like one if you check
+    `/etc/cni/net.d/` mid-install without knowing this.
+  - **Six-service app on Cilium**: fully healthy, zero behavioral deviation from the
+    pre-Cilium baseline — same Eureka registrations, same config-server behavior, same
+    pre-existing Zipkin noise, no new errors. `verify-fw1.sh` 15/15, including real
+    cross-pod gateway traffic now actually mediated by Cilium's dataplane.
+  - **Real traffic graph, observed via Hubble, not guessed**: DNS (all six pods →
+    coredns), kubelet probes (host → each pod's own app port directly, no separate
+    probe port), one-time config-server fetch from all six services *including
+    discovery-server itself*, Eureka registration/heartbeat from four services into
+    discovery-server, and api-gateway's direct Eureka-resolved calls to the three
+    backend services. One real, non-obvious finding: Service-mediated traffic's source
+    identity is **not uniform** — `reserved:host` during a synchronized mass restart,
+    the real client pod identity in steady state. Both had to be allowed in policy;
+    missing either produces real, live `DROPPED` flows, not a theoretical gap.
+  - **Default-deny + explicit-allow lockdown**: all six `CiliumNetworkPolicy` objects
+    applied one at a time, each followed by a live Hubble drop-check, a real curl
+    through the gateway, and `verify-fw1.sh` — not applied blind in one shot. One real
+    bug caught and fixed mid-sequence from the identity finding above. Final state:
+    `VALID: True` on all six, zero drops under fresh load, `verify-fw1.sh` 15/15.
+  - **Deliberate-failure demo, fully live-verified**: `visits-service → customers-service`
+    (no real dependency between them, safe to break) denied via an explicit
+    `CiliumNetworkPolicy` deny rule — confirmed in Hubble as `Policy denied by
+    denylist DROPPED`, curl timed out. Removing the one deny policy restored the call
+    path immediately, `verify-fw1.sh` still 15/15, nothing else affected.
+  - **Ingress hit a real architectural fork, not a bug — and reversed the original
+    "leave kube-proxy in place" call** (made when Cilium's scope was only
+    NetworkPolicy + Hubble, specifically to avoid an unnecessary failure mode for
+    twenty simultaneous participants — see the migration-plan artifact's Phase 6 for
+    where that call was first recorded). Cilium's own Ingress controller needs to
+    intercept Service/NodePort traffic via its own eBPF path, which kube-proxy staying
+    in place directly prevents (confirmed precisely: kube-proxy's own `iptables-save`
+    rules reject the traffic with `--reject-with icmp-port-unreachable`, not a config
+    mistake). Presented to the user as a real choice — hostNetwork-mode Ingress (keeps
+    kube-proxy, untested), full kube-proxy replacement (reopens the original risk,
+    bigger blast radius), or a separate ingress-nginx install (no Cilium-only story).
+    **User chose full kube-proxy replacement**, deliberately accepting it as a real
+    trade-off now that Ingress is a core requirement, not the unnecessary risk it was
+    when NetworkPolicy and Hubble were the only things riding on this cluster. That
+    work is in progress — this note will be updated once it's confirmed live,
+    including whatever `k8sServiceHost`/`k8sServicePort` values and kube-proxy removal
+    steps turn out to be required.
 
 - **Always-on Playwright load generator — approved direction, 2026-09-01, explicitly
   after the Cilium phase above, not before.** Supersedes the "in-cluster load
