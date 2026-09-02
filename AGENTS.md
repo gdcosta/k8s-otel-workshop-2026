@@ -641,12 +641,49 @@ here's where things stand:
   any Cilium-caused Collector connectivity gap as a real finding to fix and document,
   not a surprise to work around quietly.
 
+  **Real finding, confirmed live 2026-09-02: the reused FW1b demo pair
+  (`visits-service → customers-service`) doesn't work for this exercise at all.**
+  It was deliberately chosen in FW1b *because* it has no real dependency — safe to
+  break with a manual `curl` test without disrupting the running app. That same
+  property means real JMeter traffic never attempts that path, so blocking it produces
+  nothing for JMeter, Splunk, or APM to show — confirmed directly via
+  `get_apm_service_dependencies`: zero edge between the two services at all, not even
+  an errored one. **Switched to `api-gateway → visits-service`** — the same target the
+  original scale-to-zero fault used, and a path real traffic actually exercises.
+
+  **Result with the corrected pair, confirmed live**: real errors *do* now show up —
+  `api-gateway`'s own error count matched JMeter's exactly (8/8, real `500`s after a
+  genuine 30-second timeout on `POST /api/visit/.../visits`) — a real fix over the old
+  fault's flat 0%. **But the specific dependency edge stays healthy, not the caller's
+  own number.** Root cause, confirmed via `get_apm_service_dependencies` on both
+  sides: Cilium's block is a true network-layer silent drop, so the packet never
+  reaches `visits-service` at all — no SERVER span is ever created there, and the
+  platform draws edges by correlating a caller's span with the callee's matching span.
+  With nothing on the callee side to correlate against, there's no edge to mark red,
+  even though the caller's own error count is genuinely real.
+
+  **Decided 2026-09-02: this is good enough — ship it as-is, don't chase the arrow.**
+  A real, non-zero, trace-correlated error count on the caller is already a genuine fix
+  over the old fault's complete blind spot; that's the number AW2 §8's rewrite should
+  build around.
+
+  **Backlog, not pursued now**: to get the failure to show as a red *edge* specifically
+  (not just a caller-side number), the request would need to actually *reach*
+  `visits-service` and get a slow-but-real response, not be dropped — which
+  `CiliumNetworkPolicy`'s allow/deny model can't do at all (it has no concept of
+  latency injection). The real Cilium-native path for that is `CiliumEnvoyConfig` with
+  Envoy's own HTTP fault-injection filter (`envoy.filters.http.fault`, delay longer
+  than the client's own timeout) — feasible without new infrastructure since Envoy is
+  already running here for Ingress, thematically consistent with that work, but a
+  materially bigger jump in complexity (hand-authored Envoy xDS config, not a
+  declarative policy) and genuinely untested in this project. Revisit if a future pass
+  wants the edge-level visual specifically; not worth it for the current pass.
+
   **In progress**: continuing the same live spike on `3.145.97.98` (which already has
   00-setup, FW1, and FW1b validated) through FW2 → AW1 → AW2 §1–§7, so §8's
   reconciliation exercise can be rewritten from real captured numbers against the full
-  observability stack, not guessed. Needs real `~/.o11y-token`/`~/.rum-token` on this
-  box before AW2 can be tested — neither exists there yet, asked the user for them
-  rather than attempting to source or fabricate credentials.
+  observability stack, not guessed. Real `~/.o11y-token`/`~/.rum-token` are now in
+  place on the box.
 
 - **Always-on Playwright load generator — approved direction, 2026-09-01, explicitly
   after the Cilium phase above, not before.** Supersedes the "in-cluster load
