@@ -1231,7 +1231,7 @@ Generate load while watching, and you'll see heap sawtooth as garbage collection
 
 Nothing to download here. You installed the workshop app in
 [FW #2 §13](../02-foundational-2/index.md#13-install-the-workshop-dashboard-app), and the
-three dashboards below have been sitting there empty, waiting for the data this module just
+four dashboards below have been sitting there empty, waiting for the data this module just
 produced. Open them from **Search & Reporting → Dashboards**, or from the **K8s + OTel
 Workshop** app.
 
@@ -1240,42 +1240,59 @@ Workshop** app.
 
     ```bash
     cd ~/k8s_workshop
-    curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.1.tgz
+    curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.4.tgz
     sudo -i -u splunk /opt/splunk/bin/splunk install app \
-      "$PWD/k8s-ws-dashboards-1.0.1.tgz" -auth admin:Workshop2026!
+      "$PWD/k8s-ws-dashboards-1.0.4.tgz" -auth admin:Workshop2026!
     ```
 
 ### Metrics & traces
 
-Open **Advanced Workshop #1 — Metrics & Traces**. Thirteen panels, self-contained, no
+Open **Advanced Workshop #1 — Metrics & Traces**. Fifteen panels, self-contained, no
 Splunkbase app required.
 
 ![AW1 dashboard](../assets/img/03-aw1/aw1-dashboard.png)
 
-The first half is the module's own output: Total Traces, P90 Latency, current JVM Heap
-Used, a trace-volume-and-errors timechart (span-adjustable), the JVM heap sawtooth from
-step 8 — the same `mstats`/`xyseries` query, now a permanent chart instead of a one-off
-search — top routes by latency, and a HikariCP connection-pool snapshot.
+The first half is the module's own output: Total Traces, P90 Latency, and current JVM Heap
+Used broken out by service — six independently-instrumented JVMs, six different numbers, not
+one blended average — a fleet-overview table of trace count and P90 latency per service,
+a trace-volume-and-errors timechart (span-adjustable) with a per-service small-multiples
+version underneath it, the JVM heap sawtooth from step 8 — the same `mstats`/`xyseries`
+query, now a permanent chart, split into one cell per JVM instead of one blended pair of
+lines — top routes by latency with a Service column, and a HikariCP connection-pool
+snapshot broken out by the three services that actually own a pool.
 
 The second half is where tracing starts earning its keep. Everything above that line is
 built from **SERVER** spans — one per HTTP request, which is roughly what an access log
 already tells you. But the Java agent also emits **CLIENT** spans (every database
 round-trip, with the SQL text attached) and **INTERNAL** spans (individual application
 methods). Six panels read those instead, and they surface a textbook **N+1 query pattern**:
-a single page view fires **four separate database round-trips**.
+the `/owners` and `/vets` pages fire far more database round-trips than any other route.
 
 No log line and no metric contains that fact. The SQL-count-per-request only exists once
 spans are correlated by `trace_id` — which is the entire reason distributed tracing exists.
-The panels break it down by route, rank the top SQL statements by volume and by latency,
-split request time into database-versus-application time, list the slowest INTERNAL
-methods, and show error rate by route.
+The panels break it down by route (now with a Service column), rank the top SQL statements
+by volume and by latency, split request time into database-versus-application time, list
+the slowest INTERNAL methods, and show error rate by route.
 
 !!! tip "Read the DB-time split carefully"
     Database time comes out at only a few percent of request time here, which looks like it
     contradicts the N+1 finding. It doesn't — PetClinic runs H2 **in memory**, so each
     round-trip is almost free. Point the same application at a real network database and
-    those four round-trips per page become four network latencies per page. The count is
+    those extra round-trips per page become extra network latencies per page. The count is
     the finding; the timing is an artefact of the lab.
+
+!!! note "service.name turns out to be load-bearing, not decorative, in two places"
+    Every trace-based table on this dashboard now carries a Service column, and for most of
+    them it is purely informative — SQL statements and business routes each belong to exactly
+    one service. Two exceptions: `/actuator/health` is a route name shared by five of the six
+    services (api-gateway, customers-service, discovery-server, vets-service, visits-service),
+    each reporting a different latency for it, and `Transaction.commit` is an INTERNAL span
+    name shared by the three data-owning services. Group either one by name alone, with no
+    Service column, and you'd be silently averaging numbers from different services together.
+    The "Anatomy of a Request" table has a related, subtler fix: Service is now derived from
+    the *same* SERVER span as Route (not two independently-picked multivalue fields), because
+    a request that fans out across services can otherwise pair one span's route with a
+    different span's service name.
 
 !!! note "Earlier revisions of this dashboard needed a Splunkbase app"
     A previous version pulled from a different repo and needed the Link Analysis App for
@@ -1313,10 +1330,54 @@ dropping spans produces a dashboard that looks *calmer* during an incident, not 
 which is the most dangerous failure mode an observability stack has. Prove the pipeline is
 intact before you trust anything above it.
 
+### Cilium & Hubble Metrics
+
+Open **Advanced Workshop #1 — Cilium & Hubble Metrics**, filled in by §6 above. Where FW #2's
+Hubble Flow Logs dashboard reads individual flow *events*, this one reads the same network
+layer as *numbers* — `index=k8s_ws_metrics`, Splunk Platform only, exactly as §6 set it up.
+
+![AW1 Cilium metrics dashboard](../assets/img/03-aw1/aw1-cilium-metrics-dashboard.png)
+
+Two sections. **Hubble flow metrics** opens with a flow-processing-rate chart split by
+verdict — built from `rate(hubble_flows_processed_total)`, not a raw `sum()`, because the
+underlying series is a cumulative counter and a raw sum across a counter reset renders false
+cliffs. Confirmed live: FORWARDED runs in the thousands of flows/sec, dwarfing DROPPED and
+TRACED by orders of magnitude — the metric-side confirmation of the same lockdown story the
+flow-log dashboard tells from raw events. Alongside it: the `hubble_policy_verdicts_total`
+table §6 flagged as a clean, low-cardinality candidate (every `action` observed is
+`forwarded`, every `match` is `l3-l4`, never `l7` — consistent with the `dns`/`http` gap),
+a `hubble_drop_total` breakdown by `reason` (confirmed live: `UNSUPPORTED_L3_PROTOCOL` only,
+cross-validating the flow-log DROPPED panels against an independent metrics pipeline), a TCP
+flag distribution, and a Hubble-observing-itself panel built from `hubble_lost_events_total` —
+the same "trust your telemetry before you trust what it's telling you" reasoning as the
+Infrastructure dashboard's Collector pipeline section, one layer further down the stack.
+
+**Cilium agent health** curates six panels out of the roughly 175 `cilium_*` series this
+cluster exposes, picking the categories an SRE actually checks rather than surveying all of
+them: BPF map pressure (every map on this lab cluster sits well under 1% full), endpoint
+state (all healthy endpoints land in `ready`), a controllers-failing gauge, the agent's own
+memory footprint, the number of security identities Cilium has allocated, K8s API client
+latency by endpoint, and — the panel directly tied to this workshop's own story — Cilium's
+own cumulative drop counter, broken out by `reason` and `direction`. That last one is a
+lifetime counter, not a windowed rate (confirmed live: flat within any short window on this
+box), and every reason on it traces back to something this workshop already narrates by
+hand: `Policy denied` is the new-pod-identity gotcha [FW #2 §7](../02-foundational-2/index.md#7-set-up-the-load-generator)
+walks through with `playwright-loadgen`, and `Unsupported L3 protocol` is the same background
+IPv6 Router Solicitation noise the flow-log dashboard's DROPPED panels show — a permanent
+record of lessons this series already teaches, not a sign of an active problem.
+
+!!! note "A live number that moved between the writing and the verifying"
+    `cilium_controllers_failing` read `1` during an earlier discovery pass on this box and
+    `0` moments later during final verification — a real, transient control-loop retry, not a
+    stuck one. Treat this single as exactly that: a live health gauge that can legitimately
+    flicker, not a constant. A value that stays nonzero for more than a few refreshes is the
+    one worth investigating with `cilium status --all-controllers` on the node.
+
 ### Application Trace Information v4.0.0
 
-The third dashboard in the app is the one this workshop has carried the longest. Open
-**Application Trace Information v4.0.0** — its two inputs at the top:
+The other dashboard in the app kept byte-for-byte as released is the one this workshop has
+carried the longest. Open **Application Trace Information v4.0.0** — its two inputs at the
+top:
 
 1. **Select your trace index** — defaults to `k8s_ws_traces`, so the top row (request
    volume, latency percentiles, ingestion) and the service picker below it are already

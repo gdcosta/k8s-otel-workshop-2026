@@ -1704,9 +1704,9 @@ already have.
 
 ```bash
 cd ~/k8s_workshop
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.2.tgz
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.4.tgz
 sudo -i -u splunk /opt/splunk/bin/splunk install app \
-  "$PWD/k8s-ws-dashboards-1.0.2.tgz" -auth admin:Workshop2026!
+  "$PWD/k8s-ws-dashboards-1.0.4.tgz" -auth admin:Workshop2026!
 ```
 
 !!! success "No restart needed"
@@ -1729,21 +1729,25 @@ the fix for a subtler problem: a dashboard pasted into the UI by hand lands in *
 namespace* and is invisible to every other user on the instance. An app shares it properly.
 
 ??? abstract "What's in the app, and what deliberately isn't"
-    Five dashboards:
+    Seven dashboards:
 
     | Dashboard | Filled in by |
     |---|---|
     | Foundational Workshop 2 — What You Built | this module |
+    | Foundational Workshop 2 — Hubble Flow Logs | this module (§12) |
     | Advanced Workshop #1 — Metrics & Traces | AW #1 |
     | Advanced Workshop #1 — Infrastructure & Collector Health | AW #1 |
+    | Advanced Workshop #1 — Cilium & Hubble Metrics | AW #1 |
     | Advanced Workshop #2 — Correlation | AW #2 |
     | Application Trace Information v4.0.0 | AW #1 |
 
-    The four you have not earned yet will open to empty panels. That is expected — treat
-    them as a preview of what you are about to build. The three AW dashboards say so in an
+    The five you have not earned yet will open to empty panels. That is expected — treat
+    them as a preview of what you are about to build. The AW dashboards say so in an
     orange banner at the top; *Application Trace Information v4.0.0* does not, because it is
     kept byte-for-byte as released, and it also needs you to pick a trace index by hand
-    before it shows anything.
+    before it shows anything. *Foundational Workshop 2 — Hubble Flow Logs* is filled in by
+    this same module, moments after §12 lands the data — open it right after the checkpoint
+    below, not later.
 
     The app carries **dashboards and nav only**. It does not create your indexes, your HEC
     token, or the OTTL transform from §11 — you built those by hand in this module on
@@ -1794,6 +1798,52 @@ matter in production, and you now have the pipeline that feeds them.
     the thousands — on a 30-minute window this lab reports about 12 real routes against
     roughly 2,000 raw paths. Worth recognising: it is the same high-cardinality trap that
     inflates metric cardinality, and metric cardinality is what you get billed on.
+
+### The dashboard for the flow logs you just built — §12
+
+Open **Foundational Workshop 2 — Hubble Flow Logs**, right below the dashboard above in the
+nav — it's grouped with it deliberately, since both fill in during this module rather than
+later.
+
+![FW2 Hubble flow logs dashboard](../assets/img/02-fw2/fw2-hubble-logs-dashboard.png)
+
+The top row is the same proof-of-pipeline pattern as the dashboard above, aimed at §12's own
+data instead: Total Flow Records, FORWARDED %, and a DROPPED count for the current window —
+all three built from `index=k8s_ws_logs sourcetype="cilium:hubble:flow"` with `spath`-derived
+`flow.*` fields, exactly as this section taught you to query by hand. Confirmed live,
+2026-09-02: **99.5% FORWARDED** in a 60-minute window on this instance — the same
+"reassuringly boring" lockdown story as the Kubernetes audit panels above, one layer down at
+the network's eBPF dataplane instead of the API server.
+
+Below that: a stacked Flow Verdict timechart (FORWARDED so far outweighs DROPPED and TRACED
+that the other two render as thin lines pinned near the axis — that flatness *is* the
+finding), a Traffic Direction trend, an L4 protocol mix table (TCP dominates; the UDP slice is
+DNS), and two service-topology tables — Top Destination Ports resolved to the PetClinic
+service that owns each one, and Top Service-to-Service Talkers read straight off the network,
+no application instrumentation involved. `playwright-loadgen → api-gateway` leads the talkers
+table, exactly as you'd expect from an always-on load generator hitting one entry point.
+
+!!! abstract "Learning moment — the DROPPED panels are built to stay honest when they're empty"
+    The doc's own checkpoint saw single-digit DROPPED counts per 10–30 minutes — real, but too
+    thin to build a dashboard around and trust it will show something for every participant.
+    The two DROPPED-focused panels (Drop Reason Breakdown, Recent DROPPED Events) use an
+    `appendpipe` pattern: if the real query returns zero rows, a second stage appends exactly
+    one row saying so explicitly — "No DROPPED events in this window" — instead of rendering a
+    panel that looks broken or ignored. When there *is* something to show, confirmed live,
+    2026-09-02: every DROPPED event on this box has been `UNSUPPORTED_L3_PROTOCOL` — IPv6
+    Router Solicitation, the same background housekeeping traffic §12's own checkpoint called
+    out, not a policy blocking real application traffic.
+
+!!! note "Namespace-from-labels extraction, demonstrated on real events, not just described"
+    The Recent DROPPED Events table is the two §12 gotchas made concrete: it prefers
+    `flow.source.namespace` when Cilium resolved it, and falls back to
+    `mvindex(split(mvfilter(match('flow.source.labels{}', "^k8s:io\.kubernetes\.pod\.namespace=")), "="), 1)`
+    when it didn't — confirmed live against real DROPPED events, every one of which lacked a
+    resolved `flow.source.namespace` and recovered it from the label instead. Every query on
+    this dashboard that touches `flow.source.labels{}` or `flow.destination.workloads{}.name`
+    goes through `mvfilter`/`mvindex` first, never a raw `stats … by "flow.source.labels{}"` —
+    the fan-out §12 measured at 21,074 events → 184,372 rows is exactly what that raw form
+    produces.
 
 ---
 

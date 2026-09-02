@@ -1,0 +1,370 @@
+<form version="1.1">
+  <label>Advanced Workshop #1 — Cilium &amp; Hubble Metrics</label>
+  <description>The network layer, in numbers: Hubble's own flow/policy/drop metrics and a curated slice of the Cilium agent's ~175 self-telemetry series — everything here lives in k8s_ws_metrics, Splunk Platform only, deliberately not sent to Observability Cloud.</description>
+
+  <fieldset submitButton="false">
+    <input type="time" token="tr">
+      <label>Time Range</label>
+      <default>
+        <earliest>-30m</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="span_token" searchWhenChanged="true">
+      <label>Time Granularity (Trend Charts)</label>
+      <choice value="10s">10 Seconds</choice>
+      <choice value="30s">30 Seconds</choice>
+      <choice value="1m">1 Minute</choice>
+      <choice value="15m">15 Minutes</choice>
+      <choice value="30m">30 Minutes</choice>
+      <choice value="1h">1 Hour</choice>
+      <choice value="1d">Daily</choice>
+      <choice value="1w">Weekly</choice>
+      <choice value="1mon">Monthly</choice>
+      <default>1m</default>
+      <initialValue>1m</initialValue>
+    </input>
+  </fieldset>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(135deg, #1F3864 0%, #2E75B6 100%); padding: 24px 32px; border-radius: 6px;">
+          <h1 style="margin:0 0 8px 0; font-size:26px; font-weight:700; color:#FFFFFF !important;">Advanced Workshop #1 — Cilium &amp; Hubble Metrics</h1>
+          <p style="margin:0 0 10px 0; font-size:14px; line-height:1.5; color:#FFFFFF !important;">Cilium and Hubble expose their own Prometheus endpoints, independent of anything the operator or the Java agent do — no auto-instrumentation involved, just two more scrape targets landing in <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">k8s_ws_metrics</code>. Confirmed live: the full <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">hubble_*</code> catalog (eight real families) plus ~175 distinct <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px; font-family:monospace;">cilium_*</code> series — this dashboard charts the eight and a curated handful of the 175, not all of them.</p>
+        </div>
+        <div style="background:#FFF8E1; border-left:5px solid #F1813F; padding:10px 18px; border-radius:4px; margin-top:8px;"><p style="margin:0; font-size:13px; line-height:1.5; color:#7B3F00 !important;"><b style="color:#7B3F00 !important;">Fills in during Advanced Workshop #1.</b> The workshop app installs every dashboard at once in Foundational Workshop #2, so this one is here early. Until you turn on Hubble/Cilium metrics in AW #1 &#167;6, its panels are empty &#8212; that is expected, not a fault.</p></div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background:#F0F4F8; border-left:5px solid #2E75B6; padding:14px 20px; border-radius:4px;">
+          <h3 style="margin:0 0 6px 0; color:#1F3864 !important; font-size:15px;">Section 1 — Hubble Flow Metrics: the network layer's own view of verdicts, drops and policy</h3>
+          <p style="margin:0; color:#333333 !important; font-size:13px; line-height:1.6;">Confirmed live: <code style="background:#DCE6F1 !important; color:#1F3864 !important; padding:1px 5px; border-radius:3px; font-family:monospace;">dns</code> and <code style="background:#DCE6F1 !important; color:#1F3864 !important; padding:1px 5px; border-radius:3px; font-family:monospace;">http</code> families never populate on this cluster &#8212; no L7-aware CiliumNetworkPolicy rules exist yet, so no traffic is proxied through Envoy for Hubble to see at that layer. That is a known, deliberate gap, not a bug in this pass; no panels below try to chart them.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Flow Processing Rate by Verdict</title>
+      <description>hubble_flows_processed_total is a cumulative counter, so this is rate(), not a raw sum — a raw sum of a resetting counter would show false cliffs. Confirmed live: FORWARDED runs in the thousands of flows/sec, dwarfing DROPPED and TRACED by orders of magnitude — the metric-side confirmation of the same "reassuringly boring" lockdown the flow-log dashboard shows from FW #2.</description>
+      <chart>
+        <search>
+          <query>
+| mstats rate(hubble_flows_processed_total) as flows_per_sec WHERE index=k8s_ws_metrics span=$span_token$ BY verdict
+| xyseries _time verdict flows_per_sec
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">Flows / sec</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.seriesColors">[0x2E75B6,0xDC4E41,0xF8BE34]</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Policy Verdicts &#8212; hubble_policy_verdicts_total</title>
+      <description>Labels: action, direction, match. Confirmed live: every action seen is "forwarded" and every match is "l3-l4" — never "l7", consistent with the dns/http gap above (no L7 policy exists to produce an l7 match). This is the metric-side equivalent of counting hubble observe verdicts, tied directly to FW #1b's six-service CiliumNetworkPolicy lockdown, without tailing a live stream.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(hubble_policy_verdicts_total) as Verdicts WHERE index=k8s_ws_metrics BY action direction match
+| rename action as Action, direction as Direction, match as "Match Type"
+| sort -Verdicts
+| table Action Direction "Match Type" Verdicts
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Verdicts">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Verdicts">
+          <colorPalette type="list">[#115BAD]</colorPalette>
+          <scale type="threshold"></scale>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>hubble_drop_total by Reason</title>
+      <description>hubble_drop_total does carry a reason label. Confirmed live: the only reason recorded is UNSUPPORTED_L3_PROTOCOL — matching flow-log DROPPED events exactly (IPv6 Router Solicitation), cross-validating Hubble's flow-log export and its metrics endpoint against each other.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(hubble_drop_total) as Drops WHERE index=k8s_ws_metrics BY reason
+| rename reason as Reason
+| sort -Drops
+| table Reason Drops
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Drops">
+          <option name="precision">0</option>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>TCP Flag Distribution &#8212; hubble_tcp_flags_total</title>
+      <description>Connection churn, read from the flags Hubble actually observed on the wire. SYN &#8776; SYN-ACK is a healthy handshake rate; FIN is graceful close; a large RST count is worth a second look — it means connections are being reset rather than closed cleanly, which for a Java/Spring app can mean pooled connections timing out mid-use.</description>
+      <chart>
+        <search>
+          <query>
+| mstats latest(hubble_tcp_flags_total) as Count WHERE index=k8s_ws_metrics BY flag
+| rename flag as Flag
+| sort -Count
+| table Flag Count
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="charting.axisTitleX.text">TCP Flag</option>
+        <option name="charting.axisTitleY.text">Count</option>
+        <option name="charting.seriesColors">[0x2E75B6]</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Hubble's Own Telemetry Health &#8212; hubble_lost_events_total</title>
+      <description>Hubble observing itself: events lost before they ever became a flow log or a metric, by the internal buffer that lost them. Same "trust your telemetry" reasoning as the Collector pipeline health panels on the Infrastructure dashboard — a dashboard full of calm flow data is only meaningful if Hubble isn't silently dropping its own events first. Any nonzero row here is worth a second look; it should stay at or near zero.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(hubble_lost_events_total) as Lost WHERE index=k8s_ws_metrics BY extracted_source
+| rename extracted_source as Source
+| sort -Lost
+| eval Assessment=if(Lost&gt;0,"Investigate — Hubble dropped its own events","Healthy — no event loss")
+| table Source Lost Assessment
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Lost">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Lost">
+          <colorPalette type="list">[#FFFFFF,#DC4E41]</colorPalette>
+          <scale type="threshold">1</scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background:#F3E5F5; border-left:5px solid #6A1B9A; padding:14px 20px; border-radius:4px;">
+          <h3 style="margin:0 0 6px 0; color:#4A148C !important; font-size:15px;">Section 2 — Cilium Agent Health: a curated slice of ~175 cilium_* series</h3>
+          <p style="margin:0; color:#333333 !important; font-size:13px; line-height:1.6;">This cluster exposes roughly 175 distinct <code style="background:#E1CCE8 !important; color:#4A148C !important; padding:1px 5px; border-radius:3px; font-family:monospace;">cilium_*</code> metrics — BPF map stats, API limiter timings, endpoint counts, controller run stats and more. The panels below pick six that answer questions an SRE actually asks (is the datapath under pressure, are endpoints healthy, is the agent's own control loop keeping up, is it still talking to the K8s API, what has it actually dropped and why) rather than surveying all 175.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>BPF Map Pressure (Current) &#8212; cilium_bpf_map_pressure</title>
+      <description>Fraction full (0&#8211;1, shown as %) of each eBPF map the datapath depends on &#8212; connection tracking, load-balancing, the IP cache. These are fixed-size kernel maps: a map that fills up starts silently dropping the traffic it can't track, with no error anywhere else in this workshop's telemetry. Confirmed live: every map on this lab cluster sits well under 1% full — plenty of headroom for a single-node workshop's traffic.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(cilium_bpf_map_pressure) as pressure WHERE index=k8s_ws_metrics BY map_name
+| eval "Pressure %"=round(pressure*100,3)
+| rename map_name as "Map Name"
+| sort - "Pressure %"
+| table "Map Name" "Pressure %"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Pressure %">
+          <option name="precision">3</option>
+          <option name="unit">%</option>
+        </format>
+        <format type="color" field="Pressure %">
+          <colorPalette type="list">[#FFFFFF,#F8BE34,#DC4E41]</colorPalette>
+          <scale type="threshold">70,90</scale>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>Endpoint State &#8212; cilium_endpoint_state</title>
+      <description>Every Cilium-managed endpoint (one per pod, roughly) by lifecycle state. A healthy cluster is one number: everything in "ready". Anything sitting in waiting-for-identity or regenerating for more than a few seconds means the datapath hasn't caught up with a pod Kubernetes already considers Running — the pod looks fine everywhere else and is actually not yet enforced.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(cilium_endpoint_state) as Endpoints WHERE index=k8s_ws_metrics BY endpoint_state
+| rename endpoint_state as State
+| sort - Endpoints
+| table State Endpoints
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Endpoints">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Endpoints">
+          <colorPalette type="list">[#115BAD]</colorPalette>
+          <scale type="threshold"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Controllers Currently Failing &#8212; cilium_controllers_failing</title>
+      <description>Cilium's internal background jobs (endpoint regeneration, identity sync, health checks) run as named controllers. This should read 0. A nonzero value means one of the agent's own control loops is stuck retrying, independent of anything the application is doing — worth a "cilium status --all-controllers" on the node before assuming the network itself is unhealthy.</description>
+      <single>
+        <search>
+          <query>
+| mstats latest(cilium_controllers_failing) as value WHERE index=k8s_ws_metrics
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="unit">controllers</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0x53A051","0xF1813F","0xDC4E41"]</option>
+        <option name="rangeValues">[1,3]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Cilium Agent Memory (RSS)</title>
+      <description>cilium_process_resident_memory_bytes — the agent's own footprint, the same self-telemetry reasoning as the Collector's otelcol_* metrics on the Infrastructure dashboard: the thing watching the network is itself a process worth watching.</description>
+      <single>
+        <search>
+          <query>
+| mstats latest(cilium_process_resident_memory_bytes) as v WHERE index=k8s_ws_metrics
+| eval value=round(v/1024/1024,1)
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="unit">MB</option>
+        <option name="useColors">0</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Security Identities Allocated</title>
+      <description>cilium_identity by type — every distinct label set Cilium has turned into a security identity, cluster_local (this cluster's own pods) plus reserved (host, world, kube-apiserver, and similar built-ins). This is the number that CiliumNetworkPolicy rules are actually evaluated against, and it is also the thing to watch for cardinality: every genuinely new label combination mints a new identity.</description>
+      <single>
+        <search>
+          <query>
+| mstats sum(cilium_identity) as v WHERE index=k8s_ws_metrics BY type
+| stats sum(v) as value
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="unit">identities</option>
+        <option name="useColors">0</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>K8s API Client Latency &#8212; Top Endpoints by Call Volume</title>
+      <description>cilium_k8s_client_api_latency_time_seconds_{sum,count}, averaged per endpoint the agent itself calls on the Kubernetes API server. This is the agent's outbound dependency, not an inbound one — slow numbers here mean the control plane is the bottleneck, not Cilium's own datapath. /readyz and /version run high because they are polled on a fixed interval regardless of cluster activity; the CiliumEndpoint/CiliumIdentity calls are the ones that actually track pod churn.</description>
+      <table>
+        <search>
+          <query>
+| mstats sum(cilium_k8s_client_api_latency_time_seconds_sum) as s sum(cilium_k8s_client_api_latency_time_seconds_count) as c WHERE index=k8s_ws_metrics BY method path
+| eval "Avg Latency (ms)"=round((s/c)*1000,2)
+| rename method as Method, path as Path, c as Calls
+| sort -Calls
+| head 10
+| table Method Path Calls "Avg Latency (ms)"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">10</option>
+        <format type="number" field="Calls">
+          <option name="precision">0</option>
+        </format>
+        <format type="number" field="Avg Latency (ms)">
+          <option name="precision">2</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="color" field="Avg Latency (ms)">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Cilium Agent's Own Drop Counter, by Reason &amp; Direction (Lifetime Since Agent Start)</title>
+      <description>cilium_drop_count_total is a cumulative counter, not a windowed rate — confirmed live, flat within any single short window on this cluster, so the numbers below are the agent's running lifetime total, not "drops just now". Confirmed live: every reason here traces back to events this workshop's own docs already narrate — "Policy denied" is the identity-churn gotcha FW #2 &#167;7 walks through by hand (a new pod is a new Cilium identity until a CiliumNetworkPolicy is patched to allow it), and "Unsupported L3 protocol" is the same IPv6 Router Solicitation background noise the flow-log dashboard's DROPPED panels show. Not a sign of an active problem — a permanent record of exactly the lessons this workshop already teaches.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(cilium_drop_count_total) as Drops WHERE index=k8s_ws_metrics BY reason direction
+| rename reason as Reason, direction as Direction
+| sort -Drops
+| table Reason Direction Drops
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Drops">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Drops">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+</form>
