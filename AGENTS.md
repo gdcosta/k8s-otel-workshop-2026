@@ -907,6 +907,26 @@ here's where things stand:
      FW1b, but confirm what Cilium/Hubble actually expose before designing panels
      around assumptions.
 
+  **Placement decided, 2026-09-02, correcting the user's own first instinct**: not
+  FW1b for both signals. The OTel Collector doesn't exist yet at FW1b's point in the
+  sequence (it's installed in FW2) — there's nothing for Hubble's flow logs to route
+  through if wired up that early. **Logs land in FW2** instead, whose own thesis is
+  literally "Collecting logs with OpenTelemetry" — Hubble flow logs are a second log
+  source that fits that existing scope directly, not a detour. **Metrics stay in AW1**
+  as originally proposed, matching where the Collector's metrics pipeline already gets
+  turned on. The dashboard comes after both exist, landing near/inside AW1's own
+  capstone-dashboards section — exact spot to be decided once real KPI candidates are
+  confirmed, not guessed now.
+
+  **Live discovery spike dispatched, 2026-09-02, on `3.145.97.98`** — genuinely new
+  territory, same risk profile as the original Cilium/FW1b spike (expect real dead
+  ends, not routine work): enable Hubble flow-log export and Hubble/Cilium metrics via
+  Helm (neither is on right now, confirmed), wire the OTel Collector to ingest both
+  (`k8s_ws_logs` for flow logs alongside the audit log, `k8s_ws_metrics` for the
+  metrics, matching each index's existing role — open to reasoned deviation), confirm
+  real data lands in Splunk, and do a first-pass exploration of what's actually there
+  to inform the dashboard later. Not yet complete as of this note.
+
 ---
 
 ## The prime directive: tested, not transcribed
