@@ -1,9 +1,13 @@
 # Facilitator guide
 
-Everything you need to run this workshop for other people: provisioning, timing, the
-failure modes participants actually hit, and extra material for when a group moves fast.
+Provisioning, timing, the failure modes participants actually hit, and extra material for
+when a group moves fast. Written for running this workshop for other people — but just as
+useful solo: many readers work through the whole series alone first, then come back here once
+they're ready to run it for a room. See
+[Running this solo](#running-this-solo-before-a-group) below.
 
-Participants don't need this page.
+If you're the one being taught — someone else is facilitating — you don't need this page, go
+to [Host setup](../00-setup/index.md) instead.
 
 ---
 
@@ -34,6 +38,55 @@ Maven download the internet.
 ---
 
 ## Provisioning
+
+### Running this solo, before a group
+
+Read this if you're standing up one instance for yourself — probably the most common way
+this workshop actually gets used. A Splunk architect works through the whole series alone
+first, decides it's worth running for a team, *then* comes back to this page for the
+multi-participant parts. That's not a lesser use of this guide; everything below still
+applies with one instance instead of twenty, minus the parts that only make sense for a room:
+
+- Skip [Getting keys to participants](#getting-keys-to-participants) entirely — it's about
+  distributing one shared key pair to a room. Create your own key pair at launch and keep it,
+  same as [Host setup](../00-setup/index.md) already describes for anyone provisioning their
+  own instance.
+- The security group rule is identical either way: scope inbound 22 and 8000 to **your own
+  IP**, not a CIDR — see [Security group](#security-group) below.
+- [Building instances](#building-instances) and
+  [Fast-forwarding](#fast-forwarding-to-a-later-module) both work unchanged for a single box;
+  just run them once instead of in a loop.
+
+The one thing worth doing differently solo: if you have access to Splunk's own AWS
+environment, launch from the internal golden AMI below rather than a public Canonical one —
+it's the org's approved, compliant base image, and reaching for it costs nothing extra once
+you're already in that account.
+
+### Launching from the internal golden AMI
+
+[Host setup](../00-setup/index.md#before-you-start)'s own launch-settings block is
+AMI-agnostic on purpose — "any launch route works... as long as the result matches" a plain
+Ubuntu 24.04 LTS box. Inside Splunk's own AWS account, the approved way to get that box is
+the **AMI Catalog**, not a public Canonical AMI ID: search for `golden_ami_ubuntu2404`, pick
+the most recent build (the timestamp is in the name), and launch it as a `t3.2xlarge` with
+the same spec as [One instance per participant](#one-instance-per-participant) below — this
+replaces only the AMI-selection step, nothing else about setup changes.
+
+![AMI Catalog — searching for the golden Ubuntu 24.04 AMI](../assets/img/facilitator/golden-ami-catalog.png)
+
+![Launch an instance, golden AMI selected, spec filled in](../assets/img/facilitator/golden-ami-launch-instance.png)
+
+!!! note "This is Splunk-internal — everyone else builds a plain instance instead"
+    `golden_ami_ubuntu2404` lives in Splunk's own AWS account and carries Splunk's own
+    governance tags (`splunkit_data_classification`, `splunkit_environment_type`,
+    `splunkit_golden_ami`) — it isn't reachable outside that account. If you don't have
+    access to it, or you're building instances for participants outside Splunk, launch a
+    plain EC2 instance from scratch instead — [Host setup](../00-setup/index.md#before-you-start)'s
+    own public Ubuntu 24.04 AMI is one easy way to do that, but any route to that same spec
+    (console, CLI, Terraform) works. Everything downstream of the AMI choice — instance type, storage, security group,
+    `bootstrap.sh` — is identical either way.
+
+---
 
 ### One instance per participant
 

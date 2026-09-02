@@ -1181,6 +1181,16 @@
     section: "View RUM statistics in Splunk Observability Cloud"
 
 facilitator:
+  golden-ami-catalog.png:
+    kind: screenshot
+    status: verified
+    bytes: 423230
+    section: "Provisioning — Launching from the internal golden AMI"
+  golden-ami-launch-instance.png:
+    kind: screenshot
+    status: verified
+    bytes: 640597
+    section: "Provisioning — Launching from the internal golden AMI"
   image1.png:
     kind: screenshot
     status: stale
