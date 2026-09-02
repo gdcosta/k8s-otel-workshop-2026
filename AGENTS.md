@@ -809,6 +809,58 @@ here's where things stand:
   app is already confirmed healthy" timing rule as the deferred JMeter-in-cluster idea
   above.
 
+  **Built and fully validated live, 2026-09-02, on `3.145.97.98`.** Everything above
+  held up in practice, plus one real dead end worked around without a custom image:
+  the official `mcr.microsoft.com/playwright/python:v1.62.0-noble` image bundles the
+  browsers and OS deps but **not the `playwright` pip package itself** — confirmed via
+  a throwaway pod (`ModuleNotFoundError`). Fixed with a container `command` that runs
+  `pip3 install --quiet playwright==1.62.0` before launching the script — a startup
+  step, not a Dockerfile build, so the "no custom image" constraint holds; confirmed
+  live this reuses the pre-baked browsers with no re-download, because the pinned pip
+  version matches the image tag exactly.
+
+  Deployment `playwright-loadgen` in `petclinic`, ConfigMap + `subPath` mount mirroring
+  `inject-rum-snippet.sh` exactly, targets `api-gateway`'s real ClusterIP Service
+  directly (not the NodePort/Ingress paths — this pod is a real in-cluster caller, no
+  reason to route external-access traffic through itself). 5 concurrent async
+  Playwright browser contexts in one Chromium process, looping forever with a random
+  2–5s pause, SIGTERM-aware for clean shutdown. Confirmed live: real sustained
+  operation (0 restarts, ~10+ minutes unattended at last check, per-worker iteration
+  counters climbing steadily); real write-path traffic in Splunk server-side spans
+  (580× `PUT`→204 owner-updates, 580× `POST`→201 new-visits, over a 12-minute window);
+  JMeter unaffected, run in parallel with 0% errors.
+
+  **The `CiliumNetworkPolicy` gap arrived exactly as expected** — `api-gateway`'s
+  policy only allowed `fromEntities: [host, world, ingress]`, none of which cover an
+  arbitrary new pod's own identity. Diagnosed via `hubble observe --verdict DROPPED`
+  the same way as every prior instance of this pattern, fixed with one new
+  `fromEndpoints` entry for `playwright-loadgen`'s own label. Zero drops in the 8+
+  minutes after the fix, versus continuous drops before it.
+
+  **RUM confirmed switching on with zero redeployment — the actual point of the whole
+  design, verified, not assumed.** A SignalFlow query on `rum.page_view.count` was flat
+  zero for the first ~16 minutes of a 20-minute window, then jumped to real numbers
+  (30–154 page views per 20s bucket) at the exact moment traffic started flowing after
+  the `CiliumNetworkPolicy` fix — with nothing changed on the RUM injection or the
+  Playwright deployment itself.
+
+  **Real, worth-tracking cost, not a blocker**: available memory dropped from the
+  ~22GiB baseline to 21GiB, and load average spiked to 9.6 (on 8 vCPU) when the pod
+  started and a JMeter run happened to overlap, settling to ~8.2 afterward. No problem
+  observed, but worth watching if more load sources get layered on this box later.
+
+  **One loose end surfaced, not yet resolved**: this box's `WS_USER=wsuser01` matches
+  what [[workshop-live-test-instance]] used to say about `18.222.78.181` — that memory
+  was stale (it described `18.222.78.181` as "the sole live instance," which stopped
+  being true once `3.145.97.98` was provisioned for the FW1b work) and has been
+  rewritten to reflect current reality.
+
+  **Next**: write this up as real doc content — replacing FW2 §7's "start JMeter in a
+  second terminal" teaching moment with deploying this instead, updating AW1 §1's
+  "start the load generator" step (Playwright's already running continuously by then,
+  nothing to start), and confirming AW2's own early sections still make sense once
+  JMeter is no longer assumed to be continuously running from FW2 onward. Not started.
+
 - **Cilium/Hubble telemetry into Splunk + an installable KPI dashboard — confirmed
   needed, 2026-09-02, sequenced after the Playwright work above, not before.**
   Promotes the Hubble-export gap found the same day (FW1b's shipped content only ever
