@@ -358,6 +358,46 @@ here's where things stand:
   makes **five** screenshots now needing a real Playwright capture pass:
   `fw2-dashboard.png`, `apm-traces-dashboard.png`, `aw1-dashboard.png` (all `stale`,
   from earlier rounds), plus these two new `missing` ones.
+
+  **All five captured, 2026-09-02.** Headless Playwright (Node, `npx playwright`,
+  already available — no install needed beyond the Chromium browser binary) driven
+  from outside the box, through an SSH tunnel to the box's own `localhost:8000`
+  rather than opening port 8000 — matches this project's existing security-group
+  posture, nothing new exposed. All five confirmed fully rendered (no
+  "waiting for input"/spinner state) before capture, 1600px-wide full-page, matching
+  the existing screenshots' own convention. `apm-traces-dashboard.png` needed real
+  interaction, not just a page load: picked `customers-service` in the service
+  dropdown, drilled into a real `PUT /owners/4` trace (ten spans) via Trace
+  Information, then into its Hibernate `SELECT` span — replacing the old capture's
+  now-impossible `/oups` `RuntimeException` drill-down.
+
+  A doc-prose sweep for other content that describes specific pictured values (not
+  just "here's what this panel shows" in general) found two real mismatches, fixed:
+  FW2's Hubble walkthrough claimed `playwright-loadgen → api-gateway` leads Top
+  Talkers (`external → external` actually leads); AW1's Cilium Agent Health
+  walkthrough claimed every BPF map sits "well under 1%" (the two conntrack maps
+  sit just over 1%). The same sweep surfaced a real, **pre-existing** and unrelated
+  error the new APM-traces caption exposed by contrast: "PetClinic runs H2 in
+  memory" (in both `docs/03-advanced-1/index.md`'s DB-time tip and one
+  `aw1-dashboard.xml` panel description) is wrong for this topology — FW1's own
+  topology table and AW2's own findings already establish **HSQLDB**
+  (`db.connection_string: hsqldb:mem:`), now confirmed a third time on the real
+  captured trace's `db.system=hsqldb`. Fixed both occurrences; grepped the whole
+  tree after, clean. The `aw1-dashboard.xml` text edit meant WORKSHOP_APP_VERSION
+  bumped again, 1.0.4 → 1.0.5, rebuilt and reinstalled, confirmed live.
+
+  **New, small, flagged but not investigated further**: a live check during review
+  (not part of either sub-agent's task) found 377 of ~134k Hubble flow events in a
+  60-minute window (~0.28%) have no `flow.verdict` field at all — a real fourth
+  category, visible as a "NULL" series in the fresh Flow Verdict Over Time
+  screenshot, that FW2 §12's checkpoint text ("only three verdicts") doesn't
+  account for. Doesn't change that checkpoint's core "reassuringly boring"
+  conclusion and wasn't worth blocking this pass on, but the "only three" claim
+  is no longer exactly right — worth a closer look in a future pass.
+
+  **Process note**: learned from the earlier commit-staging bug in this same
+  session — every commit in this round was preceded by `git diff --cached --stat`
+  to confirm the staged set matched intent before committing, not after.
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if
