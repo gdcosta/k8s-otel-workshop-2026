@@ -292,6 +292,72 @@ here's where things stand:
   new `!!! note` on the two load-bearing-Service findings. `aw1-dashboard.png` flagged
   `status: stale` in the manifest, joining the two already flagged from the previous
   round — none retaken this pass, no Playwright/browser tooling available.
+
+  **Process bug, caught and corrected, worth recording so it doesn't repeat**: the
+  commit I reported as done and pushed (`1ef868d`) only actually staged the rebuilt
+  `.tgz` — `git add -A <one-pathspec>` scopes `-A` to that single pathspec, not the
+  whole tree, so `aw1-dashboard.xml`, `versions.env` and both doc files never got
+  staged despite the commit message describing all of it in detail. Nothing was lost
+  (it sat as an uncommitted working-tree change), and the next sub-agent (dispatched
+  for the Cilium/Hubble dashboards, below) correctly flagged the unexpected dirty
+  state before starting its own work rather than silently working around or
+  overwriting it — caught before it caused any real damage, but only because that
+  agent checked and reported rather than assuming. Fixed by verifying `git diff
+  --cached --stat` shows exactly the intended files *before* every commit from here
+  on, not after. Landed properly in `d6f8557`.
+
+  **Cilium/Hubble dashboards shipped, 2026-09-02, app bumped 1.0.2 → 1.0.4** (the
+  intermediate 1.0.3 from the AW1 rework folds into this bump, since both landed in
+  the same working-tree pass by the time the staging bug above was caught). Two new
+  dashboards, dispatched to a sub-agent with the same live-discovery-first pattern,
+  full diff and every panel's SPL reviewed personally before committing:
+
+  `fw2-hubble-logs-dashboard.xml` (view `k8s_ws_hubble_logs`, FW #2): reads
+  `index=k8s_ws_logs sourcetype="cilium:hubble:flow"`. Verdict/direction/protocol
+  breakdowns, top destination ports resolved to the owning PetClinic service, top
+  service-to-service talkers (`playwright-loadgen → api-gateway` leads, as expected).
+  The two DROPPED-focused panels correctly apply both gotchas FW2 §12 already found
+  live — no resolved `flow.source.namespace` on DROPPED events (recovered from
+  `flow.source.labels{}` via `mvfilter`/`mvindex`, never a raw group-by on that
+  multivalue field) — and use an `appendpipe` pattern for an honest empty state
+  rather than a panel that looks broken on a box where DROPPED volume runs single
+  digits per window. Independently re-verified live, post-install: 99.5% FORWARDED
+  in a 15-minute window (my own re-run of the exact panel query, not just trusting
+  the sub-agent's report — my first attempt at reproducing this by hand got `0%` from
+  an unquoted `flow.verdict` in `eval`, a reminder that the dotted-field-name-needs-
+  quoting rule bites the verifier too, not just the panel author).
+
+  `aw1-cilium-metrics-dashboard.xml` (view `k8s_ws_cilium_metrics`, AW #1): reads
+  `index=k8s_ws_metrics`. All eight real `hubble_*` families — flow-processing rate
+  via `rate()`, not raw `sum()`, because the underlying counter resets and a raw sum
+  renders false cliffs; `hubble_policy_verdicts_total` (every `action`=`forwarded`,
+  every `match`=`l3-l4`, matching the confirmed `dns`/`http` gap); `hubble_drop_total`
+  by `reason` (`UNSUPPORTED_L3_PROTOCOL` only, cross-validating the flow-log DROPPED
+  panels against an independent metrics pipeline); TCP flags; Hubble's own
+  `hubble_lost_events_total` self-check. Plus six curated `cilium_*` panels out of
+  ~175 candidates (BPF map pressure, endpoint state, controllers failing, agent RSS,
+  identity count, K8s API client latency) and the agent's own lifetime
+  `cilium_drop_count_total` by reason/direction — confirmed live as a cumulative
+  counter (flat within any short window), every reason traceable to a scenario this
+  workshop already narrates by hand (`Policy denied` → the `playwright-loadgen`
+  new-identity gotcha from FW2 §7; `Unsupported L3 protocol` → the same IPv6 Router
+  Solicitation noise as the flow-log DROPPED panels). A real bug was caught and fixed
+  mid-build: "Controllers Failing" aliased its value as `v` but tabled `value`
+  (silently always empty) — fixed, rebuilt, reinstalled, reverified.
+
+  Nav: `k8s_ws_hubble_logs` grouped right after `k8s_ws_fw2_dashboard`;
+  `k8s_ws_cilium_metrics` grouped with the other AW1-filled dashboards, after
+  `k8s_ws_infra_dashboard`. Doc subsections added to both FW2 §13 and AW1 §9 in the
+  existing voice; both dashboard-app tables bumped 5 → 7 rows.
+
+  **Not done**: no real screenshots for either new dashboard — no Playwright/browser
+  tooling available. The two referenced images are generated placeholder graphics
+  (clearly labeled "Screenshot not yet captured — placeholder only", 1200×700,
+  can't be mistaken for a real capture), added only so `mkdocs build --strict`
+  doesn't fail on a broken image link; manifest marks both `status: missing`. This
+  makes **five** screenshots now needing a real Playwright capture pass:
+  `fw2-dashboard.png`, `apm-traces-dashboard.png`, `aw1-dashboard.png` (all `stale`,
+  from earlier rounds), plus these two new `missing` ones.
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if
