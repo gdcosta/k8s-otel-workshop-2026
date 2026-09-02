@@ -250,10 +250,48 @@ here's where things stand:
   describe whatever real error trace the new screenshot actually drills into. No
   Playwright/browser tooling was available in this pass to do it live.
 
-  **Still open**: whether "get the AW1 dashboards fixed" (the user's phrase) means the
-  small confirmed items above (done) or also commits to `aw1-dashboard.xml`'s bigger,
-  separately-tracked six-service breakdown rework (Phase 5, not started) — asked the
-  user directly rather than guessing given the size gap between the two readings.
+  **Resolved**: user chose the bigger reading — commit to the full six-service
+  breakdown rework. Dispatched to a sub-agent (live discovery first, then XML), full
+  diff reviewed personally before committing, same as every other round.
+
+  **`aw1-dashboard.xml` six-service rework shipped, 2026-09-02, app bumped 1.0.2 →
+  1.0.3.** 13 panels with zero `service.name` references → 15, all live-verified on
+  `3.145.97.98`. Two were real correctness bugs, not just missing breakdowns, caught
+  by discovering the data live before writing any XML: **JVM Heap Used** (current +
+  over-time) was averaging six independent JVMs into one blended number/line — live
+  spread confirmed real (one snapshot: `api-gateway` 87.82MB vs. `visits-service`
+  42.09MB) — now a per-service table plus a trellis chart (`trellis.scales.shared=0`,
+  a deliberate deviation from the skill's usual `1`, because magnitude spread across
+  services ran up to ~90x on the trace-volume trellis and shared scaling would have
+  flattened five of six cells). **HikariCP Connection Pool Health** — only 3 of 6
+  services (`customers-service`, `vets-service`, `visits-service`) own a pool at all;
+  the old `latest()`-across-everything query was silently picking one service's
+  numbers, not aggregating. Rebuilt per-service via `xyseries` + `join`.
+
+  A third, subtler bug was found and fixed mid-build, not asked for: **"Anatomy of a
+  Request"** derived Route and Service from two *independently* `mvindex()`'d
+  per-`trace_id` multivalue fields — for a trace spanning several services this could
+  pair one span's route with a different span's service name. Fixed by combining them
+  from the same SERVER span (`route."|||".'service.name'`) before splitting back
+  apart; verified live that `/owners/{ownerId}` now correctly attributes to
+  `customers-service`.
+
+  Service column added to Top Routes, Top SQL Statements, Slowest INTERNAL Spans,
+  Error Rate by Route — confirmed live which are load-bearing vs. purely
+  informative: `/actuator/health` collides across 5 services with a different
+  latency each, `Transaction.commit` collides across the 3 data-owning services;
+  every SQL statement and every other route is unique to one service. New "Fleet
+  Overview — Trace Count & P90 Latency by Service" table and a "Trace Volume by
+  Service" trellis added near the top, deliberately without touching the Total
+  Traces/P90 Latency KPI singles — those stay fleet-wide by design, matching the
+  o11y-dashboard skill's own "lead with fleet health" convention.
+
+  Doc text (`docs/03-advanced-1/index.md`) updated to match, including correcting the
+  N+1 narrative — the old "four separate database round-trips" claim doesn't hold
+  against current live numbers (`/owners` and `/vets` vary, not a fixed four) — and a
+  new `!!! note` on the two load-bearing-Service findings. `aw1-dashboard.png` flagged
+  `status: stale` in the manifest, joining the two already flagged from the previous
+  round — none retaken this pass, no Playwright/browser tooling available.
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if
