@@ -82,24 +82,64 @@ index=k8s_ws_traces
       </single>
     </panel>
     <panel>
-      <title>JVM Heap Used, Current (MB)</title>
-      <single>
+      <title>JVM Heap Used, Current (MB) — by Service</title>
+      <description>All six JVMs report jvm.memory.used with a service.name dimension. Averaging them into one number (the previous version of this panel) hid a real spread between the busiest and quietest heap.</description>
+      <table>
         <search>
           <query>
-| mstats avg(jvm.memory.used) as value WHERE index=k8s_ws_petclinic_metrics jvm.memory.type=heap span=10s
-| sort - _time
-| head 1
+| mstats avg(jvm.memory.used) as value WHERE index=k8s_ws_petclinic_metrics jvm.memory.type=heap span=10s BY service.name
+| stats latest(value) as value by service.name
 | eval value=round(value/1024/1024,2)
-| table value
+| sort service.name
+| rename service.name as "Service", value as "Heap Used (MB)"
+| table "Service" "Heap Used (MB)"
           </query>
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
-        <option name="numberPrecision">0.00</option>
-        <option name="unit">MB</option>
-        <option name="useColors">0</option>
-      </single>
+        <option name="wrap">true</option>
+        <format type="number" field="Heap Used (MB)">
+          <option name="precision">2</option>
+          <option name="unit">MB</option>
+        </format>
+        <format type="color" field="Heap Used (MB)">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Fleet Overview — Trace Count &amp; P90 Latency by Service</title>
+      <description>The three KPIs above are deliberately fleet-wide (lead with overall health); this is where the six-service breakdown behind them lives — each service's own span volume and P90 latency, at a glance.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_traces
+| eval ms=(end_time-start_time)/1000000
+| stats count as span_count, perc90(ms) as p90_ms by service.name
+| eval p90_ms=round(p90_ms,2)
+| sort service.name
+| rename service.name as "Service", span_count as "Span Count", p90_ms as "P90 Latency (ms)"
+| table "Service" "Span Count" "P90 Latency (ms)"
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="P90 Latency (ms)">
+          <option name="precision">2</option>
+          <option name="unit">ms</option>
+        </format>
+        <format type="color" field="P90 Latency (ms)">
+          <colorPalette type="minMidMax" maxColor="#DC4E41" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
     </panel>
   </row>
 
@@ -130,24 +170,55 @@ index=k8s_ws_traces
 
   <row>
     <panel>
-      <title>JVM Heap Used Over Time — Auto-Instrumented, No Code Changes (heap vs. non-heap, 10s resolution)</title>
-      <description>Sawtooth pattern is expected: heap usage climbs as objects are allocated, then drops sharply on each garbage-collection cycle.</description>
+      <title>Trace Volume by Service — Small Multiples</title>
+      <description>Same $span_token$ granularity as the fleet-wide chart above, split into one cell per service. Independent y-axis scale per cell (api-gateway's volume runs roughly two orders of magnitude above config-server's) so each service's own shape stays legible.</description>
       <chart>
         <search>
           <query>
-| mstats avg(jvm.memory.used) WHERE index=k8s_ws_petclinic_metrics span=10s BY jvm.memory.type
-| xyseries _time jvm.memory.type avg(jvm.memory.used)
+index=k8s_ws_traces
+| timechart span=$span_token$ count by service.name
           </query>
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
         </search>
         <option name="charting.chart">line</option>
         <option name="charting.drilldown">none</option>
-        <option name="charting.legend.placement">bottom</option>
-        <option name="charting.axisTitleY.text">Bytes</option>
-        <option name="charting.axisTitleX.text">Time</option>
-        <option name="charting.seriesColors">[0x2E75B6,0x1F3864]</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="charting.axisTitleY.text">Span Count</option>
         <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="trellis.enabled">1</option>
+        <option name="trellis.scales.shared">0</option>
+        <option name="trellis.size">medium</option>
+        <option name="trellis.splitBy">service.name</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>JVM Heap Used Over Time by Service — Auto-Instrumented, No Code Changes (10s resolution)</title>
+      <description>Sawtooth pattern is expected per JVM: heap usage climbs as objects are allocated, then drops sharply on each garbage-collection cycle. Six independent JVMs have six independent GC rhythms — the previous version of this panel blended heap vs. non-heap across all six into one pair of lines, which flattened the sawtooth. Split by service.name here (heap only, since that is what shows the pattern); independent y-axis scale per cell so each JVM's own sawtooth stays visible regardless of its absolute heap size.</description>
+      <chart>
+        <search>
+          <query>
+| mstats avg(jvm.memory.used) as heap_used WHERE index=k8s_ws_petclinic_metrics jvm.memory.type=heap span=$span_token$ BY service.name
+| eval heap_mb=round(heap_used/1024/1024,2)
+| timechart span=$span_token$ avg(heap_mb) by service.name
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">none</option>
+        <option name="charting.axisTitleY.text">MB</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="trellis.enabled">1</option>
+        <option name="trellis.scales.shared">0</option>
+        <option name="trellis.size">medium</option>
+        <option name="trellis.splitBy">service.name</option>
         <option name="refresh.display">progressbar</option>
       </chart>
     </panel>
@@ -156,6 +227,7 @@ index=k8s_ws_traces
   <row>
     <panel>
       <title>Top Routes by Latency (Last 30m)</title>
+      <description>Service is included because it is not decorative here: /actuator/health is hit on all five Spring Boot services and each reports a different latency for it — an app-wide "Top Routes" view would have collapsed those into one misleading blended row.</description>
       <table>
         <search>
           <query>
@@ -163,10 +235,11 @@ index=k8s_ws_traces
 | rename "attributes.http.route" as route
 | where isnotnull(route)
 | eval ms=(end_time-start_time)/1000000
-| stats count, avg(ms) as avg_ms, max(ms) as max_ms by route
+| stats count, avg(ms) as avg_ms, max(ms) as max_ms by service.name route
 | eval avg_ms=round(avg_ms,2), max_ms=round(max_ms,2)
 | sort -avg_ms
-| rename route as "Route", count as "Span Count", avg_ms as "Avg Latency (ms)", max_ms as "Max Latency (ms)"
+| rename service.name as "Service", route as "Route", count as "Span Count", avg_ms as "Avg Latency (ms)", max_ms as "Max Latency (ms)"
+| table "Service" "Route" "Span Count" "Avg Latency (ms)" "Max Latency (ms)"
           </query>
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
@@ -191,35 +264,33 @@ index=k8s_ws_traces
 
   <row>
     <panel>
-      <title>HikariCP Connection Pool Health (Current)</title>
-      <description>idle + active should sum to at most the pool max; a nonzero pending-requests count means callers are queued waiting for a free connection.</description>
+      <title>HikariCP Connection Pool Health (Current) — by Service</title>
+      <description>idle + active should sum to at most the pool max; a nonzero pending-requests count means callers are queued waiting for a free connection. Only three of the six services own a database connection pool — customers-service, vets-service, visits-service (api-gateway is a pure router, discovery-server and config-server never touch a database). Blending all pools into one set of numbers with latest() (the previous version of this panel) silently returned an arbitrary one of the three rather than a genuine aggregate; broken out by service here, every number is real.</description>
       <table>
         <search>
           <query>
-| mstats latest(db.client.connections.usage) as value WHERE index=k8s_ws_petclinic_metrics BY state
-| stats latest(value) as value by state
-| eval metric=if(state="idle","Idle Connections","Active Connections")
-| eval value=round(value,0)
-| table metric value
-| append [
-| mstats latest(db.client.connections.max) as value WHERE index=k8s_ws_petclinic_metrics
-| eval metric="Max Pool Size"
-| eval value=round(value,0)
-| table metric value
+| mstats latest(db.client.connections.usage) as value WHERE index=k8s_ws_petclinic_metrics BY service.name, state
+| eval state=if(state="idle","Idle Connections","Active Connections")
+| stats latest(value) as value by service.name state
+| xyseries service.name state value
+| join type=left service.name [
+| mstats latest(db.client.connections.max) as "Max Pool Size" WHERE index=k8s_ws_petclinic_metrics BY service.name
 ]
-| append [
-| mstats latest(db.client.connections.pending_requests) as value WHERE index=k8s_ws_petclinic_metrics
-| eval metric="Pending Requests"
-| eval value=round(value,0)
-| table metric value
+| join type=left service.name [
+| mstats latest(db.client.connections.pending_requests) as "Pending Requests" WHERE index=k8s_ws_petclinic_metrics BY service.name
 ]
-| rename metric as "Metric", value as "Value"
+| rename service.name as "Service"
+| table "Service" "Idle Connections" "Active Connections" "Max Pool Size" "Pending Requests"
           </query>
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
         </search>
         <option name="drilldown">none</option>
         <option name="wrap">true</option>
+        <format type="color" field="Pending Requests">
+          <colorPalette type="list">[#FFFFFF,#DC4E41]</colorPalette>
+          <scale type="threshold">1</scale>
+        </format>
       </table>
     </panel>
   </row>
@@ -299,7 +370,7 @@ index=k8s_ws_traces
   <row>
     <panel>
       <title>Anatomy of a Request — Database Round-Trips and Where the Time Goes, by Route</title>
-      <description>Each row is one HTTP route, reconstructed by correlating every span in a trace. "DB Round-Trips per Request" is the N+1 evidence: the owner pages issue 3-4 queries each, while the static and error routes issue none. The three timing columns then answer "so does it actually hurt?" — and today the honest answer is no, because this PetClinic runs H2 in memory, so the database costs only a few percent of request time. That is the lesson: the same four round-trips against a networked Postgres at 1-2 ms each would add 4-8 ms of pure network wait to every page view. Tracing lets you find the pattern while it is still cheap to fix.</description>
+      <description>Each row is one HTTP route, reconstructed by correlating every span in a trace. Service is paired with Route from the same SERVER span (not two independently-picked multivalue fields, which for a trace touching several services could otherwise mismatch a route with the wrong service's name). "DB Round-Trips per Request" is the N+1 evidence: the /owners and /vets pages issue far more queries than the rest, while the static and health routes issue none. The three timing columns then answer "so does it actually hurt?" — and today the honest answer is no, because this PetClinic runs H2 in memory, so the database costs only a few percent of request time. That is the lesson: the same round-trips against a networked Postgres at 1-2 ms each would add real, visible network wait to every page view. Tracing lets you find the pattern while it is still cheap to fix.</description>
       <table>
         <search>
           <query>
@@ -309,16 +380,19 @@ index=k8s_ws_traces
 | eval is_db=if(isnotnull(dbsys),1,0)
 | eval db_ms=if(isnotnull(dbsys),ms,0)
 | eval req_ms=if(kind=="SPAN_KIND_SERVER" AND isnotnull(route),ms,0)
-| stats sum(is_db) as db_calls, sum(db_ms) as db_ms, sum(req_ms) as req_ms, values(route) as routes by trace_id
-| eval route=mvindex(routes,0)
+| eval rsvc=if(kind=="SPAN_KIND_SERVER" AND isnotnull(route),route."|||".'service.name',null())
+| stats sum(is_db) as db_calls, sum(db_ms) as db_ms, sum(req_ms) as req_ms, values(rsvc) as rsvcs by trace_id
+| eval rsvc0=mvindex(rsvcs,0)
+| eval route=mvindex(split(rsvc0,"|||"),0)
+| eval service=mvindex(split(rsvc0,"|||"),1)
 | where isnotnull(route) AND req_ms&gt;0
-| stats count as requests, avg(db_calls) as rt, avg(req_ms) as avg_req, avg(db_ms) as avg_db by route
+| stats count as requests, avg(db_calls) as rt, avg(req_ms) as avg_req, avg(db_ms) as avg_db by service route
 | eval avg_app=avg_req-avg_db
 | eval pct_db=round(100*avg_db/avg_req,1)
 | eval rt=round(rt,2), avg_req=round(avg_req,2), avg_db=round(avg_db,3), avg_app=round(avg_app,2)
 | sort -rt -avg_req
-| rename route as "Route", requests as "Requests", rt as "DB Round-Trips per Request", avg_req as "Avg Request (ms)", avg_db as "Avg DB Time (ms)", avg_app as "Avg App Time (ms)", pct_db as "% Time in DB"
-| table "Route" "Requests" "DB Round-Trips per Request" "Avg Request (ms)" "Avg DB Time (ms)" "Avg App Time (ms)" "% Time in DB"
+| rename service as "Service", route as "Route", requests as "Requests", rt as "DB Round-Trips per Request", avg_req as "Avg Request (ms)", avg_db as "Avg DB Time (ms)", avg_app as "Avg App Time (ms)", pct_db as "% Time in DB"
+| table "Service" "Route" "Requests" "DB Round-Trips per Request" "Avg Request (ms)" "Avg DB Time (ms)" "Avg App Time (ms)" "% Time in DB"
           </query>
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
@@ -360,7 +434,7 @@ index=k8s_ws_traces
   <row>
     <panel>
       <title>Top SQL Statements by Volume and Latency</title>
-      <description>The actual SQL text, lifted straight off the CLIENT spans by the auto-instrumentation — nobody wrote a line of code to capture this. Sort by "Calls" and the top row is the query to fix first: the visits lookup runs many times more often than any other statement, which is exactly what an N+1 loop looks like from the database side. "Total DB Time" is the column that decides priority — a fast query called tens of thousands of times can cost more than a slow one called once.</description>
+      <description>The actual SQL text, lifted straight off the CLIENT spans by the auto-instrumentation — nobody wrote a line of code to capture this. Every statement here is unique to one owning service (no live overlap), so Service is purely informative — but it tells you at a glance which service to go fix. Sort by "Calls" and the top row is the query to fix first: the visits lookup runs many times more often than any other statement, which is exactly what an N+1 loop looks like from the database side. "Total DB Time" is the column that decides priority — a fast query called tens of thousands of times can cost more than a slow one called once.</description>
       <table>
         <search>
           <query>
@@ -369,11 +443,11 @@ index=k8s_ws_traces
 | where isnotnull(stmt)
 | eval ms=(end_time-start_time)/1000000
 | eval sql=substr(stmt,1,100)
-| stats count as calls, avg(ms) as avg_ms, perc95(ms) as p95_ms, max(ms) as max_ms, sum(ms) as tot_ms by sql tbl op
+| stats count as calls, avg(ms) as avg_ms, perc95(ms) as p95_ms, max(ms) as max_ms, sum(ms) as tot_ms by service.name sql tbl op
 | eval avg_ms=round(avg_ms,3), p95_ms=round(p95_ms,3), max_ms=round(max_ms,2), tot_ms=round(tot_ms,1)
 | sort -calls
-| rename sql as "SQL Statement (first 100 chars)", tbl as "Table", op as "Operation", calls as "Calls", avg_ms as "Avg (ms)", p95_ms as "P95 (ms)", max_ms as "Max (ms)", tot_ms as "Total DB Time (ms)"
-| table "SQL Statement (first 100 chars)" "Table" "Operation" "Calls" "Avg (ms)" "P95 (ms)" "Max (ms)" "Total DB Time (ms)"
+| rename service.name as "Service", sql as "SQL Statement (first 100 chars)", tbl as "Table", op as "Operation", calls as "Calls", avg_ms as "Avg (ms)", p95_ms as "P95 (ms)", max_ms as "Max (ms)", tot_ms as "Total DB Time (ms)"
+| table "Service" "SQL Statement (first 100 chars)" "Table" "Operation" "Calls" "Avg (ms)" "P95 (ms)" "Max (ms)" "Total DB Time (ms)"
           </query>
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
@@ -412,19 +486,19 @@ index=k8s_ws_traces
   <row>
     <panel>
       <title>Slowest Application Methods — INTERNAL Spans</title>
-      <description>Method-level profiling of a running application, with zero code changes and no profiler attached: these are INTERNAL spans, emitted by the Java agent for Spring Data repository calls, Hibernate session operations and transaction boundaries. Sort by "Avg (ms)" to see which method is slowest per call; sort by "Total Time (ms)" to see which one the application actually spends its life in. Repository methods that appear with very high call counts are the application-side other half of the N+1 pattern the panels above found in the SQL.</description>
+      <description>Method-level profiling of a running application, with zero code changes and no profiler attached: these are INTERNAL spans, emitted by the Java agent for Spring Data repository calls, Hibernate session operations and transaction boundaries. Service is included because it is not always decorative — Transaction.commit fires in all three data-owning services under the same span name, so without a Service column it would look like one method rather than three independent ones. Sort by "Avg (ms)" to see which method is slowest per call; sort by "Total Time (ms)" to see which one the application actually spends its life in. Repository methods that appear with very high call counts are the application-side other half of the N+1 pattern the panels above found in the SQL.</description>
       <table>
         <search>
           <query>
 index=k8s_ws_traces
 | search kind=SPAN_KIND_INTERNAL
 | eval ms=(end_time-start_time)/1000000
-| stats count as calls, avg(ms) as avg_ms, perc95(ms) as p95_ms, max(ms) as max_ms, sum(ms) as tot_ms by name
+| stats count as calls, avg(ms) as avg_ms, perc95(ms) as p95_ms, max(ms) as max_ms, sum(ms) as tot_ms by service.name name
 | eval avg_ms=round(avg_ms,3), p95_ms=round(p95_ms,3), max_ms=round(max_ms,2), tot_ms=round(tot_ms,1)
 | sort -avg_ms
 | head 15
-| rename name as "Application Method (span name)", calls as "Calls", avg_ms as "Avg (ms)", p95_ms as "P95 (ms)", max_ms as "Max (ms)", tot_ms as "Total Time (ms)"
-| table "Application Method (span name)" "Calls" "Avg (ms)" "P95 (ms)" "Max (ms)" "Total Time (ms)"
+| rename service.name as "Service", name as "Application Method (span name)", calls as "Calls", avg_ms as "Avg (ms)", p95_ms as "P95 (ms)", max_ms as "Max (ms)", tot_ms as "Total Time (ms)"
+| table "Service" "Application Method (span name)" "Calls" "Avg (ms)" "P95 (ms)" "Max (ms)" "Total Time (ms)"
           </query>
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
@@ -456,7 +530,7 @@ index=k8s_ws_traces
     </panel>
     <panel>
       <title>Error Rate by Route — Which Endpoint Is Actually Failing</title>
-      <description>Every span carries a status.code, so failures localise themselves without anyone knowing the application in advance. One route here sits at a 100% error rate while every other route sits at zero — that is a deliberately broken endpoint, not a degradation, and the shape of the result (total failure on exactly one route) is what tells you so. An aggregate error percentage across the whole service would have shown a mild, misleading few percent.</description>
+      <description>Every span carries a status.code and a service.name, so failures localise themselves down to a specific service's route without anyone knowing the application in advance — useful the moment two services happen to share a route name (as /actuator/health does across all five Spring Boot services). An aggregate error percentage across the whole fleet would blur which service actually needs attention.</description>
       <table>
         <search>
           <query>
@@ -464,11 +538,11 @@ index=k8s_ws_traces
 | rename "status.code" as sc, "attributes.http.route" as route
 | where kind=="SPAN_KIND_SERVER" AND isnotnull(route)
 | eval err=if(sc=="STATUS_CODE_ERROR",1,0)
-| stats count as requests, sum(err) as errors by route
+| stats count as requests, sum(err) as errors by service.name route
 | eval err_pct=round(100*errors/requests,1)
 | sort -errors -requests
-| rename route as "Route", requests as "Requests", errors as "Error Spans", err_pct as "Error Rate"
-| table "Route" "Requests" "Error Spans" "Error Rate"
+| rename service.name as "Service", route as "Route", requests as "Requests", errors as "Error Spans", err_pct as "Error Rate"
+| table "Service" "Route" "Requests" "Error Spans" "Error Rate"
           </query>
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
