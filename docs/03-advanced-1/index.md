@@ -1316,16 +1316,19 @@ intact before you trust anything above it.
 ### Application Trace Information v4.0.0
 
 The third dashboard in the app is the one this workshop has carried the longest. Open
-**Application Trace Information v4.0.0**, then set its two inputs at the top:
+**Application Trace Information v4.0.0** — its two inputs at the top:
 
-1. **Select your trace index** — choose `k8s_ws_traces`
-2. **Please search traces by time period** — it defaults to the last 15 minutes
+1. **Select your trace index** — defaults to `k8s_ws_traces`, so the top row (request
+   volume, latency percentiles, ingestion) and the service picker below it are already
+   populated when the dashboard opens. Change it only if you routed traces somewhere else.
+2. **Please search traces by time period** — defaults to the last 15 minutes
 
-!!! warning "It looks broken before you pick an index — it isn't"
-    On first load, every panel reads **"Search is waiting for input…"** and the service
-    dropdown shows **"Could not create search."** That is the normal unpopulated-token
-    state: the searches reference an index token that has no value yet. Choose your trace
-    index and it all populates. Nothing is wrong.
+!!! note "The trace list still needs a service"
+    The **Pick a service name** dropdown has no default of its own — everything below it
+    (trace counts, the trace table, span drill-down) reads **"Search is waiting for
+    input…"** until you choose one. That's intentional: this dashboard is built for
+    chasing one service's traces at a time, and defaulting it would silently scope every
+    later panel to whichever service happened to sort first.
 
 It is a trace *explorer* rather than a capstone: pick a service, set your own latency
 warning and poor thresholds, and drill from a trace list into a single trace's spans. Where

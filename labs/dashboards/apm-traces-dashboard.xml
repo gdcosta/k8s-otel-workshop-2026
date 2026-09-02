@@ -29,12 +29,14 @@ index="$traceIndex$" (sourcetype="httpevent" OR sourcetype="k8s:traces*")
       <fieldForLabel>index</fieldForLabel>
       <fieldForValue>index</fieldForValue>
       <search>
-        <query>| eventcount summarize=false index=* 
-| dedup index 
+        <query>| eventcount summarize=false index=*
+| dedup index
 | fields index</query>
         <earliest>-24h@h</earliest>
         <latest>now</latest>
       </search>
+      <default>k8s_ws_traces</default>
+      <initialValue>k8s_ws_traces</initialValue>
     </input>
     <input type="time" token="traceTime" searchWhenChanged="true">
       <label>Please search traces by time period</label>

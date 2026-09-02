@@ -201,10 +201,59 @@ here's where things stand:
   sufficient for every panel except the broken one above, whose failure has nothing to
   do with traffic volume.
 
-  **Not yet fixed — awaiting a scope decision from the user**: the RuntimeException
-  panel and the missing dropdown default are both small, real, and worth fixing before
-  calling the app "validated." The full AW1 service-breakdown rework is the bigger,
-  separately-tracked Phase 5 item and was not touched or committed to in this pass.
+  **Both small fixes shipped, 2026-09-02, app bumped 1.0.1 → 1.0.2.** User's call on
+  the RuntimeException panel: **remove it outright**, not repurpose it with a real
+  Eureka/`DiscoveryClient` transport error as suggested above — "the new petclinic app
+  doesn't perform a RuntimeException anymore, that dashboard is broken - it's
+  unfortunate, but we should just remove it." Whole `<row>` deleted from
+  `fw2-dashboard.xml`; FW2 §13's dashboard description and the `RuntimeException`
+  callout removed to match, replaced with a `!!! note` explaining what used to be there
+  and why (the migrated topology has no equivalent fault), pointing back to §9's own
+  checkpoint as the still-valid proof that multiline reassembly works.
+
+  Separately investigated, same session, the *other* half of the user's question — the
+  **`apm-traces-dashboard.xml` "Span Tree" panel** (`link_analysis_app.link_analysis`
+  viz, confirmed via `splunk display app link_analysis_app` still not installed on this
+  box). Full panel inventory: 15 panels total, only Span Tree depends on the missing
+  app; the "Number of Spans" single value sharing its panel, and all 14 other panels,
+  are unaffected and already validated with real data. This exact gap — and the "you
+  don't need it, AW2's Correlation dashboard already does this in plain SPL" call — was
+  already documented in AW1 §8's existing `!!! warning` block from an earlier pass, so
+  **no removal here**: unlike the RuntimeException panel (search returns nothing, no
+  explanation), Span Tree fails loudly with a self-explanatory red box and the doc
+  already walks the reader through exactly why, in place. Assessment delivered to the
+  user: the dashboard clearly retains its value (14/15 panels fully functional) and
+  should be kept as-is apart from the dropdown fix below.
+
+  `traceIndex` dropdown: added `<default>k8s_ws_traces</default>` +
+  `<initialValue>`, per the user's explicit authorization ("just create a default for
+  the pull down list to be the k8s_ws_traces index"). Live-verified two ways on
+  `3.145.97.98`: (1) REST-fetched the installed view XML and confirmed the string is
+  present; (2) confirmed the "Pick a service name" dropdown's own backing search
+  (which only fires once `$traceIndex$` has a value) returns real data — all six
+  services with counts — proving the default actually unblocks the chain, not just
+  that the XML parses. **Correction caught before it shipped**: my first draft of the
+  doc text claimed the default makes "every panel" populate on load; live-checked and
+  that's false — everything from the "Number of Traces" row down still depends on
+  `$serviceName$`, which deliberately has no default (defaulting it would silently
+  scope the trace list to whichever service sorts first). Doc now says precisely what
+  populates immediately (the top row + the service picker) versus what still needs a
+  service picked, and drops the old "it looks broken before you pick an index" warning
+  since that specific failure mode no longer occurs.
+
+  **Not yet done**: both dashboard screenshots (`fw2-dashboard.png`,
+  `apm-traces-dashboard.png`) are now stale — FW2's lost a panel, and the APM Traces
+  screenshot's drilled-in example is captioned as a `RuntimeException` trace, which
+  can't be reproduced in this topology anymore. Manifest still marks both
+  `status: verified` from before this round; they need retaking (Playwright, same
+  pipeline as every other doc screenshot) and, for APM Traces, a caption rewrite to
+  describe whatever real error trace the new screenshot actually drills into. No
+  Playwright/browser tooling was available in this pass to do it live.
+
+  **Still open**: whether "get the AW1 dashboards fixed" (the user's phrase) means the
+  small confirmed items above (done) or also commits to `aw1-dashboard.xml`'s bigger,
+  separately-tracked six-service breakdown rework (Phase 5, not started) — asked the
+  user directly rather than guessing given the size gap between the two readings.
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if

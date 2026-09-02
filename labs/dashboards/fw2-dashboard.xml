@@ -146,26 +146,6 @@ index=k8s_ws_petclinic_logs
 
   <row>
     <panel>
-      <title>Most Recent Errors &#8212; RuntimeException Stack Traces (Multiline Parsing in Action)</title>
-      <table>
-        <search>
-          <query>
-index=k8s_ws_petclinic_logs RuntimeException
-| sort -_time
-| head 15
-| table _time severity trace_id "service.name"
-          </query>
-          <earliest>$tr.earliest$</earliest>
-          <latest>$tr.latest$</latest>
-        </search>
-        <option name="drilldown">none</option>
-        <option name="wrap">true</option>
-      </table>
-    </panel>
-  </row>
-
-  <row>
-    <panel>
       <title>Index Routing Proof &#8212; One Log Stream Becomes Two (via the Pod Annotation)</title>
       <table>
         <search>

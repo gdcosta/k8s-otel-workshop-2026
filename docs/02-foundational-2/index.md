@@ -1704,9 +1704,9 @@ already have.
 
 ```bash
 cd ~/k8s_workshop
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.1.tgz
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.2.tgz
 sudo -i -u splunk /opt/splunk/bin/splunk install app \
-  "$PWD/k8s-ws-dashboards-1.0.1.tgz" -auth admin:Workshop2026!
+  "$PWD/k8s-ws-dashboards-1.0.2.tgz" -auth admin:Workshop2026!
 ```
 
 !!! success "No restart needed"
@@ -1762,9 +1762,18 @@ Open **Foundational Workshop 2 — What You Built**.
 The first half is the proof of your own pipeline, all backed by queries verified against
 live workshop data: Total Requests, Error Rate %, Distinct Routes, a request-volume
 timechart splitting 5xx from everything else, the severity/status breakdown that proves
-§11's OTTL transform, a live feed of the most recent `RuntimeException` stack traces — now
-single events instead of the scattered lines §9 fixed — and the index-routing proof from
-§10: one log stream, split in two.
+§11's OTTL transform, and the index-routing proof from §10: one log stream, split in two.
+
+!!! note "A sixth panel used to live here"
+    An earlier revision of this dashboard also fed a live table of `RuntimeException` stack
+    traces — the monolith this workshop's petclinic app was migrated from threw one at its
+    `/oups` endpoint. The migrated, six-service topology has no equivalent: every fault path
+    here surfaces as an HTTP status and a log-level change, not a Java exception with a stack
+    trace, so the panel searched for text that no longer occurs anywhere in the topology and
+    always came back empty. It has been removed rather than repurposed — §9's own checkpoint
+    (a handful of multi-line events instead of a flood of 1–2 line fragments) already proves
+    the multiline fix; nothing in this topology still throws the kind of exception that panel
+    was built to display.
 
 The second half asks what all this data is actually *worth*. The same Collector that ships
 your application logs is also shipping the `kube-apiserver` audit stream — a record of every
