@@ -855,11 +855,27 @@ here's where things stand:
   being true once `3.145.97.98` was provisioned for the FW1b work) and has been
   rewritten to reflect current reality.
 
-  **Next**: write this up as real doc content — replacing FW2 §7's "start JMeter in a
-  second terminal" teaching moment with deploying this instead, updating AW1 §1's
-  "start the load generator" step (Playwright's already running continuously by then,
-  nothing to start), and confirming AW2's own early sections still make sense once
-  JMeter is no longer assumed to be continuously running from FW2 onward. Not started.
+  **Shipped, 2026-09-02 (commit `3c86350`).** FW2 §7 now deploys the real Deployment
+  (script + YAML added as `labs/loadgen/*`, `versions.env` pinned per hard rule #1);
+  AW1 §1 became a confirmation step; AW2 §2/§4 updated where they credited JMeter as
+  the continuous source. Two real, silent assumptions surfaced and fixed while writing
+  this — both places that assumed continuous JMeter without ever starting it
+  themselves: **FW2 §8** ("start it again now if the earlier run finished") now starts
+  its own explicit run before the fault, and **AW2 §8** turned out to have the exact
+  same gap traced back to a JMeter start command in §2 several sections earlier — it
+  now starts its own run too, without altering the already-validated checkpoint
+  numbers in either place.
+
+  **A second, unrelated regression found and fixed in the same pass**: writing a new
+  `hubble observe` command for this content hit the same failure FW1b's own commands
+  turned out to already have — `hubble observe --namespace X --to-pod Y` now fails
+  outright on this cluster's Cilium/Hubble version (`"filters --to-pod and --namespace
+  cannot be combined"`), a real CLI behavior change from whatever version FW1b was
+  originally written against. Confirmed live before fixing: `--namespace` alone (no
+  `--to-pod`) still works fine, so only the 9 FW1b commands that combined the two
+  needed changing — drop `--namespace`, prefix the pod name directly instead
+  (`--to-pod petclinic/<pod>`), `--last N` instead of `-n N`. Fixed in a separate
+  commit (`83a6457`) from the Playwright doc changes that surfaced it.
 
 - **Cilium/Hubble telemetry into Splunk + an installable KPI dashboard — confirmed
   needed, 2026-09-02, sequenced after the Playwright work above, not before.**
