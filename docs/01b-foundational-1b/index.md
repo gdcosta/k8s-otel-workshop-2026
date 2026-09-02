@@ -256,8 +256,8 @@ kubectl get cnp discovery-server -n petclinic
 ### ✅ Checkpoint — `discovery-server` locked down cleanly
 
 ```bash
-kubectl -n kube-system exec ds/cilium -- hubble observe --namespace petclinic \
-  --to-pod discovery-server --verdict DROPPED -n 20
+kubectl -n kube-system exec ds/cilium -- hubble observe \
+  --to-pod petclinic/discovery-server --verdict DROPPED --last 20
 ```
 
 <details>
@@ -330,8 +330,8 @@ spec:
 ```bash
 kubectl apply -f config-server-netpol.yaml
 kubectl get cnp config-server -n petclinic
-kubectl -n kube-system exec ds/cilium -- hubble observe --namespace petclinic \
-  --to-pod config-server --verdict DROPPED -n 20
+kubectl -n kube-system exec ds/cilium -- hubble observe \
+  --to-pod petclinic/config-server --verdict DROPPED --last 20
 ```
 
 Same pass condition as before: `VALID True`, empty drop output.
@@ -410,8 +410,8 @@ spec:
 ```bash
 kubectl apply -f customers-service-netpol.yaml
 kubectl get cnp customers-service -n petclinic
-kubectl -n kube-system exec ds/cilium -- hubble observe --namespace petclinic \
-  --to-pod customers-service --verdict DROPPED -n 20
+kubectl -n kube-system exec ds/cilium -- hubble observe \
+  --to-pod petclinic/customers-service --verdict DROPPED --last 20
 ```
 
 ### 2.4 `vets-service` and `visits-service`
@@ -425,13 +425,13 @@ by `fromEndpoints`, kubelet by `fromEntities: [host]`), same DNS + `discovery-se
 ```bash
 kubectl apply -f vets-service-netpol.yaml
 kubectl get cnp vets-service -n petclinic
-kubectl -n kube-system exec ds/cilium -- hubble observe --namespace petclinic \
-  --to-pod vets-service --verdict DROPPED -n 20
+kubectl -n kube-system exec ds/cilium -- hubble observe \
+  --to-pod petclinic/vets-service --verdict DROPPED --last 20
 
 kubectl apply -f visits-service-netpol.yaml
 kubectl get cnp visits-service -n petclinic
-kubectl -n kube-system exec ds/cilium -- hubble observe --namespace petclinic \
-  --to-pod visits-service --verdict DROPPED -n 20
+kubectl -n kube-system exec ds/cilium -- hubble observe \
+  --to-pod petclinic/visits-service --verdict DROPPED --last 20
 ```
 
 ### 2.5 `api-gateway`
@@ -695,8 +695,8 @@ dropped at the CNI layer rather than rejected.
 In a second terminal, watch Hubble catch it in real time:
 
 ```bash
-kubectl -n kube-system exec ds/cilium -- hubble observe --namespace petclinic \
-  --from-pod visits-service --to-pod customers-service --verdict DROPPED -n 10
+kubectl -n kube-system exec ds/cilium -- hubble observe \
+  --from-pod petclinic/visits-service --to-pod petclinic/customers-service --verdict DROPPED --last 10
 ```
 
 Expect a line reading `Policy denied by denylist DROPPED` against the exact flow the `curl`
@@ -925,8 +925,8 @@ without it, you'll see the finding below live instead of just reading about it.
     dies at `api-gateway`'s own policy instead:
 
     ```bash
-    kubectl -n kube-system exec ds/cilium -- hubble observe --namespace petclinic \
-      --to-pod api-gateway --verdict DROPPED -n 10
+    kubectl -n kube-system exec ds/cilium -- hubble observe \
+      --to-pod petclinic/api-gateway --verdict DROPPED --last 10
     ```
 
     ```
@@ -1434,8 +1434,8 @@ Run the verification script:
     See section 5's second danger box — this is the `reserved:ingress` identity gap. Confirm
     with Hubble, then add `ingress` to `api-gateway`'s `fromEntities` list and re-apply:
     ```bash
-    kubectl -n kube-system exec ds/cilium -- hubble observe --namespace petclinic \
-      --to-pod api-gateway --verdict DROPPED -n 10
+    kubectl -n kube-system exec ds/cilium -- hubble observe \
+      --to-pod petclinic/api-gateway --verdict DROPPED --last 10
     ```
 
 ??? failure "A `CiliumNetworkPolicy` applied cleanly (`VALID: True`) but traffic still drops"
@@ -1443,8 +1443,8 @@ Run the verification script:
     nothing about whether the rule matches the traffic you actually have. Check the real
     source identity with Hubble before editing the policy:
     ```bash
-    kubectl -n kube-system exec ds/cilium -- hubble observe --namespace petclinic \
-      --to-pod <service> --verdict DROPPED -n 20 -o json | jq '.source.labels, .source.identity'
+    kubectl -n kube-system exec ds/cilium -- hubble observe \
+      --to-pod petclinic/<service> --verdict DROPPED --last 20 -o json | jq '.source.labels, .source.identity'
     ```
     If it comes back `reserved:host` where you expected a real pod identity (or vice versa),
     see section 1's danger box — Service-mediated traffic's identity is genuinely not
