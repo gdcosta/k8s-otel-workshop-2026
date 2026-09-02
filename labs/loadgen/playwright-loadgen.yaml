@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: playwright-loadgen
+  namespace: petclinic
+  labels:
+    app.kubernetes.io/name: playwright-loadgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: playwright-loadgen
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: playwright-loadgen
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: playwright-loadgen
+          image: mcr.microsoft.com/playwright/python:v1.62.0-noble
+          # The base image bundles Chromium/Firefox/WebKit + OS deps at
+          # /ms-playwright (PLAYWRIGHT_BROWSERS_PATH), matching this exact
+          # tag's version — but NOT the `playwright` pip package itself.
+          # Confirmed live: `pip install playwright==1.62.0` here reuses the
+          # already-installed browser (no re-download, ~seconds) rather than
+          # fetching a fresh one, because the version pin matches the tag
+          # exactly. This is a startup step, not a custom image build.
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip3 install --quiet --no-cache-dir --root-user-action=ignore playwright==1.62.0
+              exec python3 /scripts/petclinic_loadgen.py
+          env:
+            - name: PETCLINIC_URL
+              value: "http://${WS_USER}-petclinic-srv.petclinic.svc.cluster.local:8080"
+            - name: CONCURRENCY
+              value: "5"
+            - name: PAUSE_MIN
+              value: "2"
+            - name: PAUSE_MAX
+              value: "5"
+          volumeMounts:
+            - name: loadgen-script
+              mountPath: /scripts/petclinic_loadgen.py
+              subPath: petclinic_loadgen.py
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+      volumes:
+        - name: loadgen-script
+          configMap:
+            name: petclinic-loadgen-script

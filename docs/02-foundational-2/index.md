@@ -539,42 +539,214 @@ response time in microseconds, which becomes useful shortly.
 
 You have one line per request now — but only for the requests you make by hand. Everything
 from here on (multiline stack traces, annotations, transforms, and all of both Advanced
-workshops) works far better with steady, repeatable traffic. So let's set up Apache JMeter
-once and reuse it for the rest of the series.
+workshops) works far better with steady, repeatable traffic. From here on that traffic comes
+from an always-on Playwright deployment living in the cluster — not a second terminal you
+have to keep alive.
 
-!!! abstract "Learning moment — why generate load at all"
+!!! abstract "Learning moment — why a real browser, not just a load-testing tool"
     Observability tooling only shows you what actually happened. With no traffic there are
     no application logs to transform, no error rates to read, and no traces to follow.
 
-    The test plan below hits the same REST endpoints the Angular SPA calls — list owners,
-    browse vets, view an owner, edit them, add a visit — captured from a real browser
-    session against this exact deployment, not guessed from source. There is no built-in
-    error sampler this time: the microservices topology has no `/oups`, and the fault
-    you'll use instead lives outside the test plan entirely — see step 8.
+    JMeter can generate that traffic — and still does, later in this module and again in
+    Advanced Workshop #2, for exercises that specifically need it (more on that below). But
+    a real headless browser gets you two things from the same running process: it drives the
+    same journey through the app — list owners, browse vets, view an owner, edit them, add a
+    visit — captured from a real browser session against this exact deployment, not guessed
+    from source; **and**, once Advanced Workshop #2 injects the RUM snippet into
+    `api-gateway`'s served page, that same process starts producing real RUM data with
+    **zero redeployment** — because it's already a real browser executing real JavaScript on
+    every page it visits. `curl` and JMeter can never do that; they don't run a page's
+    JavaScript at all. One deployment now saves standing up a second load source three
+    modules from now.
 
-### Open a second terminal
+### No custom image — pull the official Playwright image and mount the script
 
-**JMeter runs in the foreground and won't give your prompt back.** You'll want one terminal
-running load and another to keep working in.
+The official `mcr.microsoft.com/playwright/python` image already bundles Chromium and every
+OS dependency it needs. Mounting the script via a `ConfigMap` + `subPath` volume — the same
+pattern Advanced Workshop #2's `inject-rum-snippet.sh` uses for the RUM snippet itself — means
+this stays a prebuilt image with a script dropped in, not a custom-built container. It would
+otherwise be the first Dockerfile anywhere in this workshop.
 
 ```bash
-ssh -i <your-key.pem> splunk@<your-instance>     # echo $PUB_DNS on the host for the name
+mkdir -p ~/k8s_workshop/loadgen && cd ~/k8s_workshop/loadgen
+
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/loadgen/petclinic_loadgen.py
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/loadgen/playwright-loadgen.yaml
+
+sed -i "s|\${WS_USER}|$WS_USER|g" playwright-loadgen.yaml
+
+kubectl create configmap petclinic-loadgen-script -n petclinic \
+  --from-file=petclinic_loadgen.py=petclinic_loadgen.py
 ```
 
-!!! tip "If your session keeps timing out"
-    Some hardened hosts log you out after ~15 minutes at an idle prompt, which will kill a
-    running test. Use `tmux` so the run survives a disconnect:
+`petclinic_loadgen.py` loops five concurrent async browser contexts inside one Chromium
+process forever (SIGTERM-aware, for a clean shutdown), each pausing 2–5s between passes
+through the app — approximating JMeter's `-Jthreads=5` without paying for five separate
+browser processes. It targets `api-gateway`'s real in-cluster ClusterIP Service directly,
+not the NodePort/Ingress paths built for external access — this pod is a real in-cluster
+caller, with no reason to route through the same access path a human uses.
 
-    ```bash
-    tmux new -s load          # start (or: tmux attach -t load to come back)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: playwright-loadgen
+  namespace: petclinic
+  labels:
+    app.kubernetes.io/name: playwright-loadgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: playwright-loadgen
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: playwright-loadgen
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: playwright-loadgen
+          image: mcr.microsoft.com/playwright/python:v1.62.0-noble
+          # The base image bundles Chromium/Firefox/WebKit + OS deps at
+          # /ms-playwright (PLAYWRIGHT_BROWSERS_PATH), matching this exact
+          # tag's version — but NOT the `playwright` pip package itself.
+          # Confirmed live: `pip install playwright==1.62.0` here reuses the
+          # already-installed browser (no re-download, ~seconds) rather than
+          # fetching a fresh one, because the version pin matches the tag
+          # exactly. This is a startup step, not a custom image build.
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip3 install --quiet --no-cache-dir --root-user-action=ignore playwright==1.62.0
+              exec python3 /scripts/petclinic_loadgen.py
+          env:
+            - name: PETCLINIC_URL
+              value: "http://${WS_USER}-petclinic-srv.petclinic.svc.cluster.local:8080"
+            - name: CONCURRENCY
+              value: "5"
+            - name: PAUSE_MIN
+              value: "2"
+            - name: PAUSE_MAX
+              value: "5"
+          volumeMounts:
+            - name: loadgen-script
+              mountPath: /scripts/petclinic_loadgen.py
+              subPath: petclinic_loadgen.py
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+      volumes:
+        - name: loadgen-script
+          configMap:
+            name: petclinic-loadgen-script
+```
+
+!!! note "`pip install` in a container `command`, not a Dockerfile — confirmed a real dead end first"
+    The first attempt just ran the script directly against the pulled image and hit
+    `ModuleNotFoundError: No module named 'playwright'` — confirmed live via a throwaway pod.
+    The image bundles the *browsers*, not the Python package that drives them. Installing it
+    with `pip3 install playwright==1.62.0` in the container's own `command`, before launching
+    the script, fixes it without a Dockerfile: it's a startup step, not an image build, so the
+    "pull an official image, mount a script" pattern still holds. Pinning the pip version to
+    match the image tag exactly (`v1.62.0-noble` ↔ `playwright==1.62.0`) matters beyond just
+    reproducibility — confirmed live, a matching version reuses the image's pre-baked browsers
+    in seconds; a mismatch would trigger Playwright's own browser download instead.
+
+```bash
+kubectl apply -f playwright-loadgen.yaml
+kubectl rollout status deployment/playwright-loadgen -n petclinic --timeout=120s
+```
+
+!!! danger "A new pod is a new Cilium identity — `api-gateway`'s policy doesn't know it yet"
+    `api-gateway`'s `CiliumNetworkPolicy` from [FW #1b §2.5](../01b-foundational-1b/index.md#25-api-gateway)
+    only allows ingress from `fromEntities: [host, world, ingress]` — none of which cover an
+    arbitrary new pod's own identity. Expect the pod's own log to show exactly this the moment
+    it starts:
+
+    ```
+    2026-09-02 05:52:35,725 [worker-0] iteration 0 failed: Page.goto: Timeout 30000ms exceeded.
+    Call log:
+      - navigating to "http://wsuser01-petclinic-srv.petclinic.svc.cluster.local:8080/", waiting until "networkidle"
     ```
 
-    Detach with ++ctrl+b++ then ++d++. The test keeps running.
+    (`wsuser01` is this recording's own `$WS_USER` — yours reads your own username instead.)
+
+    Confirmed live, not a network glitch — every one of the five workers hits this on its
+    first pass. Fix it with one new `fromEndpoints` entry, matched on `playwright-loadgen`'s
+    own label:
+
+    ```bash
+    kubectl patch cnp api-gateway -n petclinic --type=json -p='[
+      {"op": "add", "path": "/spec/ingress/-", "value": {
+        "fromEndpoints": [{"matchLabels": {"app.kubernetes.io/name": "playwright-loadgen"}}],
+        "toPorts": [{"ports": [{"port": "8080", "protocol": "TCP"}]}]
+      }}
+    ]'
+    ```
+
+    Confirm the drops actually stop, not just that the patch applied:
+
+    ```bash
+    kubectl -n kube-system exec ds/cilium -- hubble observe \
+      --to-pod petclinic/playwright-loadgen --verdict DROPPED --last 10
+    ```
+
+    No output is the pass — confirmed live, zero drops in the minutes following the fix,
+    against continuous drops before it. This is the exact same pattern FW #1b §2 built —
+    Service-mediated traffic still needs an explicit allow for the calling pod's real
+    identity — just arriving for the first time against a pod FW #1b never knew existed.
+
+### ✅ Checkpoint — traffic flowing, no restarts
+
+```bash
+kubectl get pods -n petclinic -l app.kubernetes.io/name=playwright-loadgen
+kubectl logs -n petclinic deploy/playwright-loadgen --tail=5
+```
+
+<details>
+<summary>Expected output</summary>
+
+```
+NAME                                  READY   STATUS    RESTARTS   AGE
+playwright-loadgen-fc47b548-whj8g     1/1     Running   0          16m
+```
+
+```
+2026-09-02 06:06:22,652 [worker-0] completed 100 iterations (ok=466 err=24 total)
+2026-09-02 06:06:26,588 [worker-1] completed 100 iterations (ok=470 err=24 total)
+2026-09-02 06:06:32,242 [worker-2] completed 100 iterations (ok=474 err=24 total)
+2026-09-02 06:06:42,042 [worker-4] completed 100 iterations (ok=477 err=24 total)
+2026-09-02 06:06:47,991 [worker-3] completed 100 iterations (ok=482 err=24 total)
+```
+
+The pod name's random suffix will be different for you. What matters: `RESTARTS` at `0`, and
+`err` **not climbing** — 24 is the fixed count of failures from before the `CiliumNetworkPolicy`
+fix above, frozen the moment traffic started flowing; `ok` keeps climbing on every subsequent
+log line. Confirmed live: real sustained operation, 0 restarts, real write-path traffic
+reaching Splunk as server-side spans (580× `PUT`→204 owner-updates, 580× `POST`→201
+new-visits, over one 12-minute window) — a real browser round-tripping full forms, not a
+sampler replaying a fixed payload.
+</details>
+
+### JMeter isn't going away — it becomes a deliberately-triggered tool
+
+Playwright is what runs continuously from here on, unattended, for the rest of this module and
+most of both Advanced workshops. JMeter stays installed and available for two specific
+exercises later in the series that need a *controllable, countable* load run — start it, run a
+fault window, read its own exact tally afterward — rather than a background pod's steadily
+climbing counters: step 8 below, and Advanced Workshop #2's own closing exercise. Install it
+now, so it's ready when you need it.
 
 ### Install JMeter
 
 ```bash
-source ~/.workshop-env                  # new terminal, so load the variables again
 mkdir -p ~/k8s_workshop/jmeter && cd ~/k8s_workshop/jmeter
 
 curl -fsSLO https://archive.apache.org/dist/jmeter/binaries/apache-jmeter-5.6.3.tgz
@@ -585,8 +757,8 @@ rm apache-jmeter-5.6.3.tgz
 
 !!! note "Stock JMeter, no plugins"
     Earlier versions of this workshop used a custom 111 MB JMeter build. It isn't needed —
-    this test plan uses only standard HTTP samplers. Advanced Workshop #2 handles
-    browser-based testing separately, with Playwright.
+    this test plan uses only standard HTTP samplers. Advanced Workshop #2's own RUM section
+    uses Playwright too, driven by hand rather than this always-on deployment.
 
 ### Get the test plan
 
@@ -610,7 +782,7 @@ Both files must sit in the same directory — the plan reads the CSV by relative
     desynchronised after the third iteration and made ~90% of "add visit" requests fail
     with HTTP 500. The CSV supplies only real, verified pairs.
 
-### Run it
+### Confirm it runs — you won't leave it running yet
 
 ```bash
 ./apache-jmeter-5.6.3/bin/jmeter -n \
@@ -646,10 +818,11 @@ Stop early with ++ctrl+c++ if you need to. To run longer, raise the loop count:
   -Jloops=500 -l results.jtl
 ```
 
-!!! tip "Leave it running"
-    Switch back to your first terminal and carry on with the workshop while load continues.
-    Every remaining step in this module benefits from live traffic. If the run finishes
-    before you do, just start it again.
+!!! tip "Don't leave this one running"
+    Unlike earlier revisions of this module, there's no reason to babysit a JMeter terminal
+    for the rest of this module — Playwright's already covering that continuously. Let this
+    confirmation run finish (or ++ctrl+c++ it) and move on; step 8 tells you exactly when to
+    start JMeter again, deliberately, for a reason.
 
 ---
 
@@ -663,8 +836,20 @@ Stop early with ++ctrl+c++ if you need to. To run longer, raise the loop count:
     that depend on it. That's an infrastructure action, not an HTTP request, so it happens
     in a second terminal while JMeter keeps running in the first.
 
-With JMeter running continuously (start it again now if the earlier run finished), open a
-second terminal and take `visits-service` down for a minute:
+This is exactly the exercise step 7 flagged JMeter for: a controllable, countable run whose
+own final summary line you can read directly, rather than diffing Playwright's steadily
+climbing counters over a window. Start one now — the same command step 7 already had you
+confirm, whose ~2-minute run time comfortably spans the fault window below:
+
+```bash
+cd ~/k8s_workshop/jmeter
+./apache-jmeter-5.6.3/bin/jmeter -n -t petclinic_test_plan.jmx \
+  -JPETCLINIC_HOST=minikube -JPETCLINIC_PORT=30000 \
+  -l results.jtl
+```
+
+Leave that running in this terminal. Open a **second** terminal (`source ~/.workshop-env`
+there too) and take `visits-service` down for a minute:
 
 ```bash
 kubectl scale deployment/visits-service -n petclinic --replicas=0
@@ -681,9 +866,10 @@ kubectl wait --for=condition=available deployment/visits-service -n petclinic --
 
 ### ✅ Checkpoint — JMeter's own number
 
-Look at the terminal running JMeter. Two of this test plan's seven samplers touch
-`visits-service` — "Visits for pet" and "New visit" — so **2/7 of all traffic fails while
-it's down**, a **28.57%** ceiling if every sample landed exactly on that ratio:
+Switch back to the first terminal and wait for the run to finish. Two of this test plan's
+seven samplers touch `visits-service` — "Visits for pet" and "New visit" — so **2/7 of all
+traffic fails while it's down**, a **28.57%** ceiling if every sample landed exactly on that
+ratio:
 
 ```
 summary =    315 in 00:01:10 = 4.5/s ... Err:    90 (28.57%)

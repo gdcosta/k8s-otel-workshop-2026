@@ -18,8 +18,7 @@ Background reading: [Why observability](../concepts/observability.md)
 
 ## Session variables
 
-Every command below uses these. Load them into **each** terminal you use — including the
-second one you'll open for load testing:
+Every command below uses these. Load them into **each** terminal you use:
 
 ```bash
 source ~/.workshop-env
@@ -67,82 +66,70 @@ echo "$WS_USER on $LOCAL_IP ($PUB_DNS)"
 
 ---
 
-## 1. Start the load generator first
+## 1. Confirm the load generator is running
 
 Metrics and traces are only interesting against sustained traffic. A chart of an idle
-service is a flat line, and a service map with no requests has nothing to draw. So start
-load **before** turning anything on, and leave it running for the whole module.
-
-In a **second terminal**, as the `splunk` user:
+service is a flat line, and a service map with no requests has nothing to draw. [FW #2 §7](../02-foundational-2/index.md#7-set-up-the-load-generator)
+already deployed something that has been running unattended since then — the Playwright
+load generator, in its own pod, no terminal to babysit. Confirm it's still there and still
+producing traffic before turning anything on:
 
 ```bash
 source ~/.workshop-env
-cd ~/k8s_workshop/jmeter
-
-./apache-jmeter-5.6.3/bin/jmeter -n \
-  -t petclinic_test_plan.jmx \
-  -JPETCLINIC_HOST=minikube \
-  -JPETCLINIC_PORT=30000 \
-  -Jloops=1500 \
-  -Jduration=7200 \
-  -l results.jtl
+kubectl get pods -n petclinic -l app.kubernetes.io/name=playwright-loadgen
+kubectl logs -n petclinic deploy/playwright-loadgen --tail=5
 ```
 
-That's the same plan you set up in
-[FW #2, step 7](../02-foundational-2/index.md#7-set-up-the-load-generator).
+<details>
+<summary>Expected output</summary>
 
-!!! note "Why both `-Jloops` and `-Jduration`"
-    The thread group has **two independent ceilings** and stops at whichever is reached
-    first: the loop count running out, or `-Jduration` elapsing. The duration is measured
-    from test start, not per thread, so it caps the whole run. Raise both together or
-    neither, so one flag doesn't silently become a no-op.
+```
+NAME                                  READY   STATUS    RESTARTS   AGE
+playwright-loadgen-fc47b548-whj8g     1/1     Running   0          16m
+```
 
-    | Flag | Default | Sets |
-    |---|---|---|
-    | `-JPETCLINIC_HOST` | `minikube` | target host |
-    | `-JPETCLINIC_PORT` | `30000` | target port |
-    | `-Jloops` | `50` | iterations per thread |
-    | `-Jthreads` | `5` | concurrent users |
-    | `-Jramp` | `10` | ramp-up seconds |
-    | `-Jduration` | `3600` | hard cap, seconds |
+```
+2026-09-02 06:06:22,652 [worker-0] completed 100 iterations (ok=466 err=24 total)
+2026-09-02 06:06:26,588 [worker-1] completed 100 iterations (ok=470 err=24 total)
+2026-09-02 06:06:32,242 [worker-2] completed 100 iterations (ok=474 err=24 total)
+```
 
-    On a smaller instance, drop `-Jthreads` to 2 or 3. What the charts need is *sustained*
-    traffic, not volume.
+`RESTARTS` at `0` and `ok` climbing between two `kubectl logs` calls a few seconds apart is
+the actual proof — a pod that's merely `Running` could still be stuck. Nothing to start:
+if it's healthy, move on.
+</details>
 
-!!! danger "If load stops, the rest of this module looks like broken telemetry"
-    When JMeter finishes, the only traffic left is kube-probe hitting `/actuator/health`
-    every five seconds. Step 6's endpoint query then returns a single `/actuator/health`
-    row, step 7's charts flatten, and **nothing reports an error anywhere** — it is
-    indistinguishable from a Collector that isn't collecting. This happened during testing
-    and cost real time.
+!!! danger "If the pod stops, the rest of this module looks like broken telemetry"
+    With no traffic, the only thing left is kube-probe hitting `/actuator/health` every five
+    seconds. Step 6's endpoint query then returns a single `/actuator/health` row, step 7's
+    charts flatten, and **nothing reports an error anywhere** — it is indistinguishable from
+    a Collector that isn't collecting. This happened during testing (with JMeter, before this
+    module moved to Playwright) and cost real time.
 
-    Before you debug any empty or thin result in this module, look at the load terminal
-    first.
+    Before you debug any empty or thin result in this module, check the pod first — `kubectl
+    get pods -n petclinic -l app.kubernetes.io/name=playwright-loadgen` and `kubectl describe`
+    it if it isn't `Running`, or redeploy from [FW #2 §7](../02-foundational-2/index.md#7-set-up-the-load-generator)'s
+    `playwright-loadgen.yaml` if it's gone entirely.
 
-!!! tip "Use `tmux` if your session times out"
-    ```bash
-    tmux new -s load        # detach: Ctrl-b then d
-    ```
-    On hardened hosts an idle prompt logs you out after ~15 minutes, which would kill the
-    run halfway through the module.
-
-!!! note "This plan has no built-in errors — that's deliberate, and different from earlier revisions"
+!!! note "This traffic has no built-in errors — that's deliberate, and different from earlier revisions"
     Earlier revisions of this workshop hit a single monolith's `/oups` endpoint on purpose,
-    for a steady 1-in-13 error rate. The current plan targets [FW #2's seven REST
-    samplers](../02-foundational-2/index.md#7-set-up-the-load-generator) across the real
-    microservice API — list/detail/edit/visit flows — and a clean run against a healthy
-    cluster is expected to complete at or near **0% errors**. There is no equivalent of
-    `/oups` baked into this plan.
+    for a steady 1-in-13 error rate. The Playwright load generator drives the same real
+    journey through the microservice API — list/detail/edit/visit flows — that [FW #2's test
+    plan](../02-foundational-2/index.md#7-set-up-the-load-generator) does, and a clean run
+    against a healthy cluster is expected to complete at or near **0% errors**. There is no
+    equivalent of `/oups` baked into either.
 
     If you want the failure case AW #2's closing exercise needs — a real error rate to chase
-    through APM, logs, and JMeter's own console, and to watch three tools disagree on the
-    exact percentage for legitimate reasons — see [FW #2 §8, "Cause a real failure, and find
-    it in Splunk"](../02-foundational-2/index.md#8-cause-a-real-failure-and-find-it-in-splunk):
+    through APM, logs, and a load tool's own console, and to watch three tools disagree on
+    the exact percentage for legitimate reasons — see [FW #2 §8, "Cause a real failure, and
+    find it in Splunk"](../02-foundational-2/index.md#8-cause-a-real-failure-and-find-it-in-splunk):
     scaling `visits-service` to zero replicas produces a real, reproducible ~28% failure
     rate from Spring Cloud LoadBalancer's own fast-fail path, with the discrepancy between
     JMeter's, api-gateway's, and Splunk's counts already walked through there. Re-run that
     scale-to-zero here if you want AW1's traces and dashboards to show the same failure
-    mode this module's screenshots do.
+    mode this module's screenshots do — Playwright's own continuous traffic shows the same
+    failure signature too, since two of its journey's steps hit `visits-service` exactly
+    like two of JMeter's seven samplers do.
 
 `curl` still has its place for a quick "is it up?" check:
 
@@ -150,8 +137,8 @@ That's the same plan you set up in
 curl -s -o /dev/null -w '%{http_code}\n' http://minikube:30000/
 ```
 
-But anything you intend to read on a chart needs JMeter behind it — a handful of curls
-produces a spike, not a signal.
+But anything you intend to read on a chart needs the load generator behind it — a handful of
+curls produces a spike, not a signal.
 
 !!! tip "Watch the application in a browser while load runs"
     PetClinic is a NodePort on minikube's internal IP, so it isn't reachable from your
@@ -601,8 +588,12 @@ in-cluster Service DNS name, which every pod on every node can reach the same wa
 regardless of which node it lands on. That removes an entire failure mode earlier revisions
 of this module had to troubleshoot around.
 
-Check your load generator from step 1 is still running — the next checkpoint needs live
-traffic. If it has finished, start it again.
+Check your load generator pod from step 1 is still running — the next checkpoint needs live
+traffic:
+
+```bash
+kubectl get pods -n petclinic -l app.kubernetes.io/name=playwright-loadgen
+```
 
 ### ✅ Checkpoint — JVM metrics
 
@@ -934,7 +925,8 @@ the same endpoint regardless of which owner the request happened to be about.
 
 `/actuator/health` dominates the count here because kube-probe hits it every five seconds
 on every pod, all the time — that's expected, not a sign load isn't reaching the app; look
-for the routes JMeter actually drives (`/owners`, `/vets`, and so on) to judge real traffic.
+for the routes the load generator actually drives (`/owners`, `/vets`, and so on) to judge
+real traffic.
 </details>
 
 !!! note "Six rows of service.name now, not two"
@@ -943,13 +935,14 @@ for the routes JMeter actually drives (`/owners`, `/vets`, and so on) to judge r
     `OTEL_SERVICE_NAME` each reports, and this query needs no per-service edit as services
     are added or removed from the annotation. `discovery-server` and `config-server` will
     show mostly Eureka/`PUT` and `/actuator/health` traffic rather than user-facing routes
-    — that's expected; they're infrastructure services, not ones JMeter's own samplers
-    target directly.
+    — that's expected; they're infrastructure services, not ones the Playwright pod's own
+    journey targets directly.
 
 !!! warning "If the only row is `/actuator/health`, your load generator has stopped"
     kube-probe hits `/actuator/health` every five seconds, so that one route keeps arriving
     forever. A result with nothing but `/actuator/health` means no *user* traffic is
-    reaching the app — go back to step 1 and restart JMeter, then wait a minute.
+    reaching the app — go back to step 1, check the pod, and redeploy it from [FW #2
+    §7](../02-foundational-2/index.md#7-set-up-the-load-generator) if it's gone.
 
     This is worth knowing because it looks exactly like broken trace collection, in the one
     step whose whole purpose is proving trace collection works. It is the failure that

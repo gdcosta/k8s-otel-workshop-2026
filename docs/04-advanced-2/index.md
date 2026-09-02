@@ -242,13 +242,18 @@ kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
   -o go-template='{{index .data "relay"}}' | grep -E '^\s+signalfx'
 ```
 
-Start the load test in your second terminal — the rest of this module needs traffic:
+The rest of this module needs traffic — confirm the Playwright load generator from [FW #2
+§7](../02-foundational-2/index.md#7-set-up-the-load-generator) is still running rather than
+starting anything new; it's been running unattended since then:
 
 ```bash
-cd ~/k8s_workshop/jmeter
-./apache-jmeter-5.6.3/bin/jmeter -n -t petclinic_test_plan.jmx \
-  -JPETCLINIC_HOST=minikube -JPETCLINIC_PORT=30000 -Jloops=500 -l results.jtl
+kubectl get pods -n petclinic -l app.kubernetes.io/name=playwright-loadgen
+kubectl logs -n petclinic deploy/playwright-loadgen --tail=5
 ```
+
+`RESTARTS` at `0` and the `ok` counter climbing between two log checks a few seconds apart is
+the proof it's live. If it's gone, redeploy it from that same section's `playwright-loadgen.yaml`
+before continuing.
 
 ---
 
@@ -713,9 +718,11 @@ eventually catalogues.
          https://localhost:8089/services/authentication/users/loc_svc -d "locked-out=0"
        ```
        and update the password stored in the connection, or it re-locks within minutes.
-    2. **Is load running?** Generation reads *past related content queries*. With JMeter
-       stopped, the only traffic is kube-probe health checks, which produce access-log
-       lines with no `trace_id` and nothing to correlate an APM service against.
+    2. **Is load running?** Generation reads *past related content queries*. With the
+       Playwright load generator pod not running, the only traffic is kube-probe health
+       checks, which produce access-log lines with no `trace_id` and nothing to correlate
+       an APM service against — `kubectl get pods -n petclinic -l
+       app.kubernetes.io/name=playwright-loadgen` confirms it either way.
     3. **Have you actually pivoted from APM to Logs?** That pivot is what creates the
        related-content query the generator learns from.
 
@@ -1518,6 +1525,19 @@ subtle story in APM specifically, which is the actual point of this exercise.
     `ingressDeny` takes precedence over that existing real allow, the same precedence
     rule FW #1b §3 demonstrates.
 
+This checkpoint's own table below reads a real JMeter number, same reason as [FW #2
+§8](../02-foundational-2/index.md#8-cause-a-real-failure-and-find-it-in-splunk) — Playwright's
+background pod is what's been running continuously since FW #2, but this exercise needs a
+run you can point JMeter's own tally at, not counters to diff over a window. Start one now,
+in a second terminal, long enough to outlast however long you spend on the four views below:
+
+```bash
+cd ~/k8s_workshop/jmeter
+./apache-jmeter-5.6.3/bin/jmeter -n -t petclinic_test_plan.jmx \
+  -JPETCLINIC_HOST=minikube -JPETCLINIC_PORT=30000 \
+  -Jloops=1500 -l results.jtl
+```
+
 Apply the deny rule — this is a **new** policy object, distinct from FW #1b's own
 `demo-deny-visits-to-customers.yaml`:
 
@@ -1596,8 +1616,10 @@ produces applies here. Now work the four views:
    for the same ~30 seconds before failing, rather than JMeter's or Playwright's
    scripted version of it.
 
-Remove the deny policy when you're done — this restores the real, six-service lockdown
-FW #1b built, with nothing left over:
+Stop JMeter (++ctrl+c++) once you're done working through the four views above — the
+checkpoint below reads its `results.jtl`, window-scoped to the fault, not the raw run total.
+Then remove the deny policy — this restores the real, six-service lockdown FW #1b built,
+with nothing left over:
 
 ```bash
 kubectl delete -f demo-deny-api-gateway-to-visits.yaml
