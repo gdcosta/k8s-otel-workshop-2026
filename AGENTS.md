@@ -603,13 +603,50 @@ here's where things stand:
     `nodeSelector` patch (delete blocked by the classifier both times it was tried),
     `DESIRED 0 / CURRENT 0`.
 
-    **FW1b's live spike (Parts 1–6, this whole decision block) is now complete and
-    fully validated.** What's left is turning this into actual doc content: FW1 §2's
-    small CNI-choice footprint, the new `docs/01b-foundational-1b/index.md` module
-    itself (NetworkPolicy design walkthrough + the deliberate-failure demo + Ingress
-    setup), FW1 §7's tunnel-target update, and the facilitator guide's timing/format
-    table rewrite already flagged above. Nothing from this spike has touched the repo
-    yet — every command above ran on `3.145.97.98` only.
+    **FW1b's live spike (Parts 1–6, this whole decision block) is complete, fully
+    validated, and now shipped as real doc content** — `docs/01b-foundational-1b/index.md`,
+    the FW1 §2 CNI swap, `scripts/verify-fw1b.sh`, and the mkdocs nav/facilitator-guide
+    updates all committed and pushed (`d1b4cd1`).
+
+  **AW2 §8's fault scenario, decided 2026-09-01: replace the `visits-service`
+  scale-to-zero fault with the same `CiliumNetworkPolicy` deny FW1b already built and
+  tested, scoped to AW2 §8 only — FW2 §8 and AW1's reference to scale-to-zero stay
+  unchanged.** User's own observation: the "alongside, as a second lens" framing this
+  was originally recorded under (see above) has a real problem specific to AW2 —
+  scale-to-zero makes `visits-service` disappear from Observability Cloud's service
+  map entirely (zero data, not an error state), which reads as confusing rather than
+  instructive. The network-policy deny leaves the pod healthy and registered, so the
+  service stays on the map and — pending live confirmation — the *edge* between the
+  caller and `visits-service` should show as errored instead, a more legible failure
+  signal. **Scoped to AW2 §8 only, not a full replacement**: FW2 §8 has no service-map
+  concept at all (pure Splunk log search, pre-O11y-Cloud) and AW1 has no APM either
+  (Splunk Enterprise dashboards only) — neither has the problem being solved, so
+  neither needed to change. Explicitly confirmed with the user rather than assumed.
+
+  **Real, not yet live-verified, thing this should fix**: stage 5's run-through found
+  the *current* fault has a blind spot — APM shows a flat 0% error rate against a real
+  20% JMeter-measured failure rate, because Spring Cloud LoadBalancer fails before any
+  HTTP call is attempted, so no CLIENT span ever exists to mark as an error. The
+  Cilium deny genuinely attempts the connection before the packet is dropped, so it
+  should produce a real, APM-visible failed span this time — worth confirming live,
+  not assuming, same as everything else in this project.
+
+  **Real, flagged-in-advance risk to watch for while building this out**: FW1b's
+  six-service `CiliumNetworkPolicy` lockdown was designed against the traffic graph
+  that existed *before* FW2's Collector joined the picture. Once the Collector
+  DaemonSet is deployed (OTLP from app pods in `petclinic`, HEC to the Splunk
+  Enterprise host itself), that's genuinely new traffic the existing policies were
+  never tested against — expect this to need a real, live-diagnosed extension to the
+  policy set, the same way enabling Ingress needed the `reserved:ingress` fix. Treat
+  any Cilium-caused Collector connectivity gap as a real finding to fix and document,
+  not a surprise to work around quietly.
+
+  **In progress**: continuing the same live spike on `3.145.97.98` (which already has
+  00-setup, FW1, and FW1b validated) through FW2 → AW1 → AW2 §1–§7, so §8's
+  reconciliation exercise can be rewritten from real captured numbers against the full
+  observability stack, not guessed. Needs real `~/.o11y-token`/`~/.rum-token` on this
+  box before AW2 can be tested — neither exists there yet, asked the user for them
+  rather than attempting to source or fabricate credentials.
 
 - **Always-on Playwright load generator — approved direction, 2026-09-01, explicitly
   after the Cilium phase above, not before.** Supersedes the "in-cluster load
