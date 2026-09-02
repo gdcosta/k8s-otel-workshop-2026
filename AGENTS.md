@@ -918,14 +918,69 @@ here's where things stand:
   capstone-dashboards section — exact spot to be decided once real KPI candidates are
   confirmed, not guessed now.
 
-  **Live discovery spike dispatched, 2026-09-02, on `3.145.97.98`** — genuinely new
-  territory, same risk profile as the original Cilium/FW1b spike (expect real dead
-  ends, not routine work): enable Hubble flow-log export and Hubble/Cilium metrics via
-  Helm (neither is on right now, confirmed), wire the OTel Collector to ingest both
-  (`k8s_ws_logs` for flow logs alongside the audit log, `k8s_ws_metrics` for the
-  metrics, matching each index's existing role — open to reasoned deviation), confirm
-  real data lands in Splunk, and do a first-pass exploration of what's actually there
-  to inform the dashboard later. Not yet complete as of this note.
+  **Live discovery spike complete, 2026-09-02, on `3.145.97.98` — all five parts done
+  with real, verified data, not just config that applied cleanly.**
+
+  - **Flow-log export** (Part A): the real Cilium 1.20.1 mechanism is
+    `hubble.export.static` (`filePath: /var/run/cilium/hubble/events.log`) — simpler
+    than the reconfigurable `dynamic` variant, correctly chosen since nothing needs
+    runtime reconfiguration here. Enabled via `helm upgrade --reuse-values`, preserving
+    every existing value (`ingressController`, `kubeProxyReplacement`, `operator.replicas`,
+    `k8sServiceHost`/`k8sServicePort`). Confirmed live: real JSON flow records, nested
+    under a `"flow"` key (matters for OTTL/`spath` parsing later).
+  - **Flow logs into Splunk** (Part B): the chart's own purpose-built
+    `logsCollection.extraFileLogs` mechanism (the same pattern it already uses for the
+    k8s audit log) plus `agent.extraVolumes`/`extraVolumeMounts` for the hostPath —
+    auto-creates its own pipeline, zero changes to the existing `logs` pipeline.
+    **Confirmed via the real Splunk REST API** (not just config validation): sourcetype
+    `cilium:hubble:flow`, **11,271 events in 5 minutes**, landing in `k8s_ws_logs` as
+    planned. No OTTL transform added yet — raw JSON is already queryable via `| spath`,
+    intentionally left for a later pass.
+  - **Metrics** (Part C) — enabled both Hubble metrics (port 9965,
+    `dns,drop,tcp,flow,icmp,http,policy`) and Cilium's own separate agent metrics (port
+    9962, no Service, hostNetwork only). **Real, confirmed limitation**: `dns` and
+    `http` never populate — Cilium only generates L7 Hubble metrics for traffic
+    actually proxied through Envoy, which needs L7-aware `CiliumNetworkPolicy` rules or
+    visibility annotations the six existing (L3/L4-only) policies don't have. Real gap,
+    not a bug, out of scope for this pass.
+  - **Metrics into Splunk** (Part D): a new `prometheus/cilium` receiver (two scrape
+    jobs — the agent's own node-IP endpoint, Hubble's own Service DNS) and a new
+    `metrics/cilium` pipeline, deliberately routed to `splunk_hec/platform_metrics`
+    (→ `k8s_ws_metrics`) **only** — not also to O11y/signalfx, to avoid unplanned
+    cardinality/cost before real volume is known. **Confirmed via `mcatalog`**: ~150
+    distinct `cilium_*` metric names, all 9 `hubble_*` families, real growing values.
+  - **What's really there** (Part E, exploration only, not a dashboard yet): flow
+    verdicts over 10 min — 41,020 FORWARDED, 64 TRACED, 8 DROPPED (low drop volume
+    right now, the lockdown mostly just allowing traffic as intended). Two real
+    gotchas worth remembering before designing panels: DROPPED events frequently lack
+    resolved source/destination namespace (caught before identity resolution, so "drop
+    rate by service pair" isn't as clean from raw flow logs as hoped), and
+    `flow.source.labels{}` is multivalue — a naive `stats count by` on it fans out one
+    row per label with duplicated totals. `hubble_policy_verdicts_total`
+    (action/direction/match) is a clean, low-cardinality KPI candidate for the
+    six-service lockdown story; `hubble_drop_total` is usable but low-signal until a
+    deliberate-drop demo runs to feed it.
+
+  **Real dead ends and friction, worth remembering**: a Helm SSA field-manager
+  conflict on the `Instrumentation` CR's `.spec.python.env` (AW2's auto-instrumentation,
+  untouched by this work) left the collector release in `failed` status — fixed with
+  `kubectl apply --server-side --force-conflicts` on the one conflicting object, then a
+  clean re-`upgrade`, the same class of fix as the original `deployment.environment`
+  incident earlier in this project. A transient cluster-networking blip caused one
+  self-recovered agent-pod restart, unrelated to this work specifically. **The biggest
+  trap, worth flagging prominently**: the `linda`/`bob` Splunk MCP tools available in
+  this environment are **not this box's Splunk** — they're unrelated, other users'
+  shared instances (confirmed by mismatched hostnames and an unrelated security stack).
+  This box's real Splunk is local, `172.31.0.32:8088`/`:8089` (same private IP as
+  `LOCAL_IP`) — real time was lost chasing a phantom "zero data" bug before catching
+  this. Also: `splunk search` over non-interactive SSH silently returns
+  empty/truncated output for this box (likely a pager/tty artifact) — the REST API
+  (`/services/search/jobs/export`) is what actually produced every confirmed number
+  above and should be preferred for any future non-interactive verification here.
+
+  **Next**: write this up as real doc content — the logs half in FW2, the metrics half
+  in AW1, per the placement decision above. Not started; nothing in `docs/` touched by
+  this spike.
 
 ---
 
