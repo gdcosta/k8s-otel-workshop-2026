@@ -1704,9 +1704,9 @@ already have.
 
 ```bash
 cd ~/k8s_workshop
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.4.tgz
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.5.tgz
 sudo -i -u splunk /opt/splunk/bin/splunk install app \
-  "$PWD/k8s-ws-dashboards-1.0.4.tgz" -auth admin:Workshop2026!
+  "$PWD/k8s-ws-dashboards-1.0.5.tgz" -auth admin:Workshop2026!
 ```
 
 !!! success "No restart needed"
@@ -1820,8 +1820,9 @@ that the other two render as thin lines pinned near the axis — that flatness *
 finding), a Traffic Direction trend, an L4 protocol mix table (TCP dominates; the UDP slice is
 DNS), and two service-topology tables — Top Destination Ports resolved to the PetClinic
 service that owns each one, and Top Service-to-Service Talkers read straight off the network,
-no application instrumentation involved. `playwright-loadgen → api-gateway` leads the talkers
-table, exactly as you'd expect from an always-on load generator hitting one entry point.
+no application instrumentation involved. `external → external` leads the talkers table, with
+`playwright-loadgen → api-gateway` close behind — exactly as you'd expect from an always-on
+load generator hitting one entry point.
 
 !!! abstract "Learning moment — the DROPPED panels are built to stay honest when they're empty"
     The doc's own checkpoint saw single-digit DROPPED counts per 10–30 minutes — real, but too

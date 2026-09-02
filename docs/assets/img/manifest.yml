@@ -133,15 +133,13 @@
   fw2-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 589761
+    bytes: 685451
     section: "12. Install the dashboard"
   fw2-hubble-logs-dashboard.png:
     kind: screenshot
-    status: missing
-    bytes: 24517
+    status: verified
+    bytes: 529591
     section: "13. Install the workshop dashboard app — The dashboard for the flow logs you just built"
-    # bytes reflect a generated placeholder graphic only (kept so `mkdocs build
-    # --strict` doesn't break on a missing link target) — not a real capture.
   image1.png:
     kind: diagram
     status: review
@@ -381,13 +379,13 @@
 03-aw1:
   aw1-dashboard.png:
     kind: screenshot
-    status: stale
-    bytes: 612447
+    status: verified
+    bytes: 1005757
     section: "8. Install the capstone dashboards — Metrics & traces"
   apm-traces-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 758421
+    bytes: 714391
     section: "8. The capstone dashboards — Application Trace Information v4.0.0"
   aw1-infra-dashboard.png:
     kind: screenshot
@@ -396,11 +394,9 @@
     section: "8. Install the capstone dashboards — Infrastructure & Collector health"
   aw1-cilium-metrics-dashboard.png:
     kind: screenshot
-    status: missing
-    bytes: 26995
+    status: verified
+    bytes: 461664
     section: "9. The capstone dashboards — Cilium & Hubble Metrics"
-    # bytes reflect a generated placeholder graphic only (kept so `mkdocs build
-    # --strict` doesn't break on a missing link target) — not a real capture.
   image1.png:
     kind: diagram
     status: review

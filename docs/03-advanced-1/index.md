@@ -1240,9 +1240,9 @@ Workshop** app.
 
     ```bash
     cd ~/k8s_workshop
-    curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.4.tgz
+    curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.5.tgz
     sudo -i -u splunk /opt/splunk/bin/splunk install app \
-      "$PWD/k8s-ws-dashboards-1.0.4.tgz" -auth admin:Workshop2026!
+      "$PWD/k8s-ws-dashboards-1.0.5.tgz" -auth admin:Workshop2026!
     ```
 
 ### Metrics & traces
@@ -1276,10 +1276,12 @@ the slowest INTERNAL methods, and show error rate by route.
 
 !!! tip "Read the DB-time split carefully"
     Database time comes out at only a few percent of request time here, which looks like it
-    contradicts the N+1 finding. It doesn't — PetClinic runs H2 **in memory**, so each
-    round-trip is almost free. Point the same application at a real network database and
-    those extra round-trips per page become extra network latencies per page. The count is
-    the finding; the timing is an artefact of the lab.
+    contradicts the N+1 finding. It doesn't — each of `customers-service`, `vets-service` and
+    `visits-service` runs its own **in-memory HSQLDB** instance (`db.system=hsqldb`,
+    confirmed on real spans — see the drilled-in trace below), so each round-trip is almost
+    free. Point the same application at a real network database and those extra round-trips
+    per page become extra network latencies per page. The count is the finding; the timing is
+    an artefact of the lab.
 
 !!! note "service.name turns out to be load-bearing, not decorative, in two places"
     Every trace-based table on this dashboard now carries a Service column, and for most of
@@ -1354,7 +1356,8 @@ Infrastructure dashboard's Collector pipeline section, one layer further down th
 
 **Cilium agent health** curates six panels out of the roughly 175 `cilium_*` series this
 cluster exposes, picking the categories an SRE actually checks rather than surveying all of
-them: BPF map pressure (every map on this lab cluster sits well under 1% full), endpoint
+them: BPF map pressure (mostly well under 1% full, with the two conntrack maps —
+`ct_any4_global`, `ct4_global` — the highest, just over 1%), endpoint
 state (all healthy endpoints land in `ready`), a controllers-failing gauge, the agent's own
 memory footprint, the number of security identities Cilium has allocated, K8s API client
 latency by endpoint, and — the panel directly tied to this workshop's own story — Cilium's
@@ -1399,8 +1402,10 @@ you chase one request.
 ![Application Trace Information v4.0.0](../assets/img/03-aw1/apm-traces-dashboard.png)
 
 Click a row in **Trace Information** to load that trace's spans underneath, then click a
-span for its detail. The screenshot above is drilled all the way in — the bottom pane is the
-PetClinic `/oups` `RuntimeException`, full stack trace, reached from a latency table.
+span for its detail. The screenshot above is drilled all the way in — a `customers-service`
+`PUT /owners/4` trace (ten spans), reached by clicking a row in Trace Information; the bottom
+pane is that trace's Hibernate `SELECT` span, joining `owners`, `pets`, and `types` for the
+owner being updated (`db.system=hsqldb`).
 
 !!! warning "One panel needs a Splunkbase app — the rest do not"
     The **Span Tree** panel renders with `link_analysis_app.link_analysis`, a custom
