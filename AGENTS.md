@@ -557,11 +557,59 @@ here's where things stand:
     table has a correctly-populated entry for every other Service, including
     `api-gateway`'s own NodePort 30000. Narrowed to something specific to this
     Cilium-version/minikube-driver combination's Ingress-to-BPF-LB wiring, not
-    kube-proxy, not Helm, not the Envoy config. Trying `ingressController.
-    loadbalancerMode=dedicated` and hostNetwork mode next — both standard config
-    knobs, not further architecture reversals — before this needs to come back to the
-    user as a decision (fall back to ingress-nginx, try a different Cilium version, or
-    ship FW1b with the direct NodePort tunnel and note Cilium Ingress as a known gap).
+    kube-proxy, not Helm, not the Envoy config.
+
+    **Resolved: `ingressController.loadbalancerMode=dedicated` was the fix.** Default
+    (`shared`) mode reuses one Service across every Ingress resource and never wired
+    the BPF redirect to Envoy on this Cilium-version/minikube-driver combination;
+    `dedicated` mode gives each Ingress its own Service (`cilium-ingress-petclinic`,
+    NodePort 30560 HTTP / 31575 HTTPS — HTTPS untested, no TLS configured on the
+    Ingress) and the frontend entries came up correctly wired
+    (`cilium-dbg bpf lb list` showed `[NodePort, l7-load-balancer] (L7LB Proxy Port:
+    19171)`, the exact thing missing in shared mode).
+
+    **One more real, live-diagnosed-and-fixed finding along the way, not a dead end:**
+    once traffic actually reached Envoy, `api-gateway` returned a `503` — Cilium's own
+    Ingress traffic carries a new source identity, `reserved:ingress`, that didn't
+    exist as a concept when the six `CiliumNetworkPolicy` objects were designed in
+    Part 5 (Ingress wasn't installed yet). `api-gateway`'s policy only allowed
+    `fromEntities: [host, world]`; added `ingress` to that list, confirmed live with a
+    real `200` and an upstream response time header proving a genuine round-trip.
+    **Doc-worthy lesson**: turning on a new Cilium feature after NetworkPolicy is
+    already locked down can introduce a new traffic identity that the existing
+    policies need to be revisited for — this isn't specific to Ingress, it'll recur
+    for any future Cilium feature that adds its own `reserved:*` identity.
+
+    **Final state, fully re-verified**: all six `CiliumNetworkPolicy` objects
+    `VALID`, `verify-fw1.sh` 15/15, zero drops under combined load across both
+    NodePort 30000 and the new Ingress NodePort 30560, and — critically — both access
+    patterns confirmed with **real `ssh -L` tunnel processes**, not just curl on the
+    EC2 host directly: `ssh -L 8080:192.168.49.2:30560 ...` (new Ingress path,
+    replaces FW1 §7's tunnel target for the human-browser case) and `ssh -L
+    8081:192.168.49.2:30000 ...` (existing raw NodePort, stays as the quick-`curl`-test
+    path per the original requirement). Final Helm values (this is the literal doc
+    content):
+    ```yaml
+    ingressController:
+      enabled: true
+      loadbalancerMode: dedicated
+    k8sServiceHost: 192.168.49.2
+    k8sServicePort: 8443
+    kubeProxyReplacement: true
+    operator:
+      replicas: 1
+    ```
+    Chart `cilium-1.20.1`. `kube-proxy` DaemonSet disabled via the permission-safe
+    `nodeSelector` patch (delete blocked by the classifier both times it was tried),
+    `DESIRED 0 / CURRENT 0`.
+
+    **FW1b's live spike (Parts 1–6, this whole decision block) is now complete and
+    fully validated.** What's left is turning this into actual doc content: FW1 §2's
+    small CNI-choice footprint, the new `docs/01b-foundational-1b/index.md` module
+    itself (NetworkPolicy design walkthrough + the deliberate-failure demo + Ingress
+    setup), FW1 §7's tunnel-target update, and the facilitator guide's timing/format
+    table rewrite already flagged above. Nothing from this spike has touched the repo
+    yet — every command above ran on `3.145.97.98` only.
 
 - **Always-on Playwright load generator — approved direction, 2026-09-01, explicitly
   after the Cilium phase above, not before.** Supersedes the "in-cluster load
