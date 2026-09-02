@@ -147,6 +147,64 @@ here's where things stand:
   k8s-ws-dashboards` returns "Could not find object," nothing in
   `/opt/splunk/etc/apps/`. Not installed at all, stale content once it is — two
   different problems, both real, both still open.
+
+  **Full live validation completed, 2026-09-02, on `3.145.97.98` — all 59 panels
+  across all five dashboards checked against real six-service data, not assumed.**
+  First confirmed the app isn't stale: the GitHub-published `k8s-ws-dashboards-1.0.1.tgz`
+  (the exact file FW2 §13 pulls) diffed byte-identical, view XML for view XML, against
+  a fresh `scripts/build-dashboard-app.sh` build off this checkout — no rebuild needed,
+  what's published is what this branch ships. (Install note: `splunk install app`
+  failed with "Permission denied" reading the `.tgz` straight out of `/home/ubuntu`
+  — mode `700` on that home directory — fixed by copying to `/tmp` with `644` first;
+  not treated as a doc bug, an artifact of this particular box's home permissions.)
+
+  **58 of 59 panels: real, non-empty, correct data.** Including all 13 of AW1's Infra
+  dashboard (correctly host/K8s-object-scoped, no `service.name` needed there — that's
+  by design, not a gap; it did surface a real, separate finding: none of the six
+  PetClinic Deployments declare CPU/memory requests or limits, confirmed via absent
+  `k8s.container.cpu_request/limit`/`memory_request/limit` metrics, so the Scheduling
+  Contract panel legitimately shows nothing for them — accurate reporting of a real
+  workload-spec gap, not a broken query). AW2's Correlation dashboard and the generic
+  `apm-traces-dashboard.xml` ("Application Trace Information v4.0.0") both check out
+  fully, the latter correctly breaking down by all six real `service.name` values via
+  its own dropdown.
+
+  **One genuinely broken panel, precisely diagnosed**: `fw2-dashboard.xml`'s "Most
+  Recent Errors — RuntimeException Stack Traces (Multiline Parsing in Action)" searches
+  literal text (`RuntimeException`) that **does not exist anywhere in this topology's
+  logs, ever** — confirmed across 7 days and every index. Root cause: this panel was
+  built around the old single-pod app's `/oups` endpoint, which threw a real
+  `java.lang.RuntimeException` with a multiline stack trace; the migrated fault model
+  (`visits-service` scaled to zero, or the Cilium deny in AW2 §8) produces a fast
+  single-line `503`, never a `RuntimeException`. No amount of traffic fixes this as
+  written — the search term itself is wrong for this topology. **Real, usable fix
+  available**: genuine multiline Java stack traces already occur naturally in this
+  topology from Eureka/`DiscoveryClient` transport errors (`TransportException`,
+  `TimeoutException`, `CancellationException`, real `severity=ERROR`) — the panel can
+  be repurposed to search one of those instead of invented content, keeping its actual
+  teaching point ("multiline parsing in action") intact with a real, current example.
+
+  **One real UX gap, not exactly broken but unusable out of the box**:
+  `apm-traces-dashboard.xml`'s `traceIndex` dropdown has no `<default>`, and its own
+  source search (`| eventcount summarize=false index=*`) lists every index on the
+  instance including irrelevant ones — a first-time viewer has to already know to pick
+  `k8s_ws_traces` before any panel populates.
+
+  **`aw1-dashboard.xml` confirmed again**: real data, right indexes, every breakdown
+  by HTTP route rather than by service — the same, already-known single-pod-era
+  limitation, not newly broken, not yet reworked. This is the actual scope of the
+  still-deferred "dashboards-rework" phase — a bigger, separate undertaking from the
+  two real, small fixes above.
+
+  **JMeter isn't installed on this box at all right now** (no binary anywhere; only
+  the `.jmx`/`.csv` test-plan files exist) — Playwright's own continuous traffic was
+  sufficient for every panel except the broken one above, whose failure has nothing to
+  do with traffic volume.
+
+  **Not yet fixed — awaiting a scope decision from the user**: the RuntimeException
+  panel and the missing dropdown default are both small, real, and worth fixing before
+  calling the app "validated." The full AW1 service-breakdown rework is the bigger,
+  separately-tracked Phase 5 item and was not touched or committed to in this pass.
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if
