@@ -137,6 +137,16 @@ here's where things stand:
   read of the Splunk-side XML, not yet re-verified for the Observability Cloud JSON).
   **Do not run FW #2 through to AW #2 on a live instance right now and expect the
   dashboards to reflect the current topology** — that gap is expected mid-migration.
+
+  **Reconfirmed live 2026-09-02 on `3.145.97.98`, plus a second, separate finding**:
+  `aw1-dashboard.xml` has zero references to `service.name` or any of the six service
+  names anywhere in it — still the pre-migration single-app dashboard, pointed at index
+  names that happen to still be correct, so it wouldn't error, just wouldn't break down
+  by service. Separately, and not part of the same gap: FW #2 §12's own install step
+  was never run during that box's Parts 7–9 build-out — `splunk display app
+  k8s-ws-dashboards` returns "Could not find object," nothing in
+  `/opt/splunk/etc/apps/`. Not installed at all, stale content once it is — two
+  different problems, both real, both still open.
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if
