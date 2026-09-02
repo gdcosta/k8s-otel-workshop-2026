@@ -799,6 +799,36 @@ here's where things stand:
   app is already confirmed healthy" timing rule as the deferred JMeter-in-cluster idea
   above.
 
+- **Cilium/Hubble telemetry into Splunk + an installable KPI dashboard — confirmed
+  needed, 2026-09-02, sequenced after the Playwright work above, not before.**
+  Promotes the Hubble-export gap found the same day (FW1b's shipped content only ever
+  used live, ephemeral `hubble observe` CLI commands for in-the-moment viewing during
+  an exercise — confirmed by grepping the actual doc and `labs/collector/*.yaml`,
+  neither has ever piped Hubble flow data or Cilium's own metrics anywhere) from
+  "backlog idea" to real, planned work. Conceptually belongs to FW1b's scope — it's
+  the same module's subject matter — but built as its own later pass, after
+  Playwright, per the user's explicit ordering.
+
+  **Two real deliverables, not yet scoped in technical detail:**
+  1. Get Cilium/Hubble **logs and metrics** flowing into Splunk. Real unknowns to
+     settle live, not guess: whether this goes through the existing OTel Collector
+     (Cilium/Hubble both expose Prometheus metrics endpoints the Collector could scrape;
+     Hubble also has its own flow-log JSON export mechanism that could be tailed) or a
+     separate path, and which Splunk index(es) it lands in — `k8s_ws_logs` already
+     carries the audit log as the API-layer evidence source; this would be the
+     network-layer counterpart the original Phase 6 idea always intended.
+  2. An **installable dashboard** surfacing the critical KPIs from that data. Given
+     FW1b sits before AW2 in the sequence — no Observability Cloud exists yet at that
+     point — this should be a Splunk Enterprise classic XML dashboard, matching
+     `labs/dashboards/*.xml`'s existing pattern (source of truth in XML, `.tgz` app
+     bundle built via `scripts/build-dashboard-app.sh`, never hand-edited — see the
+     hard rule on this below), not an Observability Cloud dashboard. "Critical KPIs"
+     itself needs real live data exploration once the export mechanism exists, not a
+     guessed panel list — policy verdict counts (allowed/denied) and drop rate by
+     service pair seem like obvious candidates given everything already built in
+     FW1b, but confirm what Cilium/Hubble actually expose before designing panels
+     around assumptions.
+
 ---
 
 ## The prime directive: tested, not transcribed
