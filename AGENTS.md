@@ -978,9 +978,22 @@ here's where things stand:
   (`/services/search/jobs/export`) is what actually produced every confirmed number
   above and should be preferred for any future non-interactive verification here.
 
-  **Next**: write this up as real doc content — the logs half in FW2, the metrics half
-  in AW1, per the placement decision above. Not started; nothing in `docs/` touched by
-  this spike.
+  **Shipped, 2026-09-02 (commit `956d818`).** FW2 §12 ("Hubble flow logs — a second
+  log source, from a different layer") and AW1 §6 ("Cilium/Hubble metrics — the
+  network layer, in numbers"), both sections inserted and everything after them
+  renumbered with cross-references fixed across FW2/AW1/AW2/the facilitator guide.
+  `labs/collector/values-{workshop,aw1,aw2,final}.yaml` carry both additions forward
+  through every snapshot; `verify-fw2.sh`/`verify-aw1.sh` each got one new real
+  assertion. **Live re-verification during the doc-writing pass corrected this
+  record**: the real `hubble_*` family count is **8**, not the 9 written above days
+  earlier — metric surfaces drift with agent versions, and the doc now carries the
+  freshly-confirmed number rather than propagating the stale one. `dns`/`http` were
+  confirmed absent either way, both times, for the same real reason.
+
+  Dashboard is the one deliverable from the original two-part plan still outstanding
+  — deliberately deferred until real KPI candidates are settled, not designed blind.
+  `hubble_policy_verdicts_total` is the leading candidate so far (see AW1 §6's own
+  forward-looking note).
 
 ---
 
