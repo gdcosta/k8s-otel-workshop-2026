@@ -232,6 +232,18 @@ spec:
               protocol: UDP
             - port: "53"
               protocol: TCP
+    # discovery-server fetches its own config at startup, same as every other
+    # service — see the traffic table above. Easy to miss: this pod isn't
+    # restarted often once the lockdown is applied, so a policy missing this
+    # rule can sit unnoticed for a long time before a restart ever exercises
+    # the gap. Confirmed live.
+    - toEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: config-server
+      toPorts:
+        - ports:
+            - port: "8888"
+              protocol: TCP
 ```
 
 Apply it and check:
@@ -1032,6 +1044,13 @@ steps above. They're the exact files this module was tested with.
                 - port: "53"
                   protocol: UDP
                 - port: "53"
+                  protocol: TCP
+        - toEndpoints:
+            - matchLabels:
+                app.kubernetes.io/name: config-server
+          toPorts:
+            - ports:
+                - port: "8888"
                   protocol: TCP
     ```
 

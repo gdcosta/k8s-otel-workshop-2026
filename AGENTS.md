@@ -679,11 +679,91 @@ here's where things stand:
   declarative policy) and genuinely untested in this project. Revisit if a future pass
   wants the edge-level visual specifically; not worth it for the current pass.
 
-  **In progress**: continuing the same live spike on `3.145.97.98` (which already has
-  00-setup, FW1, and FW1b validated) through FW2 → AW1 → AW2 §1–§7, so §8's
-  reconciliation exercise can be rewritten from real captured numbers against the full
-  observability stack, not guessed. Real `~/.o11y-token`/`~/.rum-token` are now in
-  place on the box.
+  **Parts 7–9 (FW2 → AW1 → AW2 §1–§7) complete, fully validated, and confirmed the
+  Collector-connectivity risk flagged above — plus a second, unrelated real gap.**
+  `verify-fw2.sh` 16/16, `verify-aw1.sh` 17/17, `verify-aw2.sh` 32/32.
+  - **FW2's Collector itself needed no policy changes** — log collection tails
+    `/var/log/containers` via hostPath, not network traffic, and the Collector's own
+    pods live in `otel`, untouched by the `petclinic`-scoped policies.
+  - **Real, separate bug found and fixed, already shipped in `docs/01b-foundational-1b/index.md`
+    and pushed**: `discovery-server`'s own policy never had an egress rule for its call
+    to `config-server:8888` — a latent gap since FW1b shipped, undetected because
+    `discovery-server` is rarely restarted once the lockdown is in place. Fixed in both
+    the module's instructed step and its Reference section.
+  - **The flagged AW1 risk was real, and bigger than expected — all six services, not
+    one.** The OTel Operator's Java agent exports OTLP to the Collector's `agent`
+    DaemonSet, which runs `hostNetwork: true` — Cilium sees that as the `host` entity
+    at the node IP, not a pod, and none of FW #1b's six policies allowed egress there.
+    Confirmed via `hubble observe --verdict DROPPED` the moment each service picked up
+    its instrumentation annotation. Fixed with a `toEntities: [host]` port-4318/TCP
+    egress rule added to all six — now a real `!!! danger` step in
+    `docs/03-advanced-1/index.md` §3, right after the instrumentation annotation loop,
+    exactly where the gap actually bites.
+  - Two smaller, non-policy findings from AW2 §1–7, not yet acted on: the JMeter test
+    plan and RUM Playwright script's doc-literal `curl .../main/...` URLs are still the
+    old single-pod-monolith versions — this is the same known, accepted, not-a-bug
+    branch-curl artifact already recorded elsewhere in this file, resolves on merge to
+    `main`. `scripts/inject-rum-snippet.sh` wasn't executable in the clone (644, not
+    755) — fixed directly, `chmod +x`, committed.
+
+  **Part 10 (the actual AW2 §8 fault test) — full findings, all confirmed live and
+  independently cross-checked with the user watching Observability Cloud in real
+  time:**
+  - First attempt (FW1b's own `visits-service → customers-service` demo pair, reused
+    as originally planned) confirmed **dead on arrival for this purpose** — zero flows
+    of any kind between those two pods over 9+ minutes of real load, `hubble observe`
+    and JMeter's own 0.00% error rate both confirming it. That pair was deliberately
+    chosen in FW1b *because* it has no real dependency (safe for a curl-only demo);
+    that same property means real app traffic never attempts it. Caught independently
+    by the user checking Observability Cloud directly mid-test, confirmed via
+    `get_apm_service_dependencies` showing no edge at all, before the sub-agent's own
+    report came back with the same conclusion.
+  - **Corrected to `api-gateway → visits-service`** — the same target the original
+    scale-to-zero fault used, and a path real JMeter traffic actually exercises (two of
+    seven samplers, every iteration).
+  - **Real fault window: `2026-09-02T05:06:30Z` → `05:13:48Z` (7m18s)**, continuous
+    real load, clean 0%-error baseline confirmed immediately before applying.
+  - **JMeter** (window-scoped from the raw `.jtl`): 226 requests, 63 failed = **27.88%**
+    — close to the 2/7≈28.57% ceiling the *old* fault also produced, same two
+    samplers. Failed-request latency hit a hard ~30.0s ceiling (Netty's own connect
+    timeout).
+  - **Splunk** (`k8s_ws_petclinic_logs`, same window): 254 ERROR events, 61 explicitly
+    `io.netty.channel.ConnectTimeoutException`. A genuinely different pattern from the
+    old fault — no "no servers available" WARN this time, since Eureka still correctly
+    believes the instance is healthy; the client just hangs until its own TCP timeout
+    instead of failing fast.
+  - **APM — checked two different ways, with two different answers, both real:**
+    `get_apm_service_dependencies` on the `api-gateway → visits-service` edge itself
+    reads **0 errors**, repeatedly, minutes into a confirmed-live fault — the user
+    caught this live and asked about it directly. Root cause, confirmed on both sides
+    of the edge: Cilium's block is a true network-layer silent drop, so the packet
+    never reaches `visits-service` at all — no SERVER span is ever created there, and
+    the platform draws edges by correlating a caller's span with the callee's matching
+    span. With nothing on the callee side, there's no edge to color red, even though
+    the caller's own error count is real. **But** `get_apm_exemplar_traces` search on
+    `api-gateway` for real error traces **does** find them — 5 in the exact window,
+    each ~30.0068s, matching Netty's timeout to the microsecond. So this fault **is**
+    APM-visible, just through trace/exemplar search rather than the simple aggregate
+    dependency-error metric — a materially different, more subtle story than the old
+    fault, not the clean red-arrow visual originally hoped for.
+  - **Decided with the user: this is good enough, ship it as-is.** A real,
+    trace-correlated, non-zero error count that matches JMeter exactly is already a
+    genuine fix over the old fault's complete blind spot. Getting the failure to render
+    as a red *edge* specifically (not just a caller-side/exemplar-search number) would
+    need the request to actually reach `visits-service` with a slow-but-real response
+    instead of being dropped — which plain `CiliumNetworkPolicy` can't do at all (no
+    latency-injection concept). The real Cilium-native path for that is
+    `CiliumEnvoyConfig` with Envoy's own HTTP fault-injection filter
+    (`envoy.filters.http.fault`, delay longer than the client's own timeout) — feasible
+    without new infrastructure since Envoy already runs here for Ingress, but a
+    materially bigger jump in complexity (hand-authored Envoy xDS, not a declarative
+    policy) and genuinely untested. **Filed as backlog, not pursued this pass.**
+
+  **Next**: write AW2 §8's actual doc content from these real, confirmed numbers —
+  replacing the `visits-service` scale-to-zero fault there specifically (FW2 §8 and
+  AW1's own reference to scale-to-zero stay unchanged, per the earlier scoping
+  decision). Nothing from Parts 7–10 beyond the two already-committed bug fixes above
+  has touched `docs/04-advanced-2/index.md` yet.
 
 - **Always-on Playwright load generator — approved direction, 2026-09-01, explicitly
   after the Cilium phase above, not before.** Supersedes the "in-cluster load

@@ -515,6 +515,47 @@ that carries the new annotation, and *that* creation event is what the webhook i
     mechanism changes per service; the loop above is the whole difference from patching
     just one.
 
+!!! danger "If you completed FW #1b, this step silently breaks telemetry export — one more Cilium rule needed"
+    The Java agent exports OTLP straight to the Collector's **agent** DaemonSet, which runs
+    with `hostNetwork: true` — so it's reachable at the node's own IP, not a pod IP. Cilium
+    sees that as the `host` entity, not `petclinic` namespace traffic, and none of FW #1b's
+    six `CiliumNetworkPolicy` objects allow egress there. Confirmed live: the moment each
+    service picks up its instrumentation annotation and restarts, `hubble observe --verdict
+    DROPPED` shows continuous denials from that pod straight to the node IP on port 4318 —
+    the agent starts, the init container runs, nothing errors anywhere in `kubectl logs`,
+    and no spans or JVM metrics ever arrive. Exactly the kind of silent gap this workshop
+    keeps warning about, just one module later than usual.
+
+    Add one more egress rule to **all six** policies — same shape as the `toEntities: [host]`
+    rule discovery-server and config-server's own ingress already uses, just for egress this
+    time, and port 4318 (OTLP/HTTP) instead of their own service port:
+
+    ```bash
+    for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
+      kubectl patch cnp "$svc" -n petclinic --type=json -p='[{
+        "op": "add",
+        "path": "/spec/egress/-",
+        "value": {
+          "toEntities": ["host"],
+          "toPorts": [{"ports": [{"port": "4318", "protocol": "TCP"}]}]
+        }
+      }]'
+    done
+    ```
+
+    Confirm it landed and the drops stop:
+
+    ```bash
+    for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
+      kubectl get cnp "$svc" -n petclinic
+    done
+    kubectl -n kube-system exec ds/cilium -- hubble observe --namespace petclinic \
+      --verdict DROPPED -n 20
+    ```
+
+    Skipped FW #1b, or not using Cilium at all? Nothing to do here — this only applies once
+    the six-service lockdown from that module is actually in place.
+
 ### ✅ Checkpoint — is the agent attached, across a hand-built image, five pulled ones, and two infrastructure services?
 
 ```bash
