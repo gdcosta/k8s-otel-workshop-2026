@@ -1483,47 +1483,153 @@ This is what the whole series has been building toward.
     infrastructure metrics, and raw logs. Their value isn't in any one view — it's in
     moving between them without losing your place.
 
-With load running, trigger the fault this whole workshop uses for a real, reproducible
-error: `kubectl scale deployment/visits-service -n petclinic --replicas=0`. Then:
+This module's own fault uses a different mechanism from the rest of the workshop on
+purpose: [FW #2 §8](../02-foundational-2/index.md#8-cause-a-real-failure-and-find-it-in-splunk)
+and [AW #1](../03-advanced-1/index.md) both use `kubectl scale deployment/visits-service
+--replicas=0` — a *service-discovery* failure, where Eureka has no healthy instance and
+the caller fast-fails before a connection is even attempted. This section reuses
+[FW #1b §3](../01b-foundational-1b/index.md#3-break-something-on-purpose-the-deliberate-failure-demo)'s
+other tool instead: a `CiliumNetworkPolicy` `ingressDeny`, applied against real traffic
+this time rather than FW #1b's own no-op demo pair. That makes it a genuine second fault
+type for the series, not a repeat — a network-layer silent drop instead of a clean,
+fast-failing service-discovery gap — and it turns out to tell a materially different, more
+subtle story in APM specifically, which is the actual point of this exercise.
 
-1. **APM → your service.** Note the error rate on whichever service you have traffic
-   against — `api-gateway` if you're routing through the gateway, or a downstream service
-   directly.
-2. **Click into the errors.** Trace Analyzer shows the failing traces; open one and you'll
-   see the client span reaching for `visits-service` marked as an error — the same
-   `NoRouteToHostException`/"no servers available" pattern FW #2 §8 walks through from the
-   Splunk side.
-3. **From the trace, pivot to Infrastructure.** The pod, node and container that served
-   the request — was the failure isolated, or was the node under pressure?
-4. **From the trace, pivot to Logs.** Log Observer Connect queries
-   `k8s_ws_petclinic_logs` and shows the same WARN/ERROR breakdown FW #2 §8 found by hand
-   — reachable in two clicks from the error rate instead of a raw search.
-5. **Digital Experience → RUM.** The browser's side of the same failure, if you generated
-   browser traffic during the fault window (step 7).
+!!! note "Why `api-gateway → visits-service`, not FW #1b's own demo pair"
+    The obvious first move is reusing FW #1b §3's exact pair, `visits-service →
+    customers-service` — it's already built, already proven to work as a Cilium
+    deny-rule demo. Tried first here for exactly that reason, and confirmed **dead on
+    arrival for this purpose**: zero flows of any kind between those two pods over 9+
+    minutes of real JMeter load, `hubble observe` and JMeter's own 0.00% error rate both
+    confirming it. That's not a bug — it's *why* FW #1b picked that pair in the first
+    place. `visits-service` and `customers-service` have no real dependency on each
+    other, which is exactly what makes a deny rule between them safe to demo without
+    breaking anything real. That same property means real application traffic never
+    attempts the path, so blocking it produces nothing for JMeter, Splunk, or APM to
+    see — a fault with no observable effect isn't a fault, for this exercise.
 
-Scale `visits-service` back up when you're done:
-`kubectl scale deployment/visits-service -n petclinic --replicas=1`.
+    Corrected to `api-gateway → visits-service`: the same target the scale-to-zero fault
+    elsewhere in the workshop uses, and a path real JMeter traffic actually exercises
+    (two of the test plan's seven samplers, every iteration). Unlike FW #1b's demo pair,
+    this one is already a real, permitted dependency — `visits-service`'s own
+    `CiliumNetworkPolicy` already allows ingress from `api-gateway` on port 8082 (see
+    [FW #1b's reference section](../01b-foundational-1b/index.md#reference-complete-files),
+    `visits-service-netpol.yaml`). No temporary allow rule is needed here;
+    `ingressDeny` takes precedence over that existing real allow, the same precedence
+    rule FW #1b §3 demonstrates.
+
+Apply the deny rule — this is a **new** policy object, distinct from FW #1b's own
+`demo-deny-visits-to-customers.yaml`:
+
+```yaml
+# Deliberate-failure demo for AW #2 §8, distinct from FW #1b §3's own
+# demo-deny-visits-to-customers.yaml. api-gateway -> visits-service on
+# port 8082 is a REAL dependency already permitted by visits-service's own
+# ingress rule (see FW #1b's visits-service-netpol.yaml) — no temporary
+# allow scaffolding is needed here, unlike FW #1b's unrelated-pair demo.
+# ingressDeny takes precedence over that existing allow rule, so applying
+# this on top of the real lockdown silently drops every packet on the path
+# real JMeter traffic actually exercises, without touching the allow rule
+# itself.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: demo-deny-api-gateway-to-visits
+  namespace: petclinic
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: visits-service
+  ingressDeny:
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: api-gateway
+      toPorts:
+        - ports:
+            - port: "8082"
+              protocol: TCP
+```
+
+```bash
+kubectl apply -f demo-deny-api-gateway-to-visits.yaml
+```
+
+With load running, the effect shows up as a hard ~30-second hang per request, not an
+instant failure: Cilium drops the SYN silently at the CNI layer, so `api-gateway`'s own
+Netty client genuinely tries to connect and only gives up at its own connect-timeout
+ceiling. Eureka has no reason to think anything is wrong — the `visits-service` instance
+is registered and heartbeating normally, it's simply unreachable at the network layer —
+so none of the "no servers available" fast-fail behaviour the scale-to-zero fault
+produces applies here. Now work the four views:
+
+1. **APM → `api-gateway`.** Look at the service's own error rate/count, not the
+   `api-gateway → visits-service` edge on the **Service Map** — the edge stays green.
+   The packet never reaches `visits-service`, so no `SERVER` span is ever created there
+   for the platform to correlate a caller span against, and with nothing on the callee
+   side, there's no edge for it to draw red. This is real, confirmed root cause, not a
+   missing feature — and it's the whole lesson of this pivot: an aggregate,
+   edge-level metric can read **0 errors** for minutes into a genuinely live fault.
+2. **Find the real errors anyway, in Trace Analyzer.** `api-gateway`'s own error
+   count is real and non-zero even though the dependency edge isn't — filter Trace
+   Analyzer to errored traces on `api-gateway` (or open the service's own Errors view)
+   and they're right there: real traces, each pinned to a hard ~30-second duration,
+   ending in a client-side connect-timeout rather than a server error. The lesson: when
+   an aggregate dependency metric looks clean but you know load is failing, search the
+   trace data directly instead of trusting the graph — the failures are findable, just
+   not through the same click you'd use for a normal red edge.
+3. **From a trace, pivot to Infrastructure.** Check the `visits-service` pod, node and
+   container the way you would for any failure — and find it completely healthy: no
+   CPU or memory pressure, no restarts, nothing anomalous. That's expected and itself
+   diagnostic for this fault type. The request never arrives at the pod at all, so
+   there's nothing there for a resource-pressure fault to leave a mark on; a clean
+   Infrastructure view alongside a real error count is what a *network*-layer problem
+   looks like, as opposed to the node-under-load story you'd see from an actual
+   capacity issue.
+4. **From a trace, pivot to Logs.** Log Observer Connect against `k8s_ws_petclinic_logs`
+   shows a different shape from the scale-to-zero fault: `ERROR` events with
+   `io.netty.channel.ConnectTimeoutException`, not the "no servers available" `WARN`
+   FW #2 §8 walks through. Eureka still believes the instance is healthy this time, so
+   that code path never fires — the client just hangs until its own TCP timeout instead
+   of failing fast.
+5. **Digital Experience → RUM.** The browser's side of the same failure, if you
+   generated browser traffic during the fault window (step 7) — a real click that hangs
+   for the same ~30 seconds before failing, rather than JMeter's or Playwright's
+   scripted version of it.
+
+Remove the deny policy when you're done — this restores the real, six-service lockdown
+FW #1b built, with nothing left over:
+
+```bash
+kubectl delete -f demo-deny-api-gateway-to-visits.yaml
+```
 
 ### ✅ Checkpoint — do the numbers agree?
 
-| Source | Measured on a real run (FW #2 §8 / AW #1 §1) |
+| Source | Measured on a real run (fault window `2026-09-02T05:06:30Z` → `05:13:48Z`, 7m18s) |
 |---|---|
-| JMeter console | **28.57%** failed samples (90 / 315) |
-| Splunk Enterprise (`api-gateway`'s own logs) | 242 events for those 90 failures — 222 `WARN` "no servers available", 20 multi-line `ERROR` `NoRouteToHostException` |
-| APM service error rate | **not independently measured this pass** — querying it needs Observability Cloud UI/API access this module's authoring didn't have; the mechanism (this checkpoint) is real and correct, the number in your own run is the one to read here |
+| JMeter console | **27.88%** failed samples (63 / 226), window-scoped from the raw `.jtl` — close to the 2/7 ≈ 28.57% ceiling the scale-to-zero fault also produces, same two samplers |
+| Splunk Enterprise (`api-gateway`'s own logs, `k8s_ws_petclinic_logs`) | **254** `ERROR` events in the window, **61** of them explicitly `io.netty.channel.ConnectTimeoutException` — no "no servers available" `WARN` this time, since Eureka still correctly believes the instance is healthy. (This pass didn't itemize the remaining ~193 events by log source the way FW #2 §8's own breakdown does for the other fault — worth running down yourself with `... | stats count by log_source` if you want the full accounting.) |
+| APM service error rate | **Two different, both real.** The `api-gateway → visits-service` **dependency edge** reads **0 errors**, repeatedly, minutes into a confirmed-live fault — no `SERVER` span ever exists on `visits-service` to correlate against. But a **trace/exemplar search on `api-gateway`** for real error traces finds them directly: **5** in the exact window, each **~30.0068s** — matching the client's own connect-timeout ceiling to the microsecond. |
 
-JMeter and Splunk Enterprise's numbers come from the exact same run, documented in full in
-FW #2 §8 — and they already disagree in an instructive way *before* APM enters the
-picture: 90 failed *requests* produced 242 log *events*, because two distinct log sources
-(`RoundRobinLoadBalancer` WARN and `AbstractErrorWebExceptionHandler` multi-line ERROR)
-both fire, legitimately, per failure. What you count decides whether you agree with
-yourself, never mind with another tool.
+JMeter and Splunk Enterprise's numbers come from the exact same run, and they already
+disagree in a familiar way *before* APM enters the picture — 63 failed *requests*
+produced 254 log *events*, roughly four per failure, not one-for-one. That's the same
+"what you count decides whether you agree with yourself" lesson the old fault taught
+with its own 90-requests-to-242-events gap; the exact ratio differs because the failure
+signature does (a hung Netty client logging differently than a fast Eureka rejection).
 
-Run this checkpoint yourself and see whether APM's own percentage — reachable from spans it
-sampled, a third denominator again — lands anywhere near 28.57%, closer to a naive
-"242-events" read, or somewhere else entirely. A gap of a fraction of a percent is
-accounting for a different denominator. A gap of a factor of two is a finding — something
-is being sampled, dropped, or misrouted.
+The more important gap is APM's own two answers to the same question. The aggregate
+dependency-edge metric — the number a glance at the Service Map gives you — reads
+**0 errors** the entire time, even though the fault is genuinely live and the caller's
+own error count is real. That's not a bug in Observability Cloud; it's a direct
+consequence of a network-layer drop leaving no trace on the callee side to correlate
+against. The real lesson: **a clean-looking aggregate metric doesn't mean nothing is
+wrong** — it can mean the failure mode doesn't produce the specific signal that metric
+is built from. Knowing how to search the trace data directly (Trace Analyzer's error
+filter, or exemplar search) rather than stopping at the first graph that looks fine is
+the actual skill this checkpoint is teaching. Run it yourself and see whether your own
+exemplar count and duration land close to 5 traces at ~30s — a materially different
+count or duration is a finding, not just noise.
 
 ---
 
