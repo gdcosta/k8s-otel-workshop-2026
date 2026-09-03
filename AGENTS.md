@@ -398,6 +398,114 @@ here's where things stand:
   **Process note**: learned from the earlier commit-staging bug in this same
   session — every commit in this round was preceded by `git diff --cached --stat`
   to confirm the staged set matched intent before committing, not after.
+- **Live incident, 2026-09-03: `wsuser01`'s instance found genuinely unstable —
+  full root-cause chain, three real fixes shipped.** Started from the user
+  spotting a `discovery-server:8761` **inferred** service in Observability
+  Cloud with a ton of errors. That thread led somewhere much bigger than the
+  original question.
+
+  **The inferred-service question itself**: `discovery-server:8761` is
+  separate from the real, instrumented `discovery-server` (health `Ok`)
+  because APM can't correlate these specific calls to any server span — the
+  connection fails at the network layer before one exists. Root cause,
+  confirmed on a real trace: `java.net.NoRouteToHostException` from
+  `vets-service`'s (and others') Eureka `DiscoveryClient-CacheRefreshExecutor`
+  background thread hitting `http://discovery-server:8761/eureka/apps/delta`
+  — not application traffic. `discovery-server`'s own pod had been OOMKilled
+  4 times; a Deployment (not a StatefulSet) means each restart is a new pod
+  with a new IP, and other services' cached Eureka connections briefly point
+  at the dead one until they re-resolve.
+
+  **That led to checking the live cluster, which found the real story**:
+  `api-gateway` was actively `CrashLoopBackOff` at the moment of checking —
+  168 restarts, `OOMKilled` (exit 137), readiness probe failing with
+  `connection refused`. Every pod in the namespace had heavy restart counts
+  (`config-server` 19, `customers-service` 16, `vets-service`/
+  `visits-service` 6 each), and it wasn't contained to `petclinic` — the
+  Collector agent (79), the Operator (91), `cilium-operator` (242) and
+  `storage-provisioner` (255) were all churning too. None of the six
+  PetClinic Deployments had ever declared `resources.requests`/`limits` (a
+  gap already flagged once, in the dashboard-validation pass) — confirmed
+  as the reason a node-level OOM kill was landing on arbitrary victims
+  (including cluster infrastructure) instead of a contained, per-container
+  one.
+
+  **User's own framing of the fix, correct and worth preserving**: setting
+  limits doesn't reduce total memory demand — if you guess low, you just
+  convert systemic node-wide chaos into a specific, faster-failing service.
+  Real numbers were pulled before choosing values (`docker stats`, live: five
+  of six PetClinic JVMs clustered at 700–800MiB RSS at that snapshot — a
+  midpoint of each container's own restart cycle, not necessarily its peak).
+  Chose deliberately generous headroom over that snapshot rather than a tight
+  fit: business services (`api-gateway`, `customers-service`, `vets-service`,
+  `visits-service`) request 250–500m CPU / 768Mi memory, limit 1536Mi memory;
+  infra services (`config-server`, `discovery-server`) request 200m / 640Mi,
+  limit 1280Mi. **No CPU limit set, deliberately** — this project already
+  found once that CPU starvation on this exact box causes the kubelet to miss
+  its node-lease renewal and Kubernetes to evict everything (the original
+  4→8 vCPU move); a hard CPU limit risked reintroducing that failure mode via
+  throttling. Landed in `labs/manifests/petclinic-microservices.yml`
+  (permanent, not a live-only patch), applied live, confirmed: `api-gateway`
+  and `config-server` stabilized within minutes; the other four hit one more
+  round of transient `NoRouteToHostException` against `config-server` (all
+  six Deployments were rolled in one `kubectl apply`, so `config-server` was
+  itself mid-restart while others tried to fetch config at boot) — not a
+  limits problem, self-healed via K8s's normal restart policy.
+
+  **The user also asked whether pod metrics needed configuring, to understand
+  real memory requirements — yes, and this surfaced a second, independent
+  bug.** Confirmed live: no per-pod memory *usage* metric existed in Splunk
+  at all — only `k8s.container.memory_request`/`_limit` (empty, since nothing
+  set them), JVM heap, and Cilium/Collector self-telemetry. The chart's
+  `kubelet_stats` receiver *was* correctly configured (`metric_groups:
+  [container, pod, node]`, the right ones) but was producing **zero** data —
+  not filtered, not partial, its own `otelcol_receiver_accepted_metric_points`
+  counter pinned at 0 while every other receiver had millions. Root cause:
+  no `insecure_skip_verify: true` for minikube's self-signed kubelet
+  certificate — TLS verification failing silently, no error surfaced
+  anywhere. Fixed live via `helm upgrade --reuse-values` with a minimal patch
+  file (hit the same Instrumentation-CR field-manager conflict already
+  documented in this project; the standard `kubectl apply --server-side
+  --force-conflicts` fix this time also needed a retry after a transient
+  `etcdserver: request timed out` — the cluster was genuinely under load).
+  Confirmed: `k8s.pod.memory.usage`/`.working_set`/`.rss`/`.available` now
+  real, flowing (21,506 accepted points in the first 10 minutes checked).
+  Landed permanently in `values-aw1.yaml`/`values-aw2.yaml`/`values-final.yaml`
+  (all three — this is a chart-default-receiver override, present from the
+  point metrics turn on) with a comment noting this is a minikube-specific
+  fix (self-signed kubelet cert), not a general recommendation for real
+  clusters.
+
+  **A third factor, found while watching the rollout struggle to settle, not
+  asked about but real**: one straggler pod (`customers-service`) took **494
+  seconds** to finish Spring Boot startup — normal is ~10–15s. That's a CPU
+  contention signature, not memory. Cross-checked against `docker stats`:
+  `playwright-loadgen` alone was running **130% CPU** continuously, with
+  `api-gateway` — the single endpoint it hits — right next to it at **150%**.
+  Paused `playwright-loadgen` (`replicas: 0`) to test the theory directly:
+  every remaining pod stabilized within minutes with no other change, direct
+  evidence CPU, not memory, was the dominant driver of the ongoing
+  instability. Permanent fix, not just a live pause: `CONCURRENCY` 5 → 2,
+  `PAUSE_MIN`/`PAUSE_MAX` widened 2→3/5→8 in
+  `labs/loadgen/playwright-loadgen.yaml`. Reapplied live and confirmed:
+  playwright-loadgen's own CPU dropped to ~50%, api-gateway's to ~11%, fleet
+  stayed stable with it running again.
+
+  **Watch, not yet acted on**: `api-gateway`'s memory read 1.068GiB (71% of
+  its new 1536Mi limit) shortly after this incident — higher than the
+  ~727MiB it was sized against originally. Could be normal post-restart
+  JVM warmup (class loading, JIT, cache fill) rather than a sign the limit is
+  wrong; one data point isn't enough to retune on. Revisit once
+  `k8s.pod.memory.working_set` has a real multi-hour trend to look at, now
+  that it's actually flowing.
+
+  **Not yet done**: this incident's fixes are functional and live-verified,
+  not yet woven into the taught curriculum — no new doc section, checkpoint,
+  or dashboard panel for resource requests/limits or `kubelet_stats` pod
+  metrics. Real, valuable capstone-dashboard material (AW1's own Infra
+  dashboard already has panels that were empty specifically because these
+  gaps existed) — flagged as a separate follow-up, not attempted in this
+  pass given its scope.
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if

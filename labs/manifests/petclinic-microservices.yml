@@ -36,6 +36,38 @@
 # same way you'd want to tear down or inspect it in a real cluster shared
 # with other workloads. One `kubectl apply -f` creates the namespace and
 # everything in it together; nothing extra to run first.
+#
+# RESOURCE REQUESTS/LIMITS — added 2026-09-03, not present in the original
+# migration. Confirmed live on wsuser01's instance (up ~44h under the
+# always-on Playwright load generator, not the 3-minute soak these pods were
+# originally validated against): with no limits at all, the node-level OOM
+# killer intervenes when the whole box gets tight and picks an ARBITRARY
+# victim — confirmed hitting cilium-operator (242 restarts) and even
+# kube-apiserver (8 restarts), not just these six services. A per-container
+# memory limit turns that into a contained, attributable cgroup OOM kill of
+# the one container that actually earned it, instead of collateral damage to
+# cluster infrastructure. It's also the fix for a separate, real anti-pattern:
+# a container-aware JVM with NO memory limit sizes its own default max heap
+# off the NODE's total memory (-XX:MaxRAMPercentage, 25% by default), not
+# anything sane per-service — every JVM here was silently entitled to grow
+# toward multiple GB with zero coordination between them.
+#
+# Values below are deliberately generous headroom above what `docker stats`
+# showed live (five of six services clustered at 700-800Mi RSS at that
+# moment — not necessarily each one's peak, since restart recency varies per
+# service), not a tight fit — a limit set from one guessed number will just
+# convert a systemic problem into a specific one that fails faster, which is
+# only useful if you then watch and iterate. Revisit these once
+# k8s.pod.memory.usage / k8s.container.memory.usage are actually flowing
+# (kubelet_stats is configured but currently emits zero data — separate fix,
+# see AGENTS.md) and real steady-state peaks are known.
+#
+# No CPU limit set, deliberately: this project already found once that CPU
+# starvation on this exact box causes the kubelet to miss its node-lease
+# renewal and Kubernetes to evict everything (the original reason this
+# instance moved from 4 to 8 vCPU) — a hard CPU limit risks reintroducing
+# that failure mode via throttling instead of preventing it. requests.cpu
+# alone still gives the scheduler a fair-share floor to bin-pack against.
 ---
 apiVersion: v1
 kind: Namespace
@@ -300,6 +332,16 @@ spec:
       - name: config-server
         image: springcommunity/spring-petclinic-config-server:3.2.0
         imagePullPolicy: IfNotPresent
+        # See the RESOURCE REQUESTS/LIMITS note at the top of this file.
+        # config-server and discovery-server are pure infrastructure — no
+        # PetClinic business traffic flows through either — so they get the
+        # lighter of the two tiers used here.
+        resources:
+          requests:
+            cpu: 200m
+            memory: 640Mi
+          limits:
+            memory: 1280Mi
         env:
         # Overrides the image's baked-in git.uri, which otherwise pulls this
         # exact config from GitHub's `main` branch on every restart — an
@@ -374,6 +416,13 @@ spec:
       - name: discovery-server
         image: springcommunity/spring-petclinic-discovery-server:3.2.0
         imagePullPolicy: IfNotPresent
+        # See the RESOURCE REQUESTS/LIMITS note at the top of this file.
+        resources:
+          requests:
+            cpu: 200m
+            memory: 640Mi
+          limits:
+            memory: 1280Mi
         ports:
         - containerPort: 8761
         readinessProbe:
@@ -427,6 +476,15 @@ spec:
         # The one image you build yourself — see FW1 §4-5.
         image: ${WS_USER}/petclinic-customers:v1
         imagePullPolicy: Never
+        # See the RESOURCE REQUESTS/LIMITS note at the top of this file.
+        # customers-service, vets-service, visits-service each own a database
+        # pool and take real PetClinic traffic — the heavier of the two tiers.
+        resources:
+          requests:
+            cpu: 250m
+            memory: 768Mi
+          limits:
+            memory: 1536Mi
         ports:
         - containerPort: 8081
         readinessProbe:
@@ -479,6 +537,13 @@ spec:
       - name: visits-service
         image: springcommunity/spring-petclinic-visits-service:3.2.0
         imagePullPolicy: IfNotPresent
+        # See the RESOURCE REQUESTS/LIMITS note at the top of this file.
+        resources:
+          requests:
+            cpu: 250m
+            memory: 768Mi
+          limits:
+            memory: 1536Mi
         ports:
         - containerPort: 8082
         readinessProbe:
@@ -531,6 +596,13 @@ spec:
       - name: vets-service
         image: springcommunity/spring-petclinic-vets-service:3.2.0
         imagePullPolicy: IfNotPresent
+        # See the RESOURCE REQUESTS/LIMITS note at the top of this file.
+        resources:
+          requests:
+            cpu: 250m
+            memory: 768Mi
+          limits:
+            memory: 1536Mi
         ports:
         - containerPort: 8083
         readinessProbe:
@@ -586,6 +658,17 @@ spec:
       - name: api-gateway
         image: springcommunity/spring-petclinic-api-gateway:3.2.0
         imagePullPolicy: IfNotPresent
+        # See the RESOURCE REQUESTS/LIMITS note at the top of this file.
+        # api-gateway is the single entry point for every request the load
+        # generator sends — confirmed live at 150% CPU under sustained load,
+        # the highest of the six by a wide margin — hence the higher CPU
+        # request. Memory tier matches the other business services.
+        resources:
+          requests:
+            cpu: 500m
+            memory: 768Mi
+          limits:
+            memory: 1536Mi
         ports:
         - containerPort: 8080
         readinessProbe:

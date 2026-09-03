@@ -247,6 +247,19 @@ agent:
               scrape_interval: 30s
               static_configs:
                 - targets: ["hubble-metrics.kube-system.svc.cluster.local:9965"]
+      # [AW1] The chart's own default kubelet_stats receiver (container/pod/
+      # node memory+CPU usage) needs this override on minikube — its
+      # auth_type: serviceAccount talks to the kubelet's HTTPS endpoint,
+      # whose certificate is self-signed on this cluster. Without
+      # insecure_skip_verify, TLS verification fails silently: the receiver
+      # sits in the metrics pipeline doing nothing, no error surfaced
+      # anywhere, otelcol_receiver_accepted_metric_points{receiver="kubelet_stats"}
+      # pinned at zero. Confirmed live 2026-09-03 — this one line took it from
+      # 0 to real k8s.pod.memory.usage/working_set/rss data. Real production
+      # kubelets normally present a CA-signed cert; this is a minikube-specific
+      # fix, not a general recommendation.
+      kubelet_stats:
+        insecure_skip_verify: true
     processors:
       # [AW1] App metrics -> their own index. Namespace, not service.name — six
       # services now report six different names (see extraAttributes.fromLabels
