@@ -380,7 +380,7 @@
   aw1-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 1005757
+    bytes: 920409
     section: "8. Install the capstone dashboards — Metrics & traces"
   apm-traces-dashboard.png:
     kind: screenshot
@@ -390,12 +390,12 @@
   aw1-infra-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 930793
+    bytes: 918783
     section: "8. Install the capstone dashboards — Infrastructure & Collector health"
   aw1-cilium-metrics-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 461664
+    bytes: 461368
     section: "9. The capstone dashboards — Cilium & Hubble Metrics"
   image1.png:
     kind: diagram
@@ -737,7 +737,7 @@
   aw2-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 622064
+    bytes: 786664
     section: "9. Install the dashboards — Splunk Enterprise correlation"
   image1.png:
     kind: diagram

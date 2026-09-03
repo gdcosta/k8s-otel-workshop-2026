@@ -157,7 +157,7 @@ index=k8s_ws_traces
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
         </search>
-        <option name="charting.chart">line</option>
+        <option name="charting.chart">area</option>
         <option name="charting.drilldown">none</option>
         <option name="charting.legend.placement">bottom</option>
         <option name="charting.axisTitleY.text">Span Count</option>
@@ -181,7 +181,7 @@ index=k8s_ws_traces
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
         </search>
-        <option name="charting.chart">line</option>
+        <option name="charting.chart">area</option>
         <option name="charting.drilldown">none</option>
         <option name="charting.legend.placement">none</option>
         <option name="charting.axisTitleY.text">Span Count</option>
@@ -209,7 +209,7 @@ index=k8s_ws_traces
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
         </search>
-        <option name="charting.chart">line</option>
+        <option name="charting.chart">area</option>
         <option name="charting.drilldown">none</option>
         <option name="charting.legend.placement">none</option>
         <option name="charting.axisTitleY.text">MB</option>
@@ -355,7 +355,7 @@ index=k8s_ws_traces
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
         </search>
-        <option name="charting.chart">line</option>
+        <option name="charting.chart">area</option>
         <option name="charting.drilldown">none</option>
         <option name="charting.legend.placement">bottom</option>
         <option name="charting.axisTitleY.text">Span Count</option>

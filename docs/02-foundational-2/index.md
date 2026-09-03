@@ -1720,9 +1720,9 @@ already have.
 
 ```bash
 cd ~/k8s_workshop
-curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.6.tgz
+curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.8.tgz
 sudo -i -u splunk /opt/splunk/bin/splunk install app \
-  "$PWD/k8s-ws-dashboards-1.0.6.tgz" -auth admin:Workshop2026!
+  "$PWD/k8s-ws-dashboards-1.0.8.tgz" -auth admin:Workshop2026!
 ```
 
 !!! success "No restart needed"
