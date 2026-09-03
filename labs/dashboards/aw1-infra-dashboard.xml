@@ -338,6 +338,89 @@
 
   <row>
     <panel>
+      <title>Pod Memory Usage vs. Declared Limit — Current State</title>
+      <description>The Scheduling Contract panel above shows what each container declared; this shows what it is actually using, from the kubelet_stats receiver's real per-pod usage (dead until fixed live 2026-09-03 — see Advanced Workshop #1 §5's "kubelet_stats" section for the silent TLS failure that kept it at zero, and why this data lands in k8s_ws_petclinic_metrics rather than this dashboard's usual index). Confirmed live: five of six services sit between 43% and 55% of their declared memory limit; api-gateway is the outlier at 70.6% (1085 MiB working set against a 1536 MiB limit) — the same pod flagged as a "watch, not yet acted on" item after this morning's incident, now with a real number instead of a one-off snapshot. Working Set is the figure that matters for an OOM decision; Usage includes reclaimable cache and always reads a touch higher.</description>
+      <table>
+        <search>
+          <query>
+| mstats latest(k8s.pod.memory.usage) as usage_b latest(k8s.pod.memory.working_set) as ws_b WHERE index=k8s_ws_petclinic_metrics k8s.namespace.name=petclinic BY k8s.pod.name
+| rex field="k8s.pod.name" "^(?&lt;Service&gt;.+)-[a-z0-9]{8,10}-[a-z0-9]{5}$"
+| where isnotnull(Service) AND Service!="playwright-loadgen"
+| eval "Usage (MiB)"=round(usage_b/1024/1024,1), "Working Set (MiB)"=round(ws_b/1024/1024,1)
+| rename k8s.pod.name as Pod
+| table Service Pod "Usage (MiB)" "Working Set (MiB)"
+| join type=left Service
+    [ | mstats latest(k8s.container.memory_limit) as ml WHERE index=k8s_ws_metrics k8s.namespace.name=petclinic BY k8s.container.name
+      | rename k8s.container.name as Service
+      | eval "Limit (MiB)"=round(ml/1024/1024,0)
+      | table Service "Limit (MiB)" ]
+| eval "% of Limit"=round('Working Set (MiB)'/'Limit (MiB)'*100,1)
+| eval Assessment=case('% of Limit'&gt;=90,"CRITICAL — approaching OOM kill",'% of Limit'&gt;=70,"Watch — elevated but stable",true(),"Healthy headroom")
+| sort Service
+| table Service Pod "Working Set (MiB)" "Usage (MiB)" "Limit (MiB)" "% of Limit" Assessment
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Working Set (MiB)">
+          <option name="precision">1</option>
+          <option name="unit">MiB</option>
+        </format>
+        <format type="number" field="Usage (MiB)">
+          <option name="precision">1</option>
+          <option name="unit">MiB</option>
+        </format>
+        <format type="number" field="Limit (MiB)">
+          <option name="precision">0</option>
+          <option name="unit">MiB</option>
+        </format>
+        <format type="number" field="% of Limit">
+          <option name="precision">1</option>
+          <option name="unit">%</option>
+        </format>
+        <format type="color" field="% of Limit">
+          <colorPalette type="list">[#FFFFFF,#F8BE34,#DC4E41]</colorPalette>
+          <scale type="threshold">70,90</scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Pod Memory Working Set Over Time by Service — Real Usage, kubelet_stats</title>
+      <description>Same six services as the table above, this time as a trend rather than a single point — the exact signal that was missing this morning, when the only way to see per-pod memory over time was SSHing in and running docker stats by hand. Shared y-axis is deliberate here: the real range captured live was config-server at ~569 MiB up to api-gateway at ~1085 MiB, under a 2x spread, and every service shares a comparable 1280–1536 MiB declared limit — one shared scale lets you read all six services' real distance from that common ceiling at a glance. (Contrast the JVM Heap trellis on the Metrics &amp; Traces dashboard, which deliberately uses an independent per-cell scale — there the point is preserving each JVM's own GC sawtooth shape, not comparing six services against one shared ceiling the way container memory limits let you do here.)</description>
+      <chart>
+        <search>
+          <query>
+| mstats avg(k8s.pod.memory.working_set) as ws WHERE index=k8s_ws_petclinic_metrics k8s.namespace.name=petclinic span=$span_token$ BY k8s.pod.name
+| rex field="k8s.pod.name" "^(?&lt;service&gt;.+)-[a-z0-9]{8,10}-[a-z0-9]{5}$"
+| where isnotnull(service) AND service!="playwright-loadgen"
+| eval ws_mb=round(ws/1024/1024,2)
+| timechart span=$span_token$ avg(ws_mb) by service
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleY.text">MiB</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.chart.nullValueMode">gaps</option>
+        <option name="trellis.enabled">1</option>
+        <option name="trellis.scales.shared">1</option>
+        <option name="trellis.size">medium</option>
+        <option name="trellis.splitBy">service</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
       <html>
         <div style="background:#E8F5E9; border-left:5px solid #375623; padding:14px 20px; border-radius:4px;">
           <h3 style="margin:0 0 6px 0; color:#1B5E20 !important; font-size:15px;">Section 3 — Collector Pipeline Health: the observability system observing itself</h3>

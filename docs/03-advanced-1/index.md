@@ -926,6 +926,9 @@ OTLP data into the app index — the same reach the danger box above already war
 now with a concrete example. Non-`petclinic` pods (`kube-system`, `otel`) still land in
 `k8s_ws_metrics`, right where §9's Infrastructure dashboard expects them.
 
+This data doesn't just live in the one-off checkpoint query above — §9 covers two dashboard
+panels built from it, showing real per-pod usage against each container's own declared limit.
+
 ---
 
 ## 6. Cilium/Hubble metrics — the network layer, in numbers
@@ -1348,9 +1351,9 @@ Workshop** app.
 
     ```bash
     cd ~/k8s_workshop
-    curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.5.tgz
+    curl -fsSLO https://raw.githubusercontent.com/gdcosta/k8s-otel-workshop-2026/main/labs/dashboards/dist/k8s-ws-dashboards-1.0.6.tgz
     sudo -i -u splunk /opt/splunk/bin/splunk install app \
-      "$PWD/k8s-ws-dashboards-1.0.5.tgz" -auth admin:Workshop2026!
+      "$PWD/k8s-ws-dashboards-1.0.6.tgz" -auth admin:Workshop2026!
     ```
 
 ### Metrics & traces
@@ -1446,6 +1449,25 @@ different picture, unchanged by any of this: `kube-apiserver`, `kube-controller-
 `UNBOUNDED` — they have no resources block whatsoever, not even a request. The application
 you're running is now contained; the cluster it's running on top of still is not, and any one
 of those platform components can still starve the whole node.
+
+Declared numbers only tell half the story, which is why two more panels sit right below the
+Scheduling Contract table: **Pod Memory Usage vs. Declared Limit — Current State** and **Pod
+Memory Working Set Over Time by Service**. Both read the real per-pod usage §5's
+`kubelet_stats` fix unlocked, joined against each container's own declared limit by deriving
+the service name from the pod name (`k8s.pod.name` carries the ReplicaSet-hash/random suffix;
+`k8s.container.name` does not, and there's no `k8s.deployment.name` dimension on kubelet's own
+metrics, so a `rex` strips the trailing `-<hash>-<suffix>` to get a joinable key). Confirmed
+live: five of the six services sit between 43% and 55% of their declared memory limit;
+`api-gateway` is the outlier at 70.7% (1085.8 MiB working set against its 1536 MiB limit) —
+the same pod this project flagged as a "watch, not yet acted on" item right after this
+morning's incident, now backed by a real number on a dashboard instead of a one-off query. The
+trend panel trellises the same six services with a **shared** y-axis, a deliberate departure
+from the JVM Heap trellis on the Metrics & Traces dashboard: the real range captured live was
+config-server at ~569 MiB up to api-gateway at ~1085 MiB, under a 2x spread, and every service
+shares a comparable 1280–1536 MiB limit, so one shared scale lets you read all six services'
+distance from that common ceiling at a glance — independent per-cell scaling (right for JVM
+heap, where the point was each JVM's own GC sawtooth, not a shared ceiling) would flatten that
+comparison out.
 
 **Collector pipeline health** — throughput by signal type, a data-loss audit (accepted versus
 refused at the receiver), and exporter queue utilisation. A Collector that is silently

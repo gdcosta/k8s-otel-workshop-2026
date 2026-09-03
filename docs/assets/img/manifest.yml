@@ -389,7 +389,7 @@
     section: "8. The capstone dashboards — Application Trace Information v4.0.0"
   aw1-infra-dashboard.png:
     kind: screenshot
-    status: verified
+    status: stale
     bytes: 559552
     section: "8. Install the capstone dashboards — Infrastructure & Collector health"
   aw1-cilium-metrics-dashboard.png:
