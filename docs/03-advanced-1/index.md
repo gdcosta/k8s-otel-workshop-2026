@@ -820,6 +820,112 @@ With the load test still running, wait a minute for data to arrive, then:
     data leaves the cluster, and it follows the data to *any* backend — which matters in
     Advanced Workshop #2 when Observability Cloud becomes a second destination.
 
+### kubelet_stats — real per-pod memory, not just declared limits
+
+!!! abstract "Learning moment — a receiver that's been running since §2, silently doing nothing"
+    The chart's default `kubelet_stats` receiver has been part of your metrics pipeline since
+    §2 turned `metricsEnabled: true` on. It scrapes each node's kubelet for real per-pod and
+    per-container CPU/memory *usage* — a different thing from the *declared* requests and
+    limits the Scheduling Contract panel in §9 reads from the `k8s_cluster` receiver. On this
+    cluster, though, it's been producing exactly nothing, and nothing has errored anywhere.
+    This is worth fixing for the data, but it's worth walking through slowly for the discovery
+    method — this is the kind of failure that gives observability tooling a bad name if you
+    don't know how to go looking for it.
+
+Prove it to yourself first. Every receiver reports how many metric data points it has
+accepted, broken out individually:
+
+```
+| mstats latest(otelcol_receiver_accepted_metric_points) as acc WHERE index=k8s_ws_metrics BY receiver | sort receiver
+```
+
+`kubelet_stats` sits at `0` while `host_metrics`, `otlp`, and every `prometheus/*` receiver
+show real, climbing numbers. Nothing in the Collector's own logs mentions `kubelet_stats` at
+all; there's no corresponding bump in `otelcol_receiver_refused_metric_points` either — this
+isn't a receiver rejecting data, it's one that never successfully connects in the first place.
+
+Root cause: the chart's default `kubelet_stats` config reaches the kubelet over HTTPS with
+`auth_type: serviceAccount`, which verifies the kubelet's TLS certificate against a CA.
+minikube's kubelet presents a **self-signed** certificate — a real cluster's kubelet is
+normally CA-signed and wouldn't hit this — so that verification fails, and it fails
+**silently**: no error surfaces anywhere in the Collector, the receiver just never completes a
+connection to scrape.
+
+Add the fix to `values-workshop.yaml`, inside the same `agent:` key the danger box above told
+you never to duplicate — this is the first thing this module adds under `receivers:`, so §6
+below will ask you to add a second receiver alongside this one, not replace it:
+
+```yaml
+agent:
+  config:
+    receivers:
+      # minikube's kubelet presents a self-signed certificate; without this,
+      # TLS verification fails SILENTLY — no error anywhere, the
+      # otelcol_receiver_accepted_metric_points{receiver="kubelet_stats"}
+      # counter above just sits at zero forever. A real cluster with a
+      # CA-signed kubelet certificate would not need this override — this is
+      # a minikube-specific fix, not a general recommendation.
+      kubelet_stats:
+        insecure_skip_verify: true
+    # ... existing processors: transform/petclinic_logs, transform/app_metrics_index,
+    # transform/traces_index, all unchanged ...
+    service:
+      pipelines:
+        # ... existing metrics / traces / logs pipelines, unchanged ...
+```
+
+??? abstract "Full command sequence — collector change"
+    ```bash
+    cd ~/k8s_workshop/k8s_otel
+    ne values-workshop.yaml          # or: vi values-workshop.yaml
+    sed -i "s|\${WS_USER}|$WS_USER|g" values-workshop.yaml
+
+    helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel --dry-run=client
+
+    helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+      --version 0.158.0 -f values-workshop.yaml --namespace otel
+
+    kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel --timeout=300s
+    ```
+
+```bash
+helm upgrade ${WS_USER}-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
+  --version 0.158.0 -f values-workshop.yaml --namespace otel
+kubectl rollout status daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent -n otel
+```
+
+### ✅ Checkpoint — real memory numbers, and one more thing routing touches
+
+```
+| mstats latest(k8s.pod.memory.usage) as usage latest(k8s.pod.memory.working_set) as ws
+    WHERE index=k8s_ws_petclinic_metrics BY k8s.pod.name
+| eval usageMiB=round(usage/1024/1024,1), wsMiB=round(ws/1024/1024,1)
+| table k8s.pod.name usageMiB wsMiB
+```
+
+<details>
+<summary>Real output, captured live 2026-09-03</summary>
+
+| Pod | usage (MiB) | working_set (MiB) |
+|---|---|---|
+| `api-gateway-...` | 1072.5 | 1069.9 |
+| `vets-service-...` | 797.8 | 796.6 |
+
+Both real, both well inside the `resources.limits.memory` FW #1 now sets for these containers
+(1536 MiB each) — exactly the kind of number this receiver exists to give you, so a limit
+guessed once from `docker stats` can eventually be retuned from a real, continuous trend
+instead.
+</details>
+
+Notice the index: `k8s_ws_petclinic_metrics`, not `k8s_ws_metrics`. The
+`transform/app_metrics_index` processor above matches on
+`resource.attributes["k8s.namespace.name"] == "petclinic"` with no condition on which receiver
+produced the metric, so `kubelet_stats` data for these six pods rides along with the JVM and
+OTLP data into the app index — the same reach the danger box above already warned you about,
+now with a concrete example. Non-`petclinic` pods (`kube-system`, `otel`) still land in
+`k8s_ws_metrics`, right where §9's Infrastructure dashboard expects them.
+
 ---
 
 ## 6. Cilium/Hubble metrics — the network layer, in numbers
@@ -879,6 +985,8 @@ pipeline — two scrape jobs, one for each metrics source above:
 agent:
   config:
     receivers:
+      # kubelet_stats from earlier in this module stays here, unchanged —
+      # this adds prometheus/cilium alongside it, not in place of it.
       # Two separate Prometheus scrape targets: Hubble's own flow metrics
       # (headless kube-system Service) and Cilium agent's own health/perf
       # metrics (no Service — hostNetwork, reached by node IP).
@@ -1323,8 +1431,21 @@ the scheduler cannot see.
 workload drift (desired versus available), and the scheduling contract (CPU and memory
 requests versus limits). Kubernetes is declarative, so nearly every outage is a gap between
 what you declared and what you got; this section is built from those differences rather than
-from absolute numbers. The limits table is worth a pause — most control-plane components run
-with **no CPU or memory limit at all**, which means any one of them can starve the whole node.
+from absolute numbers. The Scheduling Contract table is worth a pause, and it now tells two
+different stories depending on the namespace. Confirmed live: every `petclinic` container —
+`api-gateway`, `config-server`, `customers-service`, `discovery-server`, `vets-service`,
+`visits-service` — shows a real memory request and limit (768 MiB/1536 MiB for the four
+business services, 640 MiB/1280 MiB for the two infrastructure ones), where this same panel
+used to show nothing at all for that namespace. That's the `resources:` blocks FW #1 now adds
+to the manifest, doing exactly what they're meant to. The platform layer underneath is a
+different picture, unchanged by any of this: `kube-apiserver`, `kube-controller-manager`,
+`kube-scheduler`, and `etcd` all still show `UNBOUNDED` on both CPU and memory limits — and
+`kube-apiserver`, `kube-controller-manager`, and `kube-scheduler` don't even have a memory
+*request* set, only a CPU one. Cilium's containers (`cilium`, `cilium-envoy`,
+`cilium-operator`) don't appear in this table at all, which is a stronger statement than
+`UNBOUNDED` — they have no resources block whatsoever, not even a request. The application
+you're running is now contained; the cluster it's running on top of still is not, and any one
+of those platform components can still starve the whole node.
 
 **Collector pipeline health** — throughput by signal type, a data-loss audit (accepted versus
 refused at the receiver), and exporter queue utilisation. A Collector that is silently
@@ -1620,6 +1741,17 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     # sourcetype and k8s.* are RESOURCE attributes, not log-record attributes.
     agent:
       config:
+        receivers:
+          # [AW1] minikube's kubelet presents a self-signed certificate; without
+          # this, TLS verification fails SILENTLY — no error anywhere, the
+          # otelcol_receiver_accepted_metric_points{receiver="kubelet_stats"}
+          # counter just sits at zero forever. A real cluster with a CA-signed
+          # kubelet certificate would not need this override — this is a
+          # minikube-specific fix, not a general recommendation. Confirmed live
+          # 2026-09-03: k8s.pod.memory.usage/.working_set/.rss/.available real
+          # and flowing once this was added.
+          kubelet_stats:
+            insecure_skip_verify: true
         processors:
           # [AW1] App metrics -> their own index. Namespace, not service.name — six
           # services now report six different names (see extraAttributes.fromLabels

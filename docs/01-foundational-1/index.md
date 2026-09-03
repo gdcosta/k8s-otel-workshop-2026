@@ -444,7 +444,7 @@ curl -fsSL -o petclinic.yml.tmpl \
 WS_USER=$WS_USER envsubst < petclinic.yml.tmpl > ${WS_USER}-petclinic-k8s-manifest.yml
 ```
 
-!!! note "Skim it before applying — four things are worth spotting"
+!!! note "Skim it before applying — five things are worth spotting"
     - A **`Namespace`** object, `petclinic`, first in the file. One `kubectl apply -f`
       creates it and everything inside it together — nothing extra to run beforehand.
     - A **`ConfigMap`** holding six small YAML files, copied from
@@ -463,6 +463,12 @@ WS_USER=$WS_USER envsubst < petclinic.yml.tmpl > ${WS_USER}-petclinic-k8s-manife
       They never leave your own cluster, and the pre-built images have those exact
       hostnames baked into their configuration — renaming them would mean overriding
       that wiring for no real benefit.
+    - Every container now declares a **`resources`** block — memory `requests` and
+      `limits` on all six, CPU `requests` only, deliberately no CPU `limit`. Added
+      2026-09-03 after a live instance with none of this found the node-level OOM killer
+      picking arbitrary victims once the box got tight — cluster infrastructure included,
+      not just these pods. See the manifest's own header comment for the full reasoning,
+      including why CPU stays unbounded.
 
 Apply it:
 
@@ -489,6 +495,23 @@ kubectl rollout status deployment/api-gateway        -n petclinic --timeout=180s
     a room of twenty people it reads as "the lab broke," all at once. If `minikube status`
     or `kubectl get nodes` shows anything but `Ready` during this step, that's what's
     happening — it is not a sign anything is misconfigured.
+
+!!! warning "That sizing was validated for this module's own short burst — not for running the app for days"
+    The 8 vCPU / 32 GB figure above comes from a single ~3-minute cold-start-and-traffic
+    soak, run once, to find the floor this module needs. Until 2026-09-03 it had never been
+    tested against continuous, multi-day operation. That day, a live instance that had been
+    running this same application continuously for roughly 44 hours under an always-on load
+    generator hit sustained OOM kills across the whole `petclinic` namespace — and even
+    cluster infrastructure underneath it (`cilium-operator`, `storage-provisioner`,
+    `kube-apiserver`, not just app pods). Root cause: none of the six containers declared a
+    memory limit, so when the node got tight, the kernel's OOM killer picked whatever
+    process looked worst at that moment — sometimes a PetClinic pod, sometimes a piece of
+    the platform. The `resources:` blocks called out above fix exactly this (a contained,
+    attributable per-container OOM kill instead of an arbitrary node-wide one), and it's
+    confirmed holding live since. But be honest about what that actually proves: this
+    module's sizing guidance has only ever been validated for its own short burst. Leaving
+    an instance running continuously for days is new territory, not a guarantee this size
+    solves everything forever.
 
 Inspect what you created:
 

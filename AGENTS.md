@@ -558,6 +558,77 @@ here's where things stand:
   checked-in manifest — deleted, harmless (already terminated, using no
   resources), just etcd bookkeeping clutter worth clearing given etcd itself
   was seen timing out under load earlier in this same incident.
+
+  **Same-day, third follow-up: the incident's fixes woven into the taught
+  curriculum**, per the user's own explicit ask ("does the workshop guides
+  need to be updated... make sure the standalone guides are also updated").
+  Dispatched to a sub-agent with the full incident narrative already in hand
+  (no rediscovery needed) and an instruction to independently re-verify every
+  live number before writing it down rather than trust this morning's
+  figures unchanged. Four real doc changes landed:
+
+  `docs/01-foundational-1/index.md` — a 5th "skim it before applying" bullet
+  on the new `resources:` blocks; a new warning box right after the existing
+  4-vCPU danger box, stating plainly that the 8 vCPU/32 GB sizing has only
+  ever been validated for this module's own ~3-minute burst, not sustained
+  operation — honest about what today's fix does and doesn't prove yet.
+
+  `docs/03-advanced-1/index.md` — genuinely new content: a `### kubelet_stats`
+  subsection (end of §5, deliberately — lets the checkpoint use
+  `k8s_ws_petclinic_metrics`, where this data actually lands post-routing,
+  chosen over §2 for that reason and because it extends §5's own "the
+  transform catches more than you think" lesson). Walks through the real
+  discovery method (`otelcol_receiver_accepted_metric_points{receiver=
+  "kubelet_stats"}` pinned at 0, no error anywhere — a genuinely good "how do
+  you even find a silent failure" moment), the minikube-specific TLS cause,
+  the fix, and a real live checkpoint (`api-gateway` 1072.5 MiB usage /
+  1069.9 MiB working_set, `vets-service` 797.8 / 796.6 MiB, both re-verified
+  live that day, not copied from this ledger). §6's receiver snippet and the
+  module's "Reference — complete files" embedded YAML both updated to carry
+  `kubelet_stats` forward, since it now exists from §5 onward.
+
+  **A genuinely new finding, not in this ledger before the sub-agent found
+  it**: `k8s.pod.memory.*` for `petclinic` pods lands in
+  `k8s_ws_petclinic_metrics`, not `k8s_ws_metrics` — traced to
+  `transform/app_metrics_index` matching on namespace with no condition on
+  which receiver produced the metric, so `kubelet_stats` data rides the same
+  route as the JVM/OTLP data. Confirmed by reading the actual rendered
+  Collector config, not assumed.
+
+  `docs/03-advanced-1/index.md` §9 — rewrote the Infra dashboard's
+  "Kubernetes object state" paragraph, which used to say "most control-plane
+  components run with no CPU or memory limit at all" as one blanket claim.
+  Now correctly split: `petclinic` containers show real, non-empty requests/
+  limits (confirmed live, all six), where the Scheduling Contract panel used
+  to show nothing for that namespace at all; `kube-apiserver`/
+  `kube-controller-manager`/`kube-scheduler`/`etcd` remain confirmed
+  `UNBOUNDED`; Cilium's own containers don't appear in the panel's query
+  results *at all* (no resources block whatsoever, a stronger statement than
+  `UNBOUNDED`) — also confirmed live, along with cluster-infra restart counts
+  still slowly climbing even now (`cilium-operator` 242→247,
+  `storage-provisioner` 255→259 across the few hours checked), real ongoing
+  evidence the platform layer genuinely remains exposed, not a stale claim
+  carried forward unchanged.
+
+  `docs/facilitator/index.md` — the same sizing caveat, facilitator-framed
+  (their own decision: rebuild, snapshot, or leave a box running between
+  sessions), explicit that only a few hours of soak evidence exist, not days.
+
+  Independently confirmed no duplication with the concurrency/reload commit
+  (`cf6ecb7`) — `labs/loadgen/*` and FW2 §7 untouched, checked via `git show`
+  before writing anything. Both `mkdocs build --strict` and
+  `build-standalone.sh` confirmed clean, personally re-verified after the
+  sub-agent's own claim, not just trusted.
+
+  **Also personally re-verified before committing**: the sub-agent's report
+  flagged `api-gateway` had been `OOMKilled` once more, about an hour before
+  it checked — checked live directly rather than taking that at face value;
+  confirmed it was the *same* single restart already known about from
+  earlier in the day (still `RESTARTS: 1`, not 2), not a new event, and
+  memory had if anything drifted slightly down (69% of limit vs. 71% earlier)
+  rather than climbing. No new problem; the report's own phrasing ("self-
+  healed, stable since") was accurate, just worth confirming independently
+  rather than assuming.
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if

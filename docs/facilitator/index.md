@@ -104,6 +104,22 @@ replaces only the AMI-selection step, nothing else about setup changes.
     workshop application included. 8 vCPU / 32 GB held stable through a three-minute
     traffic soak with the node `Ready` throughout. Do not provision smaller to save cost.
 
+!!! danger "That sizing was only ever validated for a short burst — worth watching on any long-running instance"
+    The three-minute soak above proves this size handles the module's own cold start. Until
+    2026-09-03 it had never been tested against an instance left running for an extended
+    period — the kind of thing a facilitator decides when choosing whether to rebuild, snapshot,
+    or leave a box up between sessions. That day, a genuinely long-running instance (roughly
+    44 hours, under a continuous always-on load generator) hit sustained OOM kills across the
+    whole fleet — and cluster infrastructure underneath it too (`cilium-operator`,
+    `storage-provisioner`, `kube-apiserver`), not just PetClinic's own pods. Root cause: none of
+    the six PetClinic containers declared a memory limit anywhere, so once the box got tight the
+    kernel's OOM killer picked whatever process looked worst at that moment, with no regard for
+    which layer it belonged to. This is now fixed — resource limits landed in the manifest,
+    confirmed live and holding since — but say plainly to yourself, not just to participants:
+    only a few hours of soak time exist as evidence so far, not days. If you're leaving an
+    instance running for an extended period (overnight, across sessions, as a standing demo
+    environment), that remains something worth checking in on, not a settled guarantee.
+
 !!! danger "ARM will not work"
     Splunk Enterprise has no Linux ARM64 build. This is not a preference.
 
