@@ -629,6 +629,54 @@ here's where things stand:
   rather than climbing. No new problem; the report's own phrasing ("self-
   healed, stable since") was accurate, just worth confirming independently
   rather than assuming.
+
+  **Same-day, fourth follow-up: the gap the curriculum writeup itself left
+  behind — real per-pod usage existed but nothing persisted it.** User's own
+  question, exactly on target: "do the dashboards show these metrics? or do
+  they need to be updated, including the screenshots?" Checked directly
+  before answering — no panel anywhere charted `k8s.pod.memory.usage`/
+  `.working_set`; only the Scheduling Contract panel (declared requests/
+  limits, `k8s_cluster` receiver) existed, and the new §5 kubelet_stats
+  section only had a one-off checkpoint query. Confirmed, proposed the fix,
+  user approved and explicitly asked for sub-agent dispatch.
+
+  App bumped 1.0.5 → 1.0.6. Two new panels on `aw1-infra-dashboard.xml`,
+  placed right after Scheduling Contract so declared-vs-actual reads in
+  sequence: a current-state table (per-pod working set/usage joined against
+  each container's declared limit — real numbers: five of six services at
+  43-55% of limit, `api-gateway` the outlier at 70.7%, giving the "watch,
+  not yet acted on" item from this morning's incident a real, recurring home
+  instead of a one-off snapshot) and a trellis-by-service trend. The join
+  needed real live discovery, not a guess: `k8s.pod.memory.*` carries
+  `k8s.pod.name` (with the ReplicaSet-hash/pod-suffix) but no
+  `k8s.container.name` or `k8s.deployment.name`, while
+  `k8s.container.memory_limit` carries `k8s.container.name` but lives in a
+  *different index* (`k8s_ws_metrics`, not `k8s_ws_petclinic_metrics`) — a
+  `rex` strips the trailing `-<hash>-<suffix>` to derive a joinable key
+  across both. Trellis scale: **shared**, a deliberate departure from the
+  JVM Heap trellis (independent) — justified by real numbers (config-server
+  ~569 MiB to api-gateway ~1085 MiB is under a 2x spread, all six share a
+  comparable 1280-1536 MiB limit, so shared scale lets distance-from-ceiling
+  read at a glance; the JVM panel's independent scale exists for a genuinely
+  different reason, preserving each JVM's own GC shape).
+
+  Doc cross-references added both directions (§5's checkpoint now points at
+  where the data lives on a dashboard; §9's Infra-dashboard walkthrough
+  describes both new panels with real numbers and the trellis-scale
+  rationale). `aw1-infra-dashboard.png` flagged `stale` in the manifest —
+  its layout genuinely changed — not recaptured in this pass.
+
+  Reviewed at the same depth as every other round this session before
+  committing: read the full XML diff, confirmed `span_token` (the existing
+  dropdown) was reused correctly rather than duplicated, independently
+  re-ran both new panels' queries live myself (not just trusting the
+  sub-agent's own report) and got matching, real, non-empty results both
+  times. `mkdocs build --strict` and `build-standalone.sh` both re-verified
+  personally, not just trusted.
+
+  **Not yet done**: the screenshot. `aw1-infra-dashboard.png` needs
+  recapture now that the panel layout changed — separate follow-up pass,
+  different tooling (Playwright/browser, not available in this dispatch).
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if
