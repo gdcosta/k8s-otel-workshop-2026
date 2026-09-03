@@ -677,6 +677,63 @@ here's where things stand:
   **Not yet done**: the screenshot. `aw1-infra-dashboard.png` needs
   recapture now that the panel layout changed — separate follow-up pass,
   different tooling (Playwright/browser, not available in this dispatch).
+  (Done in the very next round, below.)
+
+  **Same-day, fifth follow-up: the user made live edits directly on the
+  instance (line → area on several dashboards) and asked to land them.**
+  Discovery done personally before dispatching anything: pulled every view's
+  current XML via the REST API and ran a **semantic** diff — panel-by-panel
+  `<option>` key/value comparison, order-independent — against the checked-in
+  repo files, not a raw text diff. Splunk's GUI editor reorders elements and
+  rewrites whitespace on every save; a raw diff would have buried the one
+  real change per panel in hundreds of lines of reformatting noise. Found
+  exactly 9 panels across 4 dashboards, each with one real change
+  (`charting.chart`: `line` → `area`), nothing else semantically different —
+  confirmed cleanly before any sub-agent touched anything.
+
+  Dispatched with the exact 9-panel list already in hand (no rediscovery
+  needed). Landed surgically (matched by panel title, not wholesale file
+  copy), rebuilt, installed, recaptured all 4 screenshots. Reviewed at the
+  same depth as every other round: visually opened all 4 screenshots myself
+  before committing, not just the sub-agent's own description of them.
+
+  **One panel needed a real design decision, not just landing the change**:
+  "One Incident, Three Signals, One Timeline" (`aw2-dashboard.xml`) has
+  Spans (~1,765/bucket) and Log Events (~87/bucket) sharing an axis, ~20x
+  apart. As an area fill, Spans visually buried Log Events almost entirely —
+  confirmed by looking at the actual screenshot, not the sub-agent's summary
+  alone — undermining the panel's own stated point (watching both curves
+  together). Tested two live fixes myself before reporting anything to the
+  user: adding Log Events to `charting.chart.overlayFields` made it visible
+  but dragged the secondary axis's scale up to fit it, squishing the Node
+  CPU Load line to near-flat instead — trading one invisible series for
+  another. A second attempt adding an explicit per-field axis option
+  (invented, not a documented Splunk option — turned out to have no effect)
+  also failed. Reported both failures honestly to the user rather than
+  picking one and shipping it; user chose reverting just this one panel back
+  to `line` (the other 8 stay `area`) — three lines at different scales
+  is imprecise but nothing gets occluded, which is what actually mattered
+  here.
+
+  **A genuinely new operational finding, worth remembering**: direct REST-API
+  edits to a Splunk view create a "local" override that **shadows a
+  freshly-installed app package's "default" content** — `splunk install app
+  ... -update 1` does not overwrite it. Hit this personally mid-verification:
+  after installing the version with the reverted panel, the live dashboard
+  still showed the *old* (pre-revert, area-filled) rendering, because my own
+  earlier live-testing REST pushes had created a local override still
+  shadowing the new package. Fix: push the final XML directly via REST one
+  more time (same mechanism that created the problem, used to clear it),
+  then re-verify. Re-checked **all 4** changed views afterward, not just the
+  one that broke, in case the same shadowing had silently affected others —
+  it hadn't, but only checking confirmed that rather than assuming it.
+
+  `versions.env`: `WORKSHOP_APP_VERSION` 1.0.6 → 1.0.8. The prior round's
+  1.0.7 bump was real (built, installed) but its own dispatch never asked
+  for the docs' curl-URL references to be updated — caught while reviewing
+  this round, folded straight through to 1.0.8 rather than commit an
+  intermediate version nobody would actually end up installing from a fresh
+  clone.
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if
