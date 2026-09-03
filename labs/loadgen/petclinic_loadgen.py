@@ -47,6 +47,20 @@ async def journey(page, base, n):
 
     await page.goto(f"{base}/#!/owners", wait_until="networkidle")
     await page.goto(f"{base}/#!/vets", wait_until="networkidle")
+    # AngularJS caches the vets list in a JS-heap-resident $http promise for
+    # the life of the running app instance. Each worker below reuses one
+    # page/context for its entire lifetime (never a fresh page per
+    # iteration), so a plain goto("#!/vets") only ever fetches it once per
+    # worker, not once per iteration — confirmed live 2026-09-03: vets-service
+    # was seeing ~5% of its total request volume actually touch the
+    # database, vs. ~60-90% for customers-service/visits-service, whose
+    # routes are per-record CRUD and can't be cached away the same way. A
+    # full page.reload() re-bootstraps Angular from scratch, clearing that
+    # cache. Every 4th iteration, not every one — a real reload costs its own
+    # networkidle round-trip, and the point of dialing CONCURRENCY back was
+    # to reduce sustained load, not quietly restore it via a different route.
+    if n % 4 == 0:
+        await page.reload(wait_until="networkidle")
     await page.goto(f"{base}/#!/owners/details/{owner_id}", wait_until="networkidle")
 
     # Write path 1: edit the owner, real PUT via form submit.

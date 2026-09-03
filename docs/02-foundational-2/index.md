@@ -579,12 +579,31 @@ kubectl create configmap petclinic-loadgen-script -n petclinic \
   --from-file=petclinic_loadgen.py=petclinic_loadgen.py
 ```
 
-`petclinic_loadgen.py` loops five concurrent async browser contexts inside one Chromium
-process forever (SIGTERM-aware, for a clean shutdown), each pausing 2–5s between passes
-through the app — approximating JMeter's `-Jthreads=5` without paying for five separate
-browser processes. It targets `api-gateway`'s real in-cluster ClusterIP Service directly,
-not the NodePort/Ingress paths built for external access — this pod is a real in-cluster
-caller, with no reason to route through the same access path a human uses.
+`petclinic_loadgen.py` loops two concurrent async browser contexts inside one Chromium
+process forever (SIGTERM-aware, for a clean shutdown), each pausing 3–8s between passes
+through the app — a deliberately modest concurrency, not the `-Jthreads=5` this pod
+originally approximated; see the sizing note below. It targets `api-gateway`'s real
+in-cluster ClusterIP Service directly, not the NodePort/Ingress paths built for external
+access — this pod is a real in-cluster caller, with no reason to route through the same
+access path a human uses.
+
+!!! note "Why concurrency 2, not 5 — confirmed live, not a guess"
+    An earlier revision ran `CONCURRENCY=5`. Confirmed live on a long-running instance
+    (up ~44h under continuous load): this pod alone drove a sustained 130% CPU, with
+    `api-gateway` — the single endpoint it hits — right next to it at 150%, and every
+    PetClinic service was restarting under the resulting contention (one measured Spring
+    Boot startup took 494 seconds against a normal ~10-15s). Pausing this Deployment
+    entirely stabilized the whole fleet within minutes with no other change — direct
+    evidence of cause, not correlation. Two contexts is still real concurrent multi-user
+    traffic for demo purposes, just without the sustained multi-core draw five produced.
+
+    One side effect worth knowing: each worker below reuses one page/context for its
+    entire lifetime, and AngularJS caches the vets list in a JS-heap-resident `$http`
+    promise for the life of the running app instance — so a plain `#!/vets` visit only
+    ever fetches it from the backend once per worker, not once per pass. The script
+    forces a real `page.reload()` every 4th iteration specifically to keep that traffic
+    (and `vets-service`'s own database dependency) visible in Observability Cloud without
+    reverting to a fresh page — and therefore full app reload — on every single pass.
 
 ```yaml
 apiVersion: apps/v1
@@ -626,11 +645,11 @@ spec:
             - name: PETCLINIC_URL
               value: "http://${WS_USER}-petclinic-srv.petclinic.svc.cluster.local:8080"
             - name: CONCURRENCY
-              value: "5"
-            - name: PAUSE_MIN
               value: "2"
+            - name: PAUSE_MIN
+              value: "3"
             - name: PAUSE_MAX
-              value: "5"
+              value: "8"
           volumeMounts:
             - name: loadgen-script
               mountPath: /scripts/petclinic_loadgen.py
@@ -715,24 +734,21 @@ kubectl logs -n petclinic deploy/playwright-loadgen --tail=5
 
 ```
 NAME                                  READY   STATUS    RESTARTS   AGE
-playwright-loadgen-fc47b548-whj8g     1/1     Running   0          16m
+playwright-loadgen-7f9c786947-9j85t   1/1     Running   0          2m32s
 ```
 
 ```
-2026-09-02 06:06:22,652 [worker-0] completed 100 iterations (ok=466 err=24 total)
-2026-09-02 06:06:26,588 [worker-1] completed 100 iterations (ok=470 err=24 total)
-2026-09-02 06:06:32,242 [worker-2] completed 100 iterations (ok=474 err=24 total)
-2026-09-02 06:06:42,042 [worker-4] completed 100 iterations (ok=477 err=24 total)
-2026-09-02 06:06:47,991 [worker-3] completed 100 iterations (ok=482 err=24 total)
+2026-09-03 21:18:27,541 [worker-0] completed 10 iterations (ok=19 err=0 total)
+2026-09-03 21:18:29,113 [worker-1] completed 10 iterations (ok=20 err=0 total)
 ```
 
-The pod name's random suffix will be different for you. What matters: `RESTARTS` at `0`, and
-`err` **not climbing** — 24 is the fixed count of failures from before the `CiliumNetworkPolicy`
-fix above, frozen the moment traffic started flowing; `ok` keeps climbing on every subsequent
-log line. Confirmed live: real sustained operation, 0 restarts, real write-path traffic
-reaching Splunk as server-side spans (580× `PUT`→204 owner-updates, 580× `POST`→201
-new-visits, over one 12-minute window) — a real browser round-tripping full forms, not a
-sampler replaying a fixed payload.
+The pod name's random suffix will be different for you, and with `CONCURRENCY=2` you'll only
+see `worker-0`/`worker-1`, not five. What matters: `RESTARTS` at `0`, and `err` **not
+climbing** — `ok`/`err` are a shared counter across both workers (not per-worker), so `ok`
+keeps outpacing whatever `err` count you have on every subsequent log line. Confirmed live:
+real sustained operation, 0 restarts, 0 errors from a fresh pod — real browser
+round-tripping full forms against `api-gateway`'s real ClusterIP, not a sampler replaying a
+fixed payload.
 </details>
 
 ### JMeter isn't going away — it becomes a deliberately-triggered tool

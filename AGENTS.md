@@ -506,6 +506,58 @@ here's where things stand:
   dashboard already has panels that were empty specifically because these
   gaps existed) — flagged as a separate follow-up, not attempted in this
   pass given its scope.
+
+  **Same-day follow-up, same incident: a genuinely separate finding turned up
+  investigating a user question about vets-service's O11y Cloud service map —
+  "why doesn't it show an inferred database anymore?"** Not a regression from
+  anything above. Root cause, confirmed live: `petclinic_loadgen.py`'s
+  `journey()` visits `#!/vets` every iteration, but each worker reuses one
+  browser page/context for its *entire lifetime* (never a fresh page per
+  pass), and AngularJS caches the vets list in a JS-heap-resident `$http`
+  promise for the life of the running app instance — so a plain `goto`
+  re-visit is pure client-side routing after the first load, no backend call,
+  no CLIENT span, no inferred HSQLDB dependency. Confirmed with real numbers:
+  in the same 1h window, `customers-service` and `visits-service` (per-record
+  CRUD routes, can't be cached the same way) had 87%/61% of their requests
+  actually touch the database; `vets-service` had 5%. Combined with the
+  concurrency cut above (5 → 2 workers), DB-touching events for it became
+  sparse enough that a short lookback window could land entirely between
+  them.
+
+  **User's own framing, worth preserving**: asked directly whether fixing
+  this (opening a fresh page per iteration) risked reintroducing the memory
+  problem just fixed, or whether it just needed longer observation instead.
+  Both fair — answered by distinguishing the *specific* mechanism: a full
+  `context.new_page()`/new-context cycle every iteration would add real,
+  if modest, per-iteration overhead; a `page.reload()` on the *existing*
+  page/context/browser process is what actually defeats Angular's cache
+  (it's the app-bootstrap event that clears the JS-heap-resident promise,
+  not page identity), and costs re-parsing already-warm HTTP-cached
+  assets — nowhere near the class of thing that caused the original
+  incident (sustained concurrency=5 with zero limits anywhere, for 44h).
+  Implemented as `page.reload(wait_until="networkidle")` every 4th
+  iteration, not every one — deliberately not "free", and not undoing the
+  point of the concurrency cut.
+
+  Live-verified, ConfigMap updated (`kubectl create configmap ...
+  --dry-run=client -o yaml | kubectl apply -f -`, then a rollout restart to
+  pick up the new script — a volume-mounted ConfigMap change alone doesn't
+  reach an already-running Python process), fresh pod confirmed `err=0`
+  after 10 iterations, and `hsqldb:af5659b2-...` (vets-service's current DB
+  instance identity) went from 14 requests across a full hour to 98 in the
+  10 minutes right after the fix landed. Also fixed two doc-accuracy issues
+  the same investigation surfaced: FW2 §7's prose and embedded YAML still
+  said `CONCURRENCY=5`/`worker-0` through `worker-4` (stale since the
+  concurrency-cut commit); replaced the example log output with a fresh
+  real capture at the current settings rather than leaving 2026-09-02's
+  five-worker output standing.
+
+  Also cleaned up while in the cluster: five leftover one-shot `curltest*`/
+  `curltmp4` debugging pods (`kube-system`, `otel`) from earlier live
+  investigation in this project, all `0/1 Completed`, none tied to any
+  checked-in manifest — deleted, harmless (already terminated, using no
+  resources), just etcd bookkeeping clutter worth clearing given etcd itself
+  was seen timing out under load earlier in this same incident.
 - **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
   services by default, not two.** User-directed, with the reasoning worth preserving:
   the original "patch `customers-service`/`vets-service` as a minimum proof, extend if
