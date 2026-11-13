@@ -133,7 +133,7 @@ Inbound, from your own IP — never `0.0.0.0/0`:
        **loopback only** by default (`127.0.0.1:8080`), so it must be given an address:
 
         ```bash
-        kubectl port-forward --address 0.0.0.0 svc/${WS_USER}-petclinic-srv 8080:8080
+        kubectl port-forward -n petclinic --address 0.0.0.0 svc/${WS_USER}-petclinic-srv 8080:8080
         ```
 
         Verified: with `--address 0.0.0.0` it binds `0.0.0.0:8080` and answers `200` on the
@@ -725,7 +725,7 @@ workshop — Settings → Access Tokens.
     Cheaper than a fresh instance and quicker than a rebuild:
 
     ```bash
-    helm uninstall ${WS_USER}-k8s-ws
+    helm uninstall ${WS_USER}-k8s-ws -n otel
     kubectl delete -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
     minikube delete
     docker system prune -af

@@ -101,7 +101,7 @@ if it's healthy, move on.
 
 !!! danger "If the pod stops, the rest of this module looks like broken telemetry"
     With no traffic, the only thing left is kube-probe hitting `/actuator/health` every five
-    seconds. Step 7's endpoint query then returns a single `/actuator/health` row, step 8's
+    seconds. Step 6's endpoint query then returns a single `/actuator/health` row, step 7's
     charts flatten, and **nothing reports an error anywhere** — it is indistinguishable from
     a Collector that isn't collecting. This happened during testing (with JMeter, before this
     module moved to Playwright) and cost real time.
@@ -149,7 +149,7 @@ curls produces a spike, not a signal.
     # then open http://localhost:8080
     ```
 
-    `kubectl port-forward svc/${WS_USER}-petclinic-srv 8080:8080` on the instance plus
+    `kubectl port-forward -n petclinic svc/${WS_USER}-petclinic-srv 8080:8080` on the instance plus
     `ssh -L 8080:localhost:8080` works too. Clicking through the app yourself makes steps 6
     and 7 far easier to read — the page you just opened shows up as a span with its own
     route.
@@ -650,7 +650,7 @@ instrumented service, business logic or infrastructure alike.
 
 ---
 
-## 5. Route each signal to its own index
+## 4. Route each signal to its own index
 
 Right now application telemetry is mixed in with infrastructure telemetry. Separating it
 matters for the same reason it did in FW #2 — retention and access control differ.
@@ -826,7 +826,7 @@ With the load test still running, wait a minute for data to arrive, then:
     The chart's default `kubelet_stats` receiver has been part of your metrics pipeline since
     §2 turned `metricsEnabled: true` on. It scrapes each node's kubelet for real per-pod and
     per-container CPU/memory *usage* — a different thing from the *declared* requests and
-    limits the Scheduling Contract panel in §9 reads from the `k8s_cluster` receiver. On this
+    limits the Scheduling Contract panel in §8 reads from the `k8s_cluster` receiver. On this
     cluster, though, it's been producing exactly nothing, and nothing has errored anywhere.
     This is worth fixing for the data, but it's worth walking through slowly for the discovery
     method — this is the kind of failure that gives observability tooling a bad name if you
@@ -852,7 +852,7 @@ normally CA-signed and wouldn't hit this — so that verification fails, and it 
 connection to scrape.
 
 Add the fix to `values-workshop.yaml`, inside the same `agent:` key the danger box above told
-you never to duplicate — this is the first thing this module adds under `receivers:`, so §6
+you never to duplicate — this is the first thing this module adds under `receivers:`, so §5
 below will ask you to add a second receiver alongside this one, not replace it:
 
 ```yaml
@@ -924,18 +924,18 @@ Notice the index: `k8s_ws_petclinic_metrics`, not `k8s_ws_metrics`. The
 produced the metric, so `kubelet_stats` data for these six pods rides along with the JVM and
 OTLP data into the app index — the same reach the danger box above already warned you about,
 now with a concrete example. Non-`petclinic` pods (`kube-system`, `otel`) still land in
-`k8s_ws_metrics`, right where §9's Infrastructure dashboard expects them.
+`k8s_ws_metrics`, right where §8's Infrastructure dashboard expects them.
 
-This data doesn't just live in the one-off checkpoint query above — §9 covers two dashboard
+This data doesn't just live in the one-off checkpoint query above — §8 covers two dashboard
 panels built from it, showing real per-pod usage against each container's own declared limit.
 
 ---
 
-## 6. Cilium/Hubble metrics — the network layer, in numbers
+## 5. Cilium/Hubble metrics — the network layer, in numbers
 
 !!! abstract "Learning moment — why this sits here, not somewhere else"
     §2 turned on `k8s_ws_metrics` and confirmed three families already flowing:
-    `system`, `k8s`, `otelcol`. §5 established the module's own lesson about metric
+    `system`, `k8s`, `otelcol`. §4 established the module's own lesson about metric
     routing — deliberate, done in the Collector, not left to chance. Cilium and Hubble
     expose their own Prometheus endpoints already, independent of anything the operator or
     the Java agent do — no auto-instrumentation involved, just two more scrape targets for
@@ -981,7 +981,7 @@ helm upgrade cilium cilium/cilium --version 1.20.1 --namespace kube-system \
 
 ### Add the `prometheus/cilium` receiver and its own metrics pipeline
 
-Same `agent:` key §5 already told you never to duplicate. Add a new receiver and a new
+Same `agent:` key §4 already told you never to duplicate. Add a new receiver and a new
 pipeline — two scrape jobs, one for each metrics source above:
 
 ```yaml
@@ -1035,7 +1035,7 @@ agent:
     before any per-endpoint or per-policy label cardinality is accounted for. Sending an
     unbounded, not-yet-understood metric surface straight to a billed-on-cardinality backend
     before real volume and label shape are known is exactly the kind of unplanned cost this
-    workshop's own routing lesson (§5) exists to prevent. Splunk Enterprise's metric index
+    workshop's own routing lesson (§4) exists to prevent. Splunk Enterprise's metric index
     has no such per-series billing concern, which makes it the right place to point an
     exploratory source first.
 
@@ -1159,7 +1159,7 @@ anyone builds SPL against the underlying flow-log data (not this metric — the 
 
 ---
 
-## 7. Look at a trace
+## 6. Look at a trace
 
 ```
 index=k8s_ws_traces | head 1
@@ -1294,7 +1294,7 @@ real traffic.
 
 ---
 
-## 8. Chart metrics in Analytics Workspace
+## 7. Chart metrics in Analytics Workspace
 
 !!! abstract "Learning moment — why metric indexes are different"
     Metrics go to a **metric index**, not an event index, and are queried with `mstats`
@@ -1338,7 +1338,7 @@ Generate load while watching, and you'll see heap sawtooth as garbage collection
 
 ---
 
-## 9. The capstone dashboards
+## 8. The capstone dashboards
 
 Nothing to download here. You installed the workshop app in
 [FW #2 §13](../02-foundational-2/index.md#13-install-the-workshop-dashboard-app), and the
@@ -1367,7 +1367,7 @@ The first half is the module's own output: Total Traces, P90 Latency, and curren
 Used broken out by service — six independently-instrumented JVMs, six different numbers, not
 one blended average — a fleet-overview table of trace count and P90 latency per service,
 a trace-volume-and-errors timechart (span-adjustable) with a per-service small-multiples
-version underneath it, the JVM heap sawtooth from step 8 — the same `mstats`/`xyseries`
+version underneath it, the JVM heap sawtooth from step 7 — the same `mstats`/`xyseries`
 query, now a permanent chart, split into one cell per JVM instead of one blended pair of
 lines — top routes by latency with a Service column, and a HikariCP connection-pool
 snapshot broken out by the three services that actually own a pool.
@@ -1452,7 +1452,7 @@ of those platform components can still starve the whole node.
 
 Declared numbers only tell half the story, which is why two more panels sit right below the
 Scheduling Contract table: **Pod Memory Usage vs. Declared Limit — Current State** and **Pod
-Memory Working Set Over Time by Service**. Both read the real per-pod usage §5's
+Memory Working Set Over Time by Service**. Both read the real per-pod usage §4's
 `kubelet_stats` fix unlocked, joined against each container's own declared limit by deriving
 the service name from the pod name (`k8s.pod.name` carries the ReplicaSet-hash/random suffix;
 `k8s.container.name` does not, and there's no `k8s.deployment.name` dimension on kubelet's own
@@ -1477,9 +1477,9 @@ intact before you trust anything above it.
 
 ### Cilium & Hubble Metrics
 
-Open **Advanced Workshop #1 — Cilium & Hubble Metrics**, filled in by §6 above. Where FW #2's
+Open **Advanced Workshop #1 — Cilium & Hubble Metrics**, filled in by §5 above. Where FW #2's
 Hubble Flow Logs dashboard reads individual flow *events*, this one reads the same network
-layer as *numbers* — `index=k8s_ws_metrics`, Splunk Platform only, exactly as §6 set it up.
+layer as *numbers* — `index=k8s_ws_metrics`, Splunk Platform only, exactly as §5 set it up.
 
 ![AW1 Cilium metrics dashboard](../assets/img/03-aw1/aw1-cilium-metrics-dashboard.png)
 
@@ -1489,7 +1489,7 @@ underlying series is a cumulative counter and a raw sum across a counter reset r
 cliffs. Confirmed live: FORWARDED runs in the thousands of flows/sec, dwarfing DROPPED and
 TRACED by orders of magnitude — the metric-side confirmation of the same lockdown story the
 flow-log dashboard tells from raw events. Alongside it: the `hubble_policy_verdicts_total`
-table §6 flagged as a clean, low-cardinality candidate (every `action` observed is
+table §5 flagged as a clean, low-cardinality candidate (every `action` observed is
 `forwarded`, every `match` is `l3-l4`, never `l7` — consistent with the `dns`/`http` gap),
 a `hubble_drop_total` breakdown by `reason` (confirmed live: `UNSUPPORTED_L3_PROTOCOL` only,
 cross-validating the flow-log DROPPED panels against an independent metrics pipeline), a TCP
@@ -1979,7 +1979,7 @@ for that file; the six-service topology and the `splunk.com/index` annotation on
     IP substitution to check here, unlike the old Dockerfile approach.
 
 ??? failure "Traces exported but `k8s_ws_traces` is empty"
-    The `splunk.com/index` annotation is overriding the index — see the warning in step 5.
+    The `splunk.com/index` annotation is overriding the index — see the warning in step 4.
     Confirm the Collector really is sending spans:
     ```
     | mstats sum(otelcol_exporter_sent_spans) WHERE index=k8s_ws_metrics by exporter

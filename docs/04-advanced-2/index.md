@@ -446,7 +446,7 @@ EOF
 
     The reason the trace index exists at all is a **Splunk Enterprise** story: it shows that
     teams who cannot adopt Observability Cloud can still store and visualise traces in
-    Splunk — that is what AW #1 §5's routing and §8's trace dashboard are for. On the
+    Splunk — that is what AW #1 §4's routing and §8's trace dashboard are for. On the
     Observability Cloud side those same spans are already present natively through **APM**.
     Querying them a second time through Log Observer is redundant, and actively degrades
     the logs experience.

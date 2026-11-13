@@ -601,14 +601,15 @@ applies: run anything new here before shipping it.
     | sort -count
     ```
 
-    Expected shape — `/actuator/health` dominates the count because kubelet probes it
-    continuously:
+    Expected shape — only `customers-service` is access-logged, so every row is one of its
+    REST routes, and `/actuator/health` dominates the count because kubelet probes it
+    continuously. Counts and timings depend on how long the load generator has run, so none
+    are quoted here:
     ```
-    http_path          count avg_ms p95_ms
-    /actuator/health   12720    1.8    4.3
-    /                   2323    5.9   11.5
-    /oups               2315    4.2    9.6
-    /owners?lastName=   2255   16.6   32.4
+    http_path            count avg_ms p95_ms
+    /actuator/health         …      …      …
+    /owners                  …      …      …
+    /owners/{ownerId}        …      …      …
     ```
 
 ---
@@ -618,7 +619,7 @@ applies: run anything new here before shipping it.
 Between deliveries, reset an instance without rebuilding it:
 
 ```bash
-helm uninstall ${WS_USER}-k8s-ws
+helm uninstall ${WS_USER}-k8s-ws -n otel
 kubectl delete -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
 minikube delete
 docker system prune -af
