@@ -141,7 +141,7 @@ index=k8s_ws_petclinic_logs
           <earliest>$tr.earliest$</earliest>
           <latest>$tr.latest$</latest>
         </search>
-        <option name="charting.chart">line</option>
+        <option name="charting.chart">area</option>
         <option name="charting.drilldown">none</option>
         <option name="charting.legend.placement">bottom</option>
         <option name="charting.axisTitleY.text">Event Count</option>
@@ -211,7 +211,9 @@ index=k8s_ws_petclinic_logs
   <row>
     <panel>
       <title>One Incident, Three Signals, One Timeline</title>
-      <description>Log events (blue) and spans (purple) are counted from the event indexes; node CPU load (orange, right-hand axis) comes from the metric index. Three separate pipelines, three separate storage engines, one time axis. Under normal load the log and span curves track each other at a fixed ratio — one request produces a roughly constant number of log lines and spans. Watch for shape changes: if spans flatten while logs keep climbing, the trace pipeline is sampling or dropping; if both drop while CPU stays high, the Collector — not the application — is the thing that stopped. Use the Time Granularity dropdown at the top of the page to change bucket size.</description>
+      <description>Log events (blue) and spans (purple) are counted from the event indexes; node CPU load (orange, right-hand axis) comes from the metric index. Three separate pipelines, three separate storage engines, one time axis. Under normal load the log and span curves track each other at a fixed ratio — one request produces a roughly constant number of log lines and spans. Watch for shape changes: if spans flatten while logs keep climbing, the trace pipeline is sampling or dropping; if both drop while CPU stays high, the Collector — not the application — is the thing that stopped. Use the Time Granularity dropdown at the top of the page to change bucket size.
+
+Kept as a line chart, unlike most panels in this app: Spans and Log Events differ by roughly 20x in volume, and an area fill for Spans buries the much smaller Log Events series almost entirely — tested live, not assumed. Three lines at different scales is still imprecise, but nothing gets visually occluded, which matters here since the whole point of this panel is watching both curves' shapes together.</description>
       <chart>
         <search>
           <query>

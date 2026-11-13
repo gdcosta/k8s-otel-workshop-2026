@@ -123,7 +123,7 @@ service:
     And to read what's running right now:
 
     ```bash
-    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+    kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
       -o go-template='{{index .data "relay"}}'
     ```
 

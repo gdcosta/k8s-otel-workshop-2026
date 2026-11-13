@@ -133,8 +133,13 @@
   fw2-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 589761
+    bytes: 685451
     section: "12. Install the dashboard"
+  fw2-hubble-logs-dashboard.png:
+    kind: screenshot
+    status: verified
+    bytes: 529591
+    section: "13. Install the workshop dashboard app — The dashboard for the flow logs you just built"
   image1.png:
     kind: diagram
     status: review
@@ -375,18 +380,23 @@
   aw1-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 612447
+    bytes: 920409
     section: "8. Install the capstone dashboards — Metrics & traces"
   apm-traces-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 758421
+    bytes: 714391
     section: "8. The capstone dashboards — Application Trace Information v4.0.0"
   aw1-infra-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 559552
+    bytes: 918783
     section: "8. Install the capstone dashboards — Infrastructure & Collector health"
+  aw1-cilium-metrics-dashboard.png:
+    kind: screenshot
+    status: verified
+    bytes: 461368
+    section: "9. The capstone dashboards — Cilium & Hubble Metrics"
   image1.png:
     kind: diagram
     status: review
@@ -727,7 +737,7 @@
   aw2-dashboard.png:
     kind: screenshot
     status: verified
-    bytes: 622064
+    bytes: 786664
     section: "9. Install the dashboards — Splunk Enterprise correlation"
   image1.png:
     kind: diagram
@@ -1171,6 +1181,16 @@
     section: "View RUM statistics in Splunk Observability Cloud"
 
 facilitator:
+  golden-ami-catalog.png:
+    kind: screenshot
+    status: verified
+    bytes: 423230
+    section: "Provisioning — Launching from the internal golden AMI"
+  golden-ami-launch-instance.png:
+    kind: screenshot
+    status: verified
+    bytes: 640597
+    section: "Provisioning — Launching from the internal golden AMI"
   image1.png:
     kind: screenshot
     status: stale

@@ -5,7 +5,8 @@
 # Render:  WS_USER=<you> LOCAL_IP=$(ec2metadata --local-ipv4) HEC_TOKEN=<hec> \
 #          envsubst < values-workshop.yaml > my-values.yaml
 # Install: helm upgrade <you>-k8s-ws splunk-otel-collector-chart/splunk-otel-collector \
-#            --version 0.158.0 -f my-values.yaml
+#            --version 0.158.0 -f my-values.yaml \
+#            --namespace otel --create-namespace
 #
 # Validate first — the chart schema is the only check that fails loudly:
 #          helm upgrade ... --dry-run=client
@@ -29,19 +30,51 @@ logsCollection:
     excludeAgentLogs: false
     # FW2: recombine Java stack traces into a single event.
     # A new event starts at a line beginning with a non-whitespace char.
+    # Scoped to the petclinic namespace only, not a single container — six
+    # services now share this namespace and all of them are Spring Boot, so one
+    # broad rule recombines stack traces from any of them without narrowing by
+    # pod or container name. Nothing else lives in this namespace.
     multilineConfigs:
       - namespaceName:
-          value: default
+          value: petclinic
         podName:
-          value: ${WS_USER}-petclinic-.*
+          value: .*
           useRegexp: true
-        containerName:
-          value: ${WS_USER}-petclinic-otel-container01
         firstEntryRegex: ^[^\s].*
+  # [FW2 §12] Tail Cilium's own Hubble flow-log JSON export (hubble.export.static,
+  # enabled on the Cilium release itself — see §12). This is the chart's
+  # purpose-built "extra file on the node" mechanism — it auto-creates its own
+  # logs/host pipeline (memory_limiter, batch, resource_detection, resource ->
+  # splunk_hec/platform_logs), so it lands in splunkPlatform.index (k8s_ws_logs)
+  # without touching the existing `logs` pipeline at all. Requires
+  # agent.extraVolumes/extraVolumeMounts below to expose the hostPath the file
+  # actually lives on. Verified live 2026-09-02: sourcetype cilium:hubble:flow,
+  # real flow JSON nested under a top-level "flow" key.
+  extraFileLogs:
+    file_log/hubble_flows:
+      include: [/var/run/cilium/hubble/events.log]
+      start_at: beginning
+      include_file_path: true
+      include_file_name: false
+      resource:
+        com.splunk.source: /var/run/cilium/hubble/events.log
+        host.name: 'EXPR(env("K8S_NODE_NAME"))'
+        com.splunk.sourcetype: cilium:hubble:flow
 
 # [FW2] Promote pod annotations onto events.
 # tag_name gives a clean field name directly — no regex prefix-stripping needed.
 extraAttributes:
+  # Promotes each pod's app.kubernetes.io/name label to service.name. Scraped
+  # container logs carry no service.name of their own, so this gives each of
+  # the six services a distinct name — customers-service, api-gateway, and so
+  # on — automatically, with no per-service OTTL statement. It does NOT
+  # overwrite service.name on traces: k8sattributes only sets an attribute
+  # that isn't already present, and the Java agent already supplies traces'
+  # service.name. Verified live 2026-08-29.
+  fromLabels:
+    - key: app.kubernetes.io/name
+      from: pod
+      tag_name: service.name
   fromAnnotations:
     - key: docker_image_author
       from: pod
@@ -61,17 +94,29 @@ clusterReceiver:
 # NOTE: modern OTTL requires context-prefixed paths (log.* / resource.*).
 # sourcetype and k8s.* are RESOURCE attributes, not log-record attributes.
 agent:
+  # [FW2 §12] hostPath into the same directory Cilium's own DaemonSet mounts as
+  # `cilium-run` (/var/run/cilium, DirectoryOrCreate) — events.log lives at
+  # /var/run/cilium/hubble/events.log on the node.
+  extraVolumes:
+    - name: cilium-hubble-flows
+      hostPath:
+        path: /var/run/cilium/hubble
+        type: DirectoryOrCreate
+  extraVolumeMounts:
+    - name: cilium-hubble-flows
+      mountPath: /var/run/cilium/hubble
+      readOnly: true
   config:
     processors:
       transform/petclinic_logs:
         log_statements:
           - set(resource.attributes["com.splunk.sourcetype"], "petclinic:app:log")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
 
           - merge_maps(log.attributes,
               ExtractPatterns(log.body, "(?P<log_level>INFO|WARN|ERROR|DEBUG|TRACE)"),
               "upsert")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
 
           # Log Observer's Severity column reads the record's severity_text, NOT a
           # custom attribute. An attribute named "severity" leaves it UNKNOWN.
@@ -95,7 +140,7 @@ agent:
               ExtractPatterns(log.body,
                 "^\\S+ \\S+ \\S+ \\[[^\\]]+\\] \"(?P<http_method>[A-Z]+) (?P<http_path>\\S+)[^\"]*\" (?P<http_status>\\d{3}) (?P<http_bytes>\\S+) (?P<http_duration_us>\\d+)"),
               "upsert")
-              where resource.attributes["k8s.container.name"] == "${WS_USER}-petclinic-otel-container01"
+              where resource.attributes["k8s.namespace.name"] == "petclinic"
           - set(log.severity_text, "INFO")  where log.attributes["http_status"] != nil
           - set(log.severity_text, "WARN")  where IsMatch(log.attributes["http_status"], "^4")
           - set(log.severity_text, "ERROR") where IsMatch(log.attributes["http_status"], "^5")

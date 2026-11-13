@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Packages the five capstone dashboards into one installable Splunk app.
+# Packages the seven capstone dashboards into one installable Splunk app.
 #
 # The views are NOT duplicated in the app source tree — they are copied in from
 # labs/dashboards/ at build time, so labs/dashboards/*.xml stays the single
@@ -18,11 +18,13 @@ cp -R "$SRC" "$STAGE/k8s_ws_dashboards"
 V="$STAGE/k8s_ws_dashboards/default/data/ui/views"
 
 # view name in Splunk  <-  source file in labs/dashboards
-cp labs/dashboards/fw2-dashboard.xml        "$V/k8s_ws_fw2_dashboard.xml"
-cp labs/dashboards/aw1-dashboard.xml        "$V/k8s_ws_aw1_dashboard.xml"
-cp labs/dashboards/aw1-infra-dashboard.xml  "$V/k8s_ws_infra_dashboard.xml"
-cp labs/dashboards/aw2-dashboard.xml        "$V/k8s_ws_aw2_dashboard.xml"
-cp labs/dashboards/apm-traces-dashboard.xml "$V/k8s_ws_apm_traces.xml"
+cp labs/dashboards/fw2-dashboard.xml                "$V/k8s_ws_fw2_dashboard.xml"
+cp labs/dashboards/fw2-hubble-logs-dashboard.xml    "$V/k8s_ws_hubble_logs.xml"
+cp labs/dashboards/aw1-dashboard.xml                "$V/k8s_ws_aw1_dashboard.xml"
+cp labs/dashboards/aw1-infra-dashboard.xml          "$V/k8s_ws_infra_dashboard.xml"
+cp labs/dashboards/aw1-cilium-metrics-dashboard.xml "$V/k8s_ws_cilium_metrics.xml"
+cp labs/dashboards/aw2-dashboard.xml                "$V/k8s_ws_aw2_dashboard.xml"
+cp labs/dashboards/apm-traces-dashboard.xml         "$V/k8s_ws_apm_traces.xml"
 
 # Keep app.conf's version in step with versions.env rather than in two places.
 sed -i.bak "s/^version = .*/version = ${WORKSHOP_APP_VERSION}/" \

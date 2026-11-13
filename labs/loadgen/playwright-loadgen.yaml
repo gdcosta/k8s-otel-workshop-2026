@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: playwright-loadgen
+  namespace: petclinic
+  labels:
+    app.kubernetes.io/name: playwright-loadgen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: playwright-loadgen
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: playwright-loadgen
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: playwright-loadgen
+          image: mcr.microsoft.com/playwright/python:v1.62.0-noble
+          # The base image bundles Chromium/Firefox/WebKit + OS deps at
+          # /ms-playwright (PLAYWRIGHT_BROWSERS_PATH), matching this exact
+          # tag's version — but NOT the `playwright` pip package itself.
+          # Confirmed live: `pip install playwright==1.62.0` here reuses the
+          # already-installed browser (no re-download, ~seconds) rather than
+          # fetching a fresh one, because the version pin matches the tag
+          # exactly. This is a startup step, not a custom image build.
+          command:
+            - bash
+            - -c
+            - |
+              set -e
+              pip3 install --quiet --no-cache-dir --root-user-action=ignore playwright==1.62.0
+              exec python3 /scripts/petclinic_loadgen.py
+          env:
+            - name: PETCLINIC_URL
+              value: "http://${WS_USER}-petclinic-srv.petclinic.svc.cluster.local:8080"
+            # CONCURRENCY 5 -> 2, PAUSE_MIN/MAX widened, 2026-09-03: confirmed
+            # live on wsuser01's instance (up ~44h continuous) that this pod
+            # alone ran a sustained 130% CPU, and every one of the six
+            # PetClinic services was restarting (up to 168 times on
+            # api-gateway, the single endpoint this hits) with real Spring
+            # Boot startup times measured at 494 seconds against a normal
+            # ~10-15s once contention was severe enough. Pausing this
+            # Deployment (replicas: 0) immediately stopped the restarts
+            # cluster-wide with no other change — direct evidence this pod's
+            # CPU footprint, not memory, was the dominant driver. 2 headless
+            # Chromium contexts is still real concurrent multi-user traffic
+            # for demo purposes, just without the sustained >1-full-core
+            # draw 5 produced. See AGENTS.md for the full incident.
+            - name: CONCURRENCY
+              value: "2"
+            - name: PAUSE_MIN
+              value: "3"
+            - name: PAUSE_MAX
+              value: "8"
+          volumeMounts:
+            - name: loadgen-script
+              mountPath: /scripts/petclinic_loadgen.py
+              subPath: petclinic_loadgen.py
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+      volumes:
+        - name: loadgen-script
+          configMap:
+            name: petclinic-loadgen-script

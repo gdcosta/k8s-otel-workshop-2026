@@ -7,6 +7,9 @@ set -u
 REALM=${REALM:-us1}
 SPLUNK=${SPLUNK:-/opt/splunk/bin/splunk}
 REPO_DIR=$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)
+# The Collector/operator live in their own namespace, not default — see the
+# real 2026-08-31 incident the Helm-status check below exists for.
+OTEL_NS=${OTEL_NS:-otel}
 
 # The workshop ships fixed lab credentials (00-setup), so the log-side checks no
 # longer silently skip. Override if you changed the admin password:
@@ -22,6 +25,21 @@ tbd(){ printf '  \033[33m•\033[0m %s\n' "$1"; warn=$((warn+1)); }
 
 echo "Verifying Advanced Workshop #2 (WS_USER=$WS_USER, realm=$REALM)"; echo
 
+# --- Helm release health (checked first — every check below assumes this) ---
+# Real incident, 2026-08-31: a field-manager conflict left this release stuck
+# in STATUS=failed for hours while individual resources were patched around
+# it by hand. Every live signal looked healthy (spans flowing, zero export
+# failures) because the RUNNING resources were fine — what silently drifted
+# was the collector's own OTTL config, stuck on an older revision's content
+# that was missing a real statement (see values-final.yaml's git history and
+# AGENTS.md's Phase 4c notes for the exact incident). No check below would
+# have caught the cause, only a downstream symptom of it — this one catches
+# it directly, first, before chasing anything else.
+hs=$(helm status "${WS_USER}-k8s-ws" -n "$OTEL_NS" -o json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)["info"]["status"])' 2>/dev/null)
+[ "$hs" = "deployed" ] \
+  && ok "Helm release '${WS_USER}-k8s-ws' is deployed (not failed/pending)" \
+  || no "Helm release status is '${hs:-unknown}', not deployed" "run 'helm history ${WS_USER}-k8s-ws -n $OTEL_NS' to see what failed and why; a field-manager conflict on the Instrumentation CR usually means deleting it and letting the next 'helm upgrade' recreate it cleanly"
+
 # --- warm-up -----------------------------------------------------------------
 # These checks read data the application only produces under traffic. With an
 # idle app the only log lines are readiness probes, which carry no trace context
@@ -29,9 +47,13 @@ echo "Verifying Advanced Workshop #2 (WS_USER=$WS_USER, realm=$REALM)"; echo
 # failure. Not a substitute for the JMeter load test; just enough to assert on.
 warmup(){
   printf '  … generating a short burst of traffic\n'
+  # /oups doesn't exist any more — Phase 3 replaced it with an external fault
+  # (kubectl scale deployment/visits-service --replicas=0, FW2 §8 / AW1 §1).
+  # This warmup only needs real requests flowing, not a forced error.
   for _ in $(seq 1 20); do
-    curl -s -o /dev/null --max-time 5 http://minikube:30000/          || true
-    curl -s -o /dev/null --max-time 5 http://minikube:30000/oups      || true
+    curl -s -o /dev/null --max-time 5 http://minikube:30000/                        || true
+    curl -s -o /dev/null --max-time 5 http://minikube:30000/api/customer/owners     || true
+    curl -s -o /dev/null --max-time 5 http://minikube:30000/api/vet/vets            || true
   done
   printf '  … waiting %ss for ingest\n\n' "${WARMUP_WAIT:-50}"
   sleep "${WARMUP_WAIT:-50}"
@@ -49,30 +71,64 @@ if [ -r ~/.o11y-token ]; then
 else no "~/.o11y-token not found" "see step 1"; fi
 
 # --- collector -> observability ---------------------------------------------
-CM=$(kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+CM=$(kubectl get cm -n "$OTEL_NS" ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
       -o go-template='{{index .data "relay"}}' 2>/dev/null)
 echo "$CM" | grep -q 'signalfx' \
   && ok "collector has signalfx exporters" \
   || no "no signalfx exporter" "add splunkObservability to values-workshop.yaml"
 
-n=$(kubectl logs daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --tail=400 2>/dev/null \
-    | grep -ciE '401|403|unauthorized')
+# Real false positive, 2026-08-31: a bare '401|403' matched the digits inside
+# an unrelated retry-interval value ("4.641401346s") in a transient, already-
+# recovered "connection refused" line — nothing to do with auth at all. Word
+# boundaries stop the pattern from matching digits embedded in a longer number.
+n=$(kubectl logs -n "$OTEL_NS" daemonset/${WS_USER}-k8s-ws-splunk-otel-collector-agent --tail=400 2>/dev/null \
+    | grep -ciE '\b401\b|\b403\b|unauthorized')
 [ "${n:-0}" -eq 0 ] && ok "no auth errors from the collector" \
   || no "$n auth errors in collector logs" "check the access token"
 
+# PetClinic's own bundled Zipkin auto-export (Spring Boot Actuator, unrelated
+# to the OTel Java agent) tries and fails to reach localhost:9411 unless
+# SPRING_AUTOCONFIGURE_EXCLUDE disables it — see values-aw1.yaml's comment
+# for the two fixes that looked plausible and didn't work before this one.
+n=$($SPLUNK search 'index=k8s_ws_traces earliest=-5m "attributes.server.address"=localhost "attributes.server.port"=9411 | stats count' -earliest_time -15m -auth "$SPLUNK_AUTH" 2>/dev/null | tail -1 | tr -dc '0-9')
+[ "${n:-0}" -lt 5 ] \
+  && ok "no meaningful localhost:9411 Zipkin noise ($n spans/5m)" \
+  || no "$n localhost:9411 spans in the last 5 minutes" "check SPRING_AUTOCONFIGURE_EXCLUDE is in instrumentation.spec.java.env and reached the running pods"
+
+# Every service's own spring.config.import briefly tries http://localhost:8888
+# at startup before succeeding against the real config-server — restart-only,
+# not continuous, so this checks a wider window. CONFIG_SERVER_URL fixes it
+# to exactly zero, ever — unlike the Zipkin check above, any count at all
+# here means the fix hasn't reached the running pods.
+n=$($SPLUNK search 'index=k8s_ws_traces earliest=-60m "attributes.server.address"=localhost "attributes.server.port"=8888 | stats count' -earliest_time -60m -auth "$SPLUNK_AUTH" 2>/dev/null | tail -1 | tr -dc '0-9')
+[ "${n:-0}" -eq 0 ] \
+  && ok "no localhost:8888 config-client noise (0 spans/60m)" \
+  || no "$n localhost:8888 spans in the last 60 minutes" "check CONFIG_SERVER_URL is in instrumentation.spec.java.env and reached the running pods"
+
 # --- profiling ---------------------------------------------------------------
-PL=$(kubectl logs deploy/${WS_USER}-petclinic-otel-deployment 2>/dev/null | grep -A8 'Profiler configuration')
-if echo "$PL" | grep -q 'Enabled : true'; then
-  proto=$(echo "$PL" | grep OtlpProtocol | awk '{print $NF}')
-  ep=$(kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- \
-       printenv OTEL_EXPORTER_OTLP_ENDPOINT 2>/dev/null)
-  if { [ "$proto" = "grpc" ] && echo "$ep" | grep -q ':4317'; } || \
-     { [ "$proto" = "http/protobuf" ] && echo "$ep" | grep -q ':4318'; }; then
-    ok "profiler enabled, protocol ($proto) matches endpoint"
+# Set once, via instrumentation.spec.java.env in values-aw2.yaml — applies to
+# every operator-instrumented pod uniformly, unlike the old per-Deployment env
+# block. Checked across all six PetClinic services.
+for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
+  pod=$(kubectl get pod -n petclinic -l app.kubernetes.io/name="$svc" \
+          -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -z "$pod" ]; then no "$svc: no running pod found" "kubectl get pods -n petclinic"; continue; fi
+  envout=$(kubectl get pod -n petclinic "$pod" \
+    -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' 2>/dev/null)
+  enabled=$(echo "$envout" | grep '^SPLUNK_PROFILER_ENABLED=' | cut -d= -f2-)
+  proto=$(echo "$envout"   | grep '^SPLUNK_PROFILER_OTLP_PROTOCOL=' | cut -d= -f2-)
+  ep=$(echo "$envout"      | grep '^OTEL_EXPORTER_OTLP_ENDPOINT=' | cut -d= -f2-)
+  if [ "$enabled" = "true" ]; then
+    if { [ "$proto" = "grpc" ] && echo "$ep" | grep -q ':4317'; } || \
+       { [ "$proto" = "http/protobuf" ] && echo "$ep" | grep -q ':4318'; }; then
+      ok "$svc: profiler enabled, protocol ($proto) matches endpoint"
+    else
+      no "$svc: profiler protocol '$proto' vs endpoint '$ep'" "set SPLUNK_PROFILER_OTLP_PROTOCOL to match in instrumentation.spec.java.env"
+    fi
   else
-    no "profiler protocol '$proto' vs endpoint '$ep'" "set SPLUNK_PROFILER_OTLP_PROTOCOL to match"
+    no "$svc: profiler not enabled" "add SPLUNK_PROFILER_ENABLED=true to instrumentation.spec.java.env in values-aw2.yaml"
   fi
-else no "profiler not enabled" "set SPLUNK_PROFILER_ENABLED=true on the Deployment"; fi
+done
 
 # --- RUM ---------------------------------------------------------------------
 # Grepping the served HTML proves NOTHING about RUM. The published snippet once
@@ -83,7 +139,7 @@ else no "profiler not enabled" "set SPLUNK_PROFILER_ENABLED=true on the Deployme
 # least prove the init block PARSES rather than merely being present.
 html=$(curl -s --max-time 20 http://minikube:30000/ 2>/dev/null)
 echo "$html" | grep -q 'o11y-gdi-rum'  && ok "RUM library served in page" \
-  || no "RUM script tag missing" "re-check layout.html and rebuild the image"
+  || no "RUM script tag missing" "run scripts/inject-rum-snippet.sh (step 7) — api-gateway is a pulled image, there is no layout.html to hand-edit here"
 
 # The init call, from `SplunkRum.init(` to its closing `});`.
 init_block=$(printf '%s\n' "$html" | tr -d '\r' | sed -n '/SplunkRum\.init(/,/});/p')
@@ -151,28 +207,50 @@ fi
 
 # --- Related Content correlation fields --------------------------------------
 # APM<->Logs joins on host.name, service.name, deployment.environment and
-# trace_id. All four must be on the LOG, and match the span exactly.
-SP_SVC=$(kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- \
-         printenv OTEL_SERVICE_NAME 2>/dev/null)
-SP_ENV=$(kubectl exec deploy/${WS_USER}-petclinic-otel-deployment -- \
-         printenv OTEL_RESOURCE_ATTRIBUTES 2>/dev/null | sed 's/.*deployment.environment=//; s/,.*//')
-
+# trace_id. All four must be on the LOG, and match the span exactly. Checked
+# per service — service.name now genuinely differs per service (FW2's label
+# promotion), so a single hardcoded expectation can't cover this any more.
 lq(){ $SPLUNK search "$1" -earliest_time -15m -auth "${SPLUNK_AUTH:-}" 2>/dev/null | tail -1 | tr -d ' '; }
 
 if [ -n "${SPLUNK_AUTH:-}" ]; then
   n=$(lq 'index=k8s_ws_petclinic_logs trace_id=* | stats count' | tr -dc '0-9')
   [ "${n:-0}" -gt 0 ] && ok "logs carry trace_id ($n events/15m)" \
-    || no "no trace_id on logs" "add LOGGING_PATTERN_LEVEL to the Deployment (step 5)"
+    || no "no trace_id on logs" "check LOGGING_PATTERN_LEVEL in instrumentation.spec.java.env (step 5)"
 
-  lsvc=$(lq 'index=k8s_ws_petclinic_logs | rename "service.name" as x | search x=* | head 1 | table x')
-  [ -n "$lsvc" ] && [ "$lsvc" = "$SP_SVC" ] \
-    && ok "log service.name matches the span ($lsvc)" \
-    || no "log service.name='${lsvc:-missing}' vs span='${SP_SVC}'" "they must match exactly (step 5)"
+  for svc in customers-service vets-service visits-service api-gateway discovery-server config-server; do
+    pod=$(kubectl get pod -n petclinic -l app.kubernetes.io/name="$svc" \
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -z "$pod" ]; then no "$svc: no running pod found" "kubectl get pods -n petclinic"; continue; fi
+    envout=$(kubectl get pod -n petclinic "$pod" \
+      -o jsonpath='{range .spec.containers[0].env[*]}{.name}={.value}{"\n"}{end}' 2>/dev/null)
+    SP_SVC=$(echo "$envout" | grep '^OTEL_SERVICE_NAME=' | cut -d= -f2-)
+    # deployment.environment is NOT in this pod's own env — it's added
+    # collector-side by transform/traces_index (values-aw2.yaml), not by the
+    # operator. Real bug caught live: grepping OTEL_RESOURCE_ATTRIBUTES for it
+    # here always came back empty, because it's simply never there — that
+    # attribute name doesn't appear in the pod's env under either semconv
+    # spelling. Ask the span itself what it actually carries instead of
+    # trying to derive the expectation from the pod.
+    SP_ENV=$(lq "index=k8s_ws_traces \"service.name\"=\"$svc\" | rename \"deployment.environment\" as x | search x=* | head 1 | table x")
 
-  lenv=$(lq 'index=k8s_ws_petclinic_logs | rename "deployment.environment" as x | search x=* | head 1 | table x')
-  [ -n "$lenv" ] && [ "$lenv" = "$SP_ENV" ] \
-    && ok "log deployment.environment matches the span ($lenv)" \
-    || no "log env='${lenv:-missing}' vs span='${SP_ENV}'" "APM identifies a service as (name, environment)"
+    lsvc=$(lq "index=k8s_ws_petclinic_logs \"service.name\"=\"$svc\" | rename \"service.name\" as x | head 1 | table x")
+    [ -n "$lsvc" ] && [ "$lsvc" = "$SP_SVC" ] \
+      && ok "$svc: log service.name matches the span ($lsvc)" \
+      || no "$svc: log service.name='${lsvc:-missing}' vs span='${SP_SVC}'" "they must match exactly (step 5)"
+
+    lenv=$(lq "index=k8s_ws_petclinic_logs \"service.name\"=\"$svc\" | rename \"deployment.environment\" as x | search x=* | head 1 | table x")
+    if [ -z "$SP_ENV" ]; then
+      # Real incident, 2026-08-31: this came back empty because
+      # transform/traces_index in the DEPLOYED values file had no
+      # deployment.environment statement at all — not a mismatch, an absence.
+      # A blank "vs span=''" here looks like a query fluke; say so explicitly.
+      no "$svc: span carries NO deployment.environment at all" "not a mismatch — an absence. Check the deployed values file's transform/traces_index for a missing set() statement, and that the Helm release reports 'deployed', not 'failed' — see the Helm-release check above"
+    elif [ -n "$lenv" ] && [ "$lenv" = "$SP_ENV" ]; then
+      ok "$svc: log deployment.environment matches the span ($lenv)"
+    else
+      no "$svc: log env='${lenv:-missing}' vs span='${SP_ENV}'" "APM identifies a service as (name, environment) — check transform/traces_index sets deployment.environment too (values-aw2.yaml)"
+    fi
+  done
 
   lhost=$(lq 'index=k8s_ws_petclinic_logs | head 1 | table host')
   [ -n "$lhost" ] && ok "logs carry host ($lhost — aliased to host.name)" \

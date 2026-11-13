@@ -2,8 +2,10 @@
   <view name="search" default="true" />
   <collection label="Workshop Dashboards">
     <view name="k8s_ws_fw2_dashboard" />
+    <view name="k8s_ws_hubble_logs" />
     <view name="k8s_ws_aw1_dashboard" />
     <view name="k8s_ws_infra_dashboard" />
+    <view name="k8s_ws_cilium_metrics" />
     <view name="k8s_ws_aw2_dashboard" />
     <divider />
     <view name="k8s_ws_apm_traces" />

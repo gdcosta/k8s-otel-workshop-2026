@@ -1,9 +1,13 @@
 # Facilitator guide
 
-Everything you need to run this workshop for other people: provisioning, timing, the
-failure modes participants actually hit, and extra material for when a group moves fast.
+Provisioning, timing, the failure modes participants actually hit, and extra material for
+when a group moves fast. Written for running this workshop for other people — but just as
+useful solo: many readers work through the whole series alone first, then come back here once
+they're ready to run it for a room. See
+[Running this solo](#running-this-solo-before-a-group) below.
 
-Participants don't need this page.
+If you're the one being taught — someone else is facilitating — you don't need this page, go
+to [Host setup](../00-setup/index.md) instead.
 
 ---
 
@@ -14,10 +18,18 @@ the next one starts from, so you can stop after any of them.
 
 | Format | Modules | Time | Good for |
 |---|---|---|---|
-| Foundational | Setup + FW #1 + FW #2 | Half day | Teams new to Kubernetes |
-| Advanced | + AW #1 | Full day | Existing Splunk platform users |
-| Complete | + AW #2 | Two half-days | Observability Cloud evaluations |
+| Foundational | Setup + FW #1 + FW #1b + FW #2 | Full day | Teams new to Kubernetes |
+| Advanced | + AW #1 | Full day + | Existing Splunk platform users |
+| Complete | + AW #2 | Two days | Observability Cloud evaluations |
 | AW #2 only | Setup → FW #2 pre-built, then AW #2 | 2 hours | Audiences who only care about O11y |
+
+!!! warning "Foundational is now a full day, not a half day — FW #1b is mandatory, not optional"
+    FW #1b was added after the "Foundational = half day" estimate was first written. It isn't
+    a detour or a bonus module — Cilium is a required component of a real Splunk Operator
+    deployment, which is the primary reason this workshop's audience needs Kubernetes at all.
+    Compressing it to protect the old half-day estimate would mean cutting taught content, not
+    trimming padding. Budget accordingly: Setup (45 min) + FW #1 (1.5–2 hr) + FW #1b (2–3 hr)
+    + FW #2 (2–2.5 hr) is 6.25–8.25 hours before AW #1 is even in scope.
 
 For anything short of the complete series, **pre-build the environment to the starting
 state** — see [Fast-forwarding](#fast-forwarding-to-a-later-module). Nobody enjoys watching
@@ -27,14 +39,86 @@ Maven download the internet.
 
 ## Provisioning
 
+### Running this solo, before a group
+
+Read this if you're standing up one instance for yourself — probably the most common way
+this workshop actually gets used. A Splunk architect works through the whole series alone
+first, decides it's worth running for a team, *then* comes back to this page for the
+multi-participant parts. That's not a lesser use of this guide; everything below still
+applies with one instance instead of twenty, minus the parts that only make sense for a room:
+
+- Skip [Getting keys to participants](#getting-keys-to-participants) entirely — it's about
+  distributing one shared key pair to a room. Create your own key pair at launch and keep it,
+  same as [Host setup](../00-setup/index.md) already describes for anyone provisioning their
+  own instance.
+- The security group rule is identical either way: scope inbound 22 and 8000 to **your own
+  IP**, not a CIDR — see [Security group](#security-group) below.
+- [Building instances](#building-instances) and
+  [Fast-forwarding](#fast-forwarding-to-a-later-module) both work unchanged for a single box;
+  just run them once instead of in a loop.
+
+The one thing worth doing differently solo: if you have access to Splunk's own AWS
+environment, launch from the internal golden AMI below rather than a public Canonical one —
+it's the org's approved, compliant base image, and reaching for it costs nothing extra once
+you're already in that account.
+
+### Launching from the internal golden AMI
+
+[Host setup](../00-setup/index.md#before-you-start)'s own launch-settings block is
+AMI-agnostic on purpose — "any launch route works... as long as the result matches" a plain
+Ubuntu 24.04 LTS box. Inside Splunk's own AWS account, the approved way to get that box is
+the **AMI Catalog**, not a public Canonical AMI ID: search for `golden_ami_ubuntu2404`, pick
+the most recent build (the timestamp is in the name), and launch it as a `t3.2xlarge` with
+the same spec as [One instance per participant](#one-instance-per-participant) below — this
+replaces only the AMI-selection step, nothing else about setup changes.
+
+![AMI Catalog — searching for the golden Ubuntu 24.04 AMI](../assets/img/facilitator/golden-ami-catalog.png)
+
+![Launch an instance, golden AMI selected, spec filled in](../assets/img/facilitator/golden-ami-launch-instance.png)
+
+!!! note "This is Splunk-internal — everyone else builds a plain instance instead"
+    `golden_ami_ubuntu2404` lives in Splunk's own AWS account and carries Splunk's own
+    governance tags (`splunkit_data_classification`, `splunkit_environment_type`,
+    `splunkit_golden_ami`) — it isn't reachable outside that account. If you don't have
+    access to it, or you're building instances for participants outside Splunk, launch a
+    plain EC2 instance from scratch instead — [Host setup](../00-setup/index.md#before-you-start)'s
+    own public Ubuntu 24.04 AMI is one easy way to do that, but any route to that same spec
+    (console, CLI, Terraform) works. Everything downstream of the AMI choice — instance type, storage, security group,
+    `bootstrap.sh` — is identical either way.
+
+---
+
 ### One instance per participant
 
 | | |
 |---|---|
 | OS | Ubuntu 24.04 LTS, **x86-64** |
-| Size | 4 vCPU / 16 GB — AWS `t3.xlarge` |
+| Size | 8 vCPU / 32 GB — AWS `t3.2xlarge` |
 | Disk | 100 GB gp3 |
-| Cost | roughly $0.17/hour on-demand |
+| Cost | roughly $0.33/hour on-demand |
+
+!!! warning "This doubled from 4 vCPU / 16 GB — not a margin-of-safety bump"
+    FW #1 now deploys PetClinic as six cold-starting Spring Boot services. Tested on
+    4 vCPU / 16 GB: six simultaneous cold starts drove load average to 66, the kubelet
+    missed its node-lease renewal, and Kubernetes evicted every pod on the node — the
+    workshop application included. 8 vCPU / 32 GB held stable through a three-minute
+    traffic soak with the node `Ready` throughout. Do not provision smaller to save cost.
+
+!!! danger "That sizing was only ever validated for a short burst — worth watching on any long-running instance"
+    The three-minute soak above proves this size handles the module's own cold start. Until
+    2026-09-03 it had never been tested against an instance left running for an extended
+    period — the kind of thing a facilitator decides when choosing whether to rebuild, snapshot,
+    or leave a box up between sessions. That day, a genuinely long-running instance (roughly
+    44 hours, under a continuous always-on load generator) hit sustained OOM kills across the
+    whole fleet — and cluster infrastructure underneath it too (`cilium-operator`,
+    `storage-provisioner`, `kube-apiserver`), not just PetClinic's own pods. Root cause: none of
+    the six PetClinic containers declared a memory limit anywhere, so once the box got tight the
+    kernel's OOM killer picked whatever process looked worst at that moment, with no regard for
+    which layer it belonged to. This is now fixed — resource limits landed in the manifest,
+    confirmed live and holding since — but say plainly to yourself, not just to participants:
+    only a few hours of soak time exist as evidence so far, not days. If you're leaving an
+    instance running for an extended period (overnight, across sessions, as a standing demo
+    environment), that remains something worth checking in on, not a settled guarantee.
 
 !!! danger "ARM will not work"
     Splunk Enterprise has no Linux ARM64 build. This is not a preference.
@@ -187,7 +271,8 @@ export WS_USER=<participant>
 source ~/.workshop-env
 
 ./scripts/verify-setup.sh     # host ready
-./scripts/verify-fw1.sh       # FW1 complete  -> snapshot here to start at FW2
+./scripts/verify-fw1.sh       # FW1 complete  -> snapshot here to start at FW1b
+./scripts/verify-fw1b.sh      # FW1b complete -> snapshot here to start at FW2
 ./scripts/verify-fw2.sh       # FW2 complete  -> snapshot here to start at AW1
 ```
 
@@ -217,6 +302,7 @@ source ~/.workshop-env
 |---|---|---|
 | Host setup | 45 min | pre-build it |
 | FW #1 | 1.5 hr | 2 hr with a mixed-ability group |
+| FW #1b | 2.5 hr | 3 hr — six policies applied and checked one at a time, plus Ingress |
 | FW #2 | 2 hr | 2.5 hr — the Collector config is the densest part |
 | AW #1 | 2 hr | 2 hr |
 | AW #2 | 2 hr | 2.5 hr if participants create their own O11y trials |
@@ -236,7 +322,7 @@ Worth saying out loud at the start, because it shapes how people debug:
 The command that resolves most of it:
 
 ```bash
-kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent \
+kubectl get cm ${WS_USER}-k8s-ws-splunk-otel-collector-otel-agent -n otel \
   -o go-template='{{index .data "relay"}}'
 ```
 
@@ -253,10 +339,13 @@ export SPLUNK_AUTH=admin:'Workshop2026!'
 
 The single quotes around the password matter — `!` is history expansion in an interactive
 `bash` shell. `verify-fw2.sh`, `verify-aw1.sh` and `verify-aw2.sh` all hard-require
-`SPLUNK_AUTH` and exit immediately without it.
+`SPLUNK_AUTH` and exit immediately without it. `verify-fw1b.sh` doesn't — it only asserts
+cluster/network state, nothing in Splunk.
 
-**55 assertions across the five scripts.** They're also the check to run against a new
-Collector releases.
+**66 assertions across the six scripts** — the original 55 plus `verify-fw1b.sh`'s own 11
+(Cilium health, all six `CiliumNetworkPolicy` objects, kube-proxy stopped, Ingress up with a
+real NodePort, a real `curl` through it). They're also the check to run against a new
+Collector or Cilium chart release.
 
 ---
 
@@ -512,14 +601,15 @@ applies: run anything new here before shipping it.
     | sort -count
     ```
 
-    Expected shape — `/actuator/health` dominates the count because kubelet probes it
-    continuously:
+    Expected shape — only `customers-service` is access-logged, so every row is one of its
+    REST routes, and `/actuator/health` dominates the count because kubelet probes it
+    continuously. Counts and timings depend on how long the load generator has run, so none
+    are quoted here:
     ```
-    http_path          count avg_ms p95_ms
-    /actuator/health   12720    1.8    4.3
-    /                   2323    5.9   11.5
-    /oups               2315    4.2    9.6
-    /owners?lastName=   2255   16.6   32.4
+    http_path            count avg_ms p95_ms
+    /actuator/health         …      …      …
+    /owners                  …      …      …
+    /owners/{ownerId}        …      …      …
     ```
 
 ---
@@ -529,7 +619,7 @@ applies: run anything new here before shipping it.
 Between deliveries, reset an instance without rebuilding it:
 
 ```bash
-helm uninstall ${WS_USER}-k8s-ws
+helm uninstall ${WS_USER}-k8s-ws -n otel
 kubectl delete -f ~/k8s_workshop/petclinic/k8s_deploy/${WS_USER}-petclinic-k8s-manifest.yml
 minikube delete
 docker system prune -af
@@ -591,7 +681,7 @@ The build copies the XML in fresh and parses every view, so a malformed edit fai
 rather than shipping. **Edit an XML and forget this step and participants install the old
 dashboard** — the guides link to the `.tgz` on `raw.githubusercontent.com`, not to the XML.
 Bump `WORKSHOP_APP_VERSION` in `versions.env` when the contents change; the build stamps it
-into `app.conf` and into the filename, so the FW #2 §12 `curl` URL changes with it — search
+into `app.conf` and into the filename, so the FW #2 §13 `curl` URL changes with it — search
 the docs for the old version string and update it.
 
 !!! warning "The app deliberately carries dashboards only"

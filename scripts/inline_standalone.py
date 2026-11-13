@@ -112,6 +112,37 @@ for rel in sorted(pages):
         return m.group(0)
     html = re.sub(r'href="([^"]+)"', link, html)
 
+    # 6. make the theme's startup survive hosts that aren't a normal browser tab.
+    #    In a preview pane or sandboxed iframe, `location` is about:srcdoc (no base
+    #    URL to resolve ".." against) and localStorage/sessionStorage can throw. Left
+    #    alone, the first inline script dies on `new URL("..", location)`, `__md_get`
+    #    is then never defined, and the bundle dies on the same call again. Each
+    #    patch must match exactly once per page: if a MkDocs Material upgrade
+    #    changes this code, fail the build rather than silently ship the old bug.
+    def patch(h, old, new, what):
+        if h.count(old) != 1:
+            sys.exit(f"  ! {rel}: cannot apply preview-pane patch '{what}' "
+                     f"({h.count(old)} matches) — did mkdocs-material change?")
+        return h.replace(old, new)
+    # The relative path differs by page depth (".." for most, "." for the home page).
+    scope = re.search(r'__md_scope=new URL\("(\.{1,2})",location\)', html)
+    if not scope:
+        sys.exit(f"  ! {rel}: cannot apply preview-pane patch '__md_scope' — did mkdocs-material change?")
+    html = patch(html, scope.group(0),
+                 f'__md_scope=(()=>{{try{{return new URL("{scope.group(1)}",location)}}'
+                 'catch(e){return new URL("file:///")}})()', '__md_scope')
+    html = patch(html, '__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e))',
+                 '__md_get=(e,_,t=__md_scope)=>{try{return JSON.parse((_||localStorage)'
+                 '.getItem(t.pathname+"."+e))}catch(r){return null}}', '__md_get')
+    html = patch(html, '__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(',
+                 '__md_set=(e,_,t,a=__md_scope)=>{try{(t||localStorage).setItem(', '__md_set')
+    html = patch(html, 'Ct.base=`${new URL(Ct.base,we())}`;',
+                 'Ct.base=`${(()=>{try{return new URL(Ct.base,we())}'
+                 'catch(e){return new URL("file:///")}})()}`;', 'config base')
+    # The bundle's source-map comment points at a file that is not shipped; DevTools
+    # logs a failed fetch for it on every page.
+    html = re.sub(r'//# sourceMappingURL=\S+', '', html)
+
     out = os.path.join(DST, flat_name(rel))
     with open(out, 'w', encoding='utf8') as fh:
         fh.write(html)

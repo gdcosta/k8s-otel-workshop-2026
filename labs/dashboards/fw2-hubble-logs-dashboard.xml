@@ -1,0 +1,310 @@
+<form version="1.1">
+  <label>Foundational Workshop 2 - Hubble Flow Logs</label>
+  <description>A second log source, from a different layer: one JSON record per network flow the eBPF dataplane forwards or drops, written by the cilium agent itself — index k8s_ws_logs, sourcetype cilium:hubble:flow, every real field nested under a top-level flow.* key.</description>
+  <fieldset submitButton="false">
+    <input type="time" token="tr">
+      <label>Time Range</label>
+      <default>
+        <earliest>-60m</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="dropdown" token="span_token" searchWhenChanged="true">
+      <label>Time Granularity</label>
+      <choice value="10s">10 Seconds</choice>
+      <choice value="30s">30 Seconds</choice>
+      <choice value="1m">1 Minute</choice>
+      <choice value="15m">15 Minutes</choice>
+      <choice value="30m">30 Minutes</choice>
+      <choice value="1h">1 Hour</choice>
+      <choice value="1d">Daily</choice>
+      <choice value="1w">Weekly</choice>
+      <choice value="1mon">Monthly</choice>
+      <default>1m</default>
+      <initialValue>1m</initialValue>
+    </input>
+  </fieldset>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background: linear-gradient(135deg, #1F3864 0%, #2E75B6 100%); padding: 28px 36px; border-radius: 6px;">
+          <h1 style="margin:0 0 8px 0; font-size:26px; font-weight:700; color:#FFFFFF !important;">Foundational Workshop #2 &#8212; Hubble Flow Logs</h1>
+          <p style="margin:0 0 8px 0; font-size:14px; line-height:1.6; color:#FFFFFF !important;">Everything else in this module is a <b style="color:#FFFFFF !important;">container log</b> &#8212; text a process wrote to stdout. Cilium's own Hubble produces a second, genuinely different kind of log for free: one JSON record per network flow the eBPF dataplane forwards or drops, written by the <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px;">cilium</code> agent itself, not by any container.</p>
+          <p style="margin:0; font-size:14px; line-height:1.6; color:#FFFFFF !important;">Every field here lives under a top-level <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px;">flow.*</code> key &#8212; <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px;">flow.verdict</code>, <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px;">flow.source.namespace</code>, <code style="background:rgba(255,255,255,0.18) !important; color:#FFFFFF !important; padding:2px 6px; border-radius:3px;">flow.l4.TCP.destination_port</code> &#8212; confirmed live, not top-level.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Total Flow Records</title>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="cilium:hubble:flow"
+| stats count as value
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="unit">flows</option>
+        <option name="useColors">0</option>
+      </single>
+    </panel>
+    <panel>
+      <title>FORWARDED %</title>
+      <description>Confirmed live, 2026-09-02: overwhelmingly FORWARDED on this lockdown — FW #1b's six CiliumNetworkPolicy objects allowing the traffic the application actually needs, not generating a wall of drops.</description>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="cilium:hubble:flow"
+| stats count as total count(eval('flow.verdict'=="FORWARDED")) as fwd
+| eval value=round((fwd/total)*100,1)
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0.0</option>
+        <option name="unit">%</option>
+        <option name="colorBy">value</option>
+        <option name="colorMode">block</option>
+        <option name="useColors">1</option>
+        <option name="rangeColors">["0xDC4E41","0xF1813F","0xF8BE34","0x53A051"]</option>
+        <option name="rangeValues">[50,80,95]</option>
+      </single>
+    </panel>
+    <panel>
+      <title>DROPPED (this window)</title>
+      <description>Low volume is expected, not a bug — the doc's own checkpoint saw single digits per 10-30 minutes. Not colored as an alarm: a handful of DROPPED here is background housekeeping traffic (IPv6 router solicitation and similar), confirmed live below.</description>
+      <single>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="cilium:hubble:flow" flow.verdict=DROPPED
+| stats count as value
+| table value
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="numberPrecision">0</option>
+        <option name="unit">events</option>
+        <option name="useColors">0</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Flow Verdict Over Time &#8212; FORWARDED vs. DROPPED vs. TRACED</title>
+      <description>Confirmed live, 2026-09-02: FORWARDED, DROPPED and TRACED are the only three verdicts Hubble emits on this cluster. FORWARDED dwarfs the other two by multiple orders of magnitude, so this reads as one thick band with two thin lines pinned near the axis — that flatness IS the finding, not a rendering problem.</description>
+      <chart>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="cilium:hubble:flow"
+| timechart span=$span_token$ count by flow.verdict
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.axisTitleY.text">Flow Records</option>
+        <option name="charting.seriesColors">[0x2E75B6,0xDC4E41,0xF8BE34]</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Traffic Direction Over Time (FORWARDED)</title>
+      <description>flow.traffic_direction — EGRESS is a pod's own outbound calls (to Eureka, config-server, the database, DNS); INGRESS is traffic arriving at a pod. EGRESS running well above INGRESS is expected here: every service-to-service call counts as an EGRESS flow at the caller and an INGRESS flow at the callee, but each pod also generates EGRESS traffic (health checks, DNS lookups, OTLP export) with no matching local INGRESS counterpart.</description>
+      <chart>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="cilium:hubble:flow" flow.verdict=FORWARDED
+| timechart span=$span_token$ count by flow.traffic_direction
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="charting.chart">area</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.drilldown">none</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.axisTitleX.text">Time</option>
+        <option name="charting.axisTitleY.text">Flow Records</option>
+        <option name="charting.seriesColors">[0x2E75B6,0x53A051]</option>
+        <option name="refresh.display">progressbar</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>L4 Protocol Mix (FORWARDED)</title>
+      <description>Derived from which flow.l4.* object is populated on each event (TCP / UDP / ICMPv4 / ICMPv6). Confirmed live: TCP dominates (every PetClinic service call and every Eureka/config-server round-trip), UDP is DNS, ICMP is background housekeeping.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="cilium:hubble:flow" flow.verdict=FORWARDED
+| eval Protocol=case(isnotnull('flow.l4.TCP.destination_port'),"TCP",isnotnull('flow.l4.UDP.destination_port'),"UDP",isnotnull('flow.l4.ICMPv4.type'),"ICMPv4",isnotnull('flow.l4.ICMPv6.type'),"ICMPv6",true(),"other")
+| stats count as Flows by Protocol
+| sort -Flows
+| table Protocol Flows
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Flows">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Flows">
+          <colorPalette type="list">[#115BAD]</colorPalette>
+          <scale type="threshold"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Top Destination Ports (FORWARDED) &#8212; Resolved to the Service Behind Them</title>
+      <description>flow.l4.TCP.destination_port, mapped to the PetClinic/platform service that owns each port so the raw numbers don't have to be memorized. Confirmed live: 8080 (api-gateway), 8081/8082/8083 (customers/visits/vets-service), 8761 (Eureka/discovery-server), 8888 (config-server) and 4318 (OTLP/HTTP into the Collector) are the busiest — exactly the topology FW #1 and FW #1b built.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="cilium:hubble:flow" flow.verdict=FORWARDED
+| eval Service=case('flow.l4.TCP.destination_port'==8080,"api-gateway (8080)",'flow.l4.TCP.destination_port'==8081,"customers-service (8081)",'flow.l4.TCP.destination_port'==8082,"visits-service (8082)",'flow.l4.TCP.destination_port'==8083,"vets-service (8083)",'flow.l4.TCP.destination_port'==8761,"discovery-server / Eureka (8761)",'flow.l4.TCP.destination_port'==8888,"config-server (8888)",'flow.l4.TCP.destination_port'==4318,"otel-collector OTLP/HTTP (4318)",'flow.l4.TCP.destination_port'==13134,"otel-collector healthcheck (13134)",'flow.l4.TCP.destination_port'==9153,"CoreDNS metrics (9153)",'flow.l4.TCP.destination_port'==8181,"CoreDNS (8181)",'flow.l4.TCP.destination_port'==443,"HTTPS &#8212; K8s API / external (443)",true(),"port ".'flow.l4.TCP.destination_port')
+| stats count as Flows by Service
+| sort -Flows
+| head 12
+| table Service Flows
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">12</option>
+        <format type="number" field="Flows">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Flows">
+          <colorPalette type="minMidMax" maxColor="#2E75B6" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>Top Service-to-Service Talkers (FORWARDED)</title>
+      <description>flow.source and flow.destination resolved to the owning workload (falling back to namespace, then "external"). This is the six-service PetClinic topology, and the platform pods around it, read straight off the network — no application instrumentation involved. playwright-loadgen &#8594; api-gateway leads, exactly as expected for an always-on load generator hitting one entry point.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="cilium:hubble:flow" flow.verdict=FORWARDED
+| eval Source=coalesce(mvindex('flow.source.workloads{}.name',0),'flow.source.namespace',"external"), Destination=coalesce(mvindex('flow.destination.workloads{}.name',0),'flow.destination.namespace',"external")
+| stats count as Flows by Source Destination
+| sort -Flows
+| head 12
+| table Source Destination Flows
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">12</option>
+        <format type="number" field="Flows">
+          <option name="precision">0</option>
+        </format>
+        <format type="color" field="Flows">
+          <colorPalette type="minMidMax" maxColor="#2E75B6" minColor="#FFFFFF"></colorPalette>
+          <scale type="minMidMax"></scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <html>
+        <div style="background:#FFF8E1; border-left:5px solid #F1813F; padding:14px 20px; border-radius:4px;">
+          <h3 style="margin:0 0 6px 0; color:#7B3F00 !important; font-size:15px;">DROPPED Traffic &#8212; Two Real Gotchas, Confirmed Live</h3>
+          <p style="margin:0 0 8px 0; color:#7B3F00 !important; font-size:13px; line-height:1.6;"><b style="color:#7B3F00 !important;">1. No clean source namespace.</b> A flow that gets dropped is, by definition, caught before Cilium finishes resolving the full identity of what it's looking at — a real DROPPED event's <code style="background:#FFE7B3 !important; color:#7B3F00 !important; padding:1px 5px; border-radius:3px;">flow.source</code> object carries no <code style="background:#FFE7B3 !important; color:#7B3F00 !important; padding:1px 5px; border-radius:3px;">namespace</code> field at all &#8212; only an <code style="background:#FFE7B3 !important; color:#7B3F00 !important; padding:1px 5px; border-radius:3px;">identity</code> and a raw <code style="background:#FFE7B3 !important; color:#7B3F00 !important; padding:1px 5px; border-radius:3px;">labels[]</code> array. The tables below pull it back out with <code style="background:#FFE7B3 !important; color:#7B3F00 !important; padding:1px 5px; border-radius:3px;">mvfilter(match(&#8230;))</code> against a <code style="background:#FFE7B3 !important; color:#7B3F00 !important; padding:1px 5px; border-radius:3px;">k8s:io.kubernetes.pod.namespace=&#8230;</code> label instead of trusting <code style="background:#FFE7B3 !important; color:#7B3F00 !important; padding:1px 5px; border-radius:3px;">flow.source.namespace</code> to always be populated.</p>
+          <p style="margin:0; color:#7B3F00 !important; font-size:13px; line-height:1.6;"><b style="color:#7B3F00 !important;">2. flow.source.labels{} is multivalue.</b> A naive <code style="background:#FFE7B3 !important; color:#7B3F00 !important; padding:1px 5px; border-radius:3px;">stats count by "flow.source.labels{}"</code> fans out one row per label per event &#8212; confirmed live: 21,074 real flow events produced 184,372 rows once grouped that way. Every query below uses <code style="background:#FFE7B3 !important; color:#7B3F00 !important; padding:1px 5px; border-radius:3px;">mvfilter</code> / <code style="background:#FFE7B3 !important; color:#7B3F00 !important; padding:1px 5px; border-radius:3px;">mvindex</code> to pick one targeted label first, never a raw group-by on the multivalue field.</p>
+        </div>
+      </html>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Drop Reason Breakdown</title>
+      <description>flow.drop_reason_desc, with an honest empty state: if this window genuinely had zero DROPPED events, the table says so instead of rendering a blank panel. Confirmed live over a wider window: every DROPPED event on this box has been UNSUPPORTED_L3_PROTOCOL — IPv6 Router Solicitation traffic, background housekeeping no CiliumNetworkPolicy needs to allow, not a policy denying real application traffic.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="cilium:hubble:flow" flow.verdict=DROPPED
+| eval Reason=coalesce('flow.drop_reason_desc',"unknown"), Direction=coalesce('flow.traffic_direction',"unknown")
+| stats count as Drops by Reason Direction
+| appendpipe [
+    | stats count
+    | where count=0
+    | eval Reason="No DROPPED events in this window", Direction="&#8212;", Drops=0
+    | fields Reason Direction Drops
+  ]
+| sort -Drops
+| table Reason Direction Drops
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <format type="number" field="Drops">
+          <option name="precision">0</option>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>Recent DROPPED Events &#8212; Namespace Recovered from flow.source.labels{}</title>
+      <description>Same honest-empty pattern as the panel on the left. SourceNamespace prefers flow.source.namespace when Cilium resolved it, and falls back to the k8s:io.kubernetes.pod.namespace= label pulled out of the multivalue labels{} array when it didn't — the exact gotcha called out above, demonstrated on real events rather than described in the abstract.</description>
+      <table>
+        <search>
+          <query>
+index=k8s_ws_logs sourcetype="cilium:hubble:flow" flow.verdict=DROPPED
+| eval ns_label=mvfilter(match('flow.source.labels{}',"^k8s:io\.kubernetes\.pod\.namespace="))
+| eval SourceNamespace=coalesce('flow.source.namespace',mvindex(split(ns_label,"="),1),"unresolved")
+| eval Direction=coalesce('flow.traffic_direction',"unknown"), Reason=coalesce('flow.drop_reason_desc',"unknown"), Summary=coalesce('flow.Summary',"")
+| table _time SourceNamespace Direction Reason Summary
+| sort -_time
+| head 10
+| appendpipe [
+    | stats count
+    | where count=0
+    | eval SourceNamespace="No DROPPED events in this window &#8212; CiliumNetworkPolicy lockdown is holding", Direction="&#8212;", Reason="&#8212;", Summary="&#8212;"
+    | fields SourceNamespace Direction Reason Summary
+  ]
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="drilldown">none</option>
+        <option name="wrap">true</option>
+        <option name="count">10</option>
+      </table>
+    </panel>
+  </row>
+
+</form>

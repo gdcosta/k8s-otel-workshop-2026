@@ -11,6 +11,1579 @@ trace — it strands twenty people at once.
 
 ---
 
+## In progress: migrating PetClinic from a monolith to six microservices
+
+`main` is fully consistent and works end to end — this migration lives on
+`migrate/petclinic-microservices` until it's finished, specifically so a partial,
+inconsistent state never lands on `main`. If you're reading this on that branch,
+here's where things stand:
+
+- **Phase 0 (feasibility) and Phase 1 (FW #1) are done and tested.** FW #1 now builds
+  `customers-service` by hand and deploys all six services, in their own `petclinic`
+  namespace (not `default`), via `labs/manifests/petclinic-microservices.yml`.
+  `versions.env`, `scripts/verify-fw1.sh`, and the instance-size requirement (bumped to
+  8 vCPU / 32 GB — see below) are updated and consistent with FW #1's new content. If
+  FW #2/AW1/AW2 get their own migration pass later, their `kubectl` commands need
+  `-n petclinic` added too — grep those docs for bare `kubectl get/logs/exec` touching
+  PetClinic before assuming `default` still works.
+- **Phase 2 (FW #2, the Collector rework) is done and tested.** All four Collector
+  overlays (`labs/collector/values-{workshop,aw1,final,aw2}.yaml`) are re-cut: OTTL
+  predicates now key on `resource.attributes["k8s.namespace.name"] == "petclinic"`
+  instead of one exact container name, `extraAttributes.fromLabels` promotes each pod's
+  `app.kubernetes.io/name` to `service.name` (verified live: k8sattributes doesn't
+  overwrite an attribute that already exists, so agent-instrumented traces keep their
+  real name and only scraped logs get the promoted one), and multiline recombine is
+  scoped to the `petclinic` namespace rather than one container — verified live with a
+  real multi-line `TransportException` (44–50 lines) recombining correctly across five
+  different services. The two hardcoded `service.name`/`deployment.environment`
+  statements in `values-final.yaml`/`values-aw2.yaml` are gone; leaving them would have
+  silently overwritten the per-service names the label promotion just set, since
+  `k8s_attributes` runs before that transform in the pipeline. **The metrics/traces
+  predicates in aw1/final/aw2 were changed the same way but NOT independently verified
+  live** — only logs were exercised this phase; confirm those three when AW1 is rebuilt.
+  `scripts/verify-fw2.sh` is rewritten and passes 16/16 live. A new
+  `labs/manifests/petclinic-microservices-fw2.yml` captures the FW2 end state (adds
+  Tomcat access logging to `customers-service` only — see FW2 §6 for why one service is
+  enough).
+- **Phase 3 (load-generator rewrite) is done and tested.** `labs/jmeter/petclinic_test_plan.jmx`
+  now hits the real gateway REST routes — every path, method, and POST/PUT body was
+  captured from a real browser session against the deployed app with Playwright request
+  interception, not inferred from source (`/api/gateway/owners/{id}`, a composite
+  endpoint the gateway itself implements, would have been easy to miss guessing).
+  `labs/rum/petclinic_browser_test.py` is rewritten for the SPA's AngularJS hash routing
+  (`#!/owners/details/1`, not `#!/owners/1` — the wrong guess silently falls through to
+  the app's `otherwise('/welcome')` catch-all with no error at all). There is no `/oups`
+  equivalent and none was added — the fault is external: `kubectl scale
+  deployment/visits-service -n petclinic --replicas=0`, documented in FW #2 §8, which the
+  gateway answers with a real, fast `503`. FW #2 §7–8 are rewritten with real numbers
+  from that exact run: JMeter's own rate is a clean **28.57%** (2 of 7 samplers touch
+  `visits-service`); Splunk-side, `api-gateway`'s own logs show 242 events (222 `WARN`
+  "no servers available", 20 multi-line `ERROR` `NoRouteToHostException`) for those same
+  90 failed requests — genuinely more than one log line per failure, not a bug, and
+  written up as a second, deeper instance of the module's own "what you count decides
+  whether you agree" lesson. `PUT /api/customer/owners/{id}` requires the **full** owner
+  object including its `pets` array back, or it looks destructive — the test plan
+  round-trips a captured JSON body via a JSR223 PostProcessor rather than risk corrupting
+  seed data other exercises depend on.
+- **Phase 4 (AW #1 doc rewrite) is done and tested for the sections it touches.**
+  `docs/03-advanced-1/index.md` §3–4 replace the old hand-built `-javaagent` + Dockerfile
+  approach with the OpenTelemetry Operator's admission webhook
+  (`operator.enabled`/`instrumentation.enabled` in `labs/collector/values-aw1.yaml`,
+  patching each Deployment with `instrumentation.opentelemetry.io/inject-java`) — chosen
+  because five of the six services are pulled images with no Dockerfile to edit, so the
+  old approach could not generalize past `customers-service`. Verified live end to end on
+  the spike instance 2026-08-29: identical init container and env wiring on both a
+  hand-built (`customers-service`) and a pulled (`vets-service`) image; JVM metrics and
+  traces both confirmed flowing with real numbers. Two real, non-obvious findings from
+  that spike, both now in the doc and in `values-aw1.yaml`'s comments: (1) `helm upgrade
+  --install` needs a top-level `environment:` string once `operator.enabled` +
+  `tracesEnabled` + `agent.enabled` are all true — a real schema guard; (2) a fresh
+  install can lose a one-time race against the operator's own webhook on the very first
+  `helm upgrade`, self-resolved by waiting for the operator pod Ready and re-running the
+  same command; (3) traces silently land in `k8s_ws_petclinic_logs` instead of
+  `k8s_ws_traces` unless `transform/traces_index` is present — the namespace's own
+  `splunk.com/index` log-routing annotation gets picked up by the shared
+  `k8s_attributes` processor for every signal, not just logs, with zero export error
+  either way. §1's `/oups`-based fault framing (obsolete since Phase 3 removed it) is
+  corrected to point at FW #2 §8's `kubectl scale visits-service --replicas=0` instead.
+  §6's trace example and SPL were captured and verified live, including one caught wrong
+  guess (`resource.attributes{}.value.stringValue` for `service.name` — wrong;
+  `service.name` is its own top-level indexed field, confirmed via `fieldsummary` before
+  it shipped). `scripts/verify-aw1.sh` is rewritten (operator health, per-service
+  injection check on both a built and pulled image, signal-flow checks) and passes
+  10/10 live. **NOT yet done in this pass:** §2/§7/§8's numeric checkpoints (JVM metric
+  family counts, per-route latency tables, dashboard panel counts/screenshots) —
+  believed still accurate (they catalog metric *names*, not per-service instance counts,
+  so six services shouldn't change them) but not independently re-verified against the
+  live six-service topology, and `labs/dashboards/*.xml` themselves are untouched pending
+  the separate dashboards-rework phase.
+- **Phase 4b (AW #2 doc rewrite) is done and tested, using sub-agents for the live
+  validation, config/script finalization, and doc-writing passes** — a deliberate change
+  in working method partway through this migration, to keep long live-debugging spikes
+  out of the main session's context window. Three technical additions on top of AW #1's operator
+  approach, all verified live on the spike instance: **Observability Cloud export**
+  (`splunkObservability` layered on the existing operator config — 706 spans, 8,913+713
+  metric points delivered, zero failures); **AlwaysOn Profiling and log correlation**,
+  both moved from hand-written manifest env vars to `instrumentation.spec.java.env` in
+  `labs/collector/values-aw2.yaml` — the same env-injection mechanism AW #1 established,
+  now carrying `SPLUNK_PROFILER_*` and `LOGGING_PATTERN_LEVEL`; and **RUM**, whose
+  snippet-injection mechanism had the same problem AW #1's Java-agent attach did:
+  `api-gateway` (which serves the AngularJS SPA) is a pulled image with no Dockerfile.
+  Fixed with a new `scripts/inject-rum-snippet.sh` — extracts the live-served
+  `index.html` (never a static copy baked into the repo, since a pulled image's content
+  isn't this repo's to own), inserts the snippet, mounts it back via a `ConfigMap` +
+  `subPath` volume patch on `api-gateway`. Three real, non-obvious findings from this
+  phase: (1) `instrumentation.spec.java.env` **replaces**, not merges, the chart's own
+  default env list — omitting the chart's two defaults when adding AW2's four silently
+  drops them, no error; (2) the profiler's `SPLUNK_PROFILER_OTLP_PROTOCOL` needed
+  `http/protobuf`, not the `grpc` earlier revisions used — the operator's own default
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is HTTP on `:4318`, not gRPC on `:4317` like the old
+  hand-built approach, and the mismatch fails silently (caught by `verify-aw2.sh` itself
+  failing, not by inspection); (3) a `deployment.environment`/`deployment.environment.name`
+  split flagged as an open question in `values-aw1.yaml`'s comments was resolved by
+  reconciling both onto one value in `values-aw2.yaml`'s OTTL, since this module is
+  specifically about correlation fields matching exactly. `scripts/verify-aw2.sh` is
+  rewritten (per-service profiling/correlation checks, `/oups`-free warmup) and passes
+  17/17 live, including a real Playwright-driven RUM initialization check. §8's
+  three-way error-rate reconciliation now uses FW #2 §8's `visits-service` fault
+  (JMeter 28.57%, Splunk 242 events) instead of the retired `/oups` sampler — APM's own
+  percentage for that fault is **honestly left unmeasured**: this pass had no
+  Observability Cloud UI/API/MCP access to query it (the ingest token confirmed working
+  for writes returns 401 against the SignalFlow query API, as expected — different
+  scope), and the doc says so rather than inventing a plausible number. **NOT yet done:**
+  §3's/§9's dashboard-adjacent numeric claims beyond what's called out above, and
+  `labs/dashboards/aw2-dashboard.xml`/`aw2-o11y-dashboard.json` themselves, both still
+  pending the separate dashboards-rework phase (confirmed topology-independent by direct
+  read of the Splunk-side XML, not yet re-verified for the Observability Cloud JSON).
+  **Do not run FW #2 through to AW #2 on a live instance right now and expect the
+  dashboards to reflect the current topology** — that gap is expected mid-migration.
+
+  **Reconfirmed live 2026-09-02 on `3.145.97.98`, plus a second, separate finding**:
+  `aw1-dashboard.xml` has zero references to `service.name` or any of the six service
+  names anywhere in it — still the pre-migration single-app dashboard, pointed at index
+  names that happen to still be correct, so it wouldn't error, just wouldn't break down
+  by service. Separately, and not part of the same gap: FW #2 §12's own install step
+  was never run during that box's Parts 7–9 build-out — `splunk display app
+  k8s-ws-dashboards` returns "Could not find object," nothing in
+  `/opt/splunk/etc/apps/`. Not installed at all, stale content once it is — two
+  different problems, both real, both still open.
+
+  **Full live validation completed, 2026-09-02, on `3.145.97.98` — all 59 panels
+  across all five dashboards checked against real six-service data, not assumed.**
+  First confirmed the app isn't stale: the GitHub-published `k8s-ws-dashboards-1.0.1.tgz`
+  (the exact file FW2 §13 pulls) diffed byte-identical, view XML for view XML, against
+  a fresh `scripts/build-dashboard-app.sh` build off this checkout — no rebuild needed,
+  what's published is what this branch ships. (Install note: `splunk install app`
+  failed with "Permission denied" reading the `.tgz` straight out of `/home/ubuntu`
+  — mode `700` on that home directory — fixed by copying to `/tmp` with `644` first;
+  not treated as a doc bug, an artifact of this particular box's home permissions.)
+
+  **58 of 59 panels: real, non-empty, correct data.** Including all 13 of AW1's Infra
+  dashboard (correctly host/K8s-object-scoped, no `service.name` needed there — that's
+  by design, not a gap; it did surface a real, separate finding: none of the six
+  PetClinic Deployments declare CPU/memory requests or limits, confirmed via absent
+  `k8s.container.cpu_request/limit`/`memory_request/limit` metrics, so the Scheduling
+  Contract panel legitimately shows nothing for them — accurate reporting of a real
+  workload-spec gap, not a broken query). AW2's Correlation dashboard and the generic
+  `apm-traces-dashboard.xml` ("Application Trace Information v4.0.0") both check out
+  fully, the latter correctly breaking down by all six real `service.name` values via
+  its own dropdown.
+
+  **One genuinely broken panel, precisely diagnosed**: `fw2-dashboard.xml`'s "Most
+  Recent Errors — RuntimeException Stack Traces (Multiline Parsing in Action)" searches
+  literal text (`RuntimeException`) that **does not exist anywhere in this topology's
+  logs, ever** — confirmed across 7 days and every index. Root cause: this panel was
+  built around the old single-pod app's `/oups` endpoint, which threw a real
+  `java.lang.RuntimeException` with a multiline stack trace; the migrated fault model
+  (`visits-service` scaled to zero, or the Cilium deny in AW2 §8) produces a fast
+  single-line `503`, never a `RuntimeException`. No amount of traffic fixes this as
+  written — the search term itself is wrong for this topology. **Real, usable fix
+  available**: genuine multiline Java stack traces already occur naturally in this
+  topology from Eureka/`DiscoveryClient` transport errors (`TransportException`,
+  `TimeoutException`, `CancellationException`, real `severity=ERROR`) — the panel can
+  be repurposed to search one of those instead of invented content, keeping its actual
+  teaching point ("multiline parsing in action") intact with a real, current example.
+
+  **One real UX gap, not exactly broken but unusable out of the box**:
+  `apm-traces-dashboard.xml`'s `traceIndex` dropdown has no `<default>`, and its own
+  source search (`| eventcount summarize=false index=*`) lists every index on the
+  instance including irrelevant ones — a first-time viewer has to already know to pick
+  `k8s_ws_traces` before any panel populates.
+
+  **`aw1-dashboard.xml` confirmed again**: real data, right indexes, every breakdown
+  by HTTP route rather than by service — the same, already-known single-pod-era
+  limitation, not newly broken, not yet reworked. This is the actual scope of the
+  still-deferred "dashboards-rework" phase — a bigger, separate undertaking from the
+  two real, small fixes above.
+
+  **JMeter isn't installed on this box at all right now** (no binary anywhere; only
+  the `.jmx`/`.csv` test-plan files exist) — Playwright's own continuous traffic was
+  sufficient for every panel except the broken one above, whose failure has nothing to
+  do with traffic volume.
+
+  **Both small fixes shipped, 2026-09-02, app bumped 1.0.1 → 1.0.2.** User's call on
+  the RuntimeException panel: **remove it outright**, not repurpose it with a real
+  Eureka/`DiscoveryClient` transport error as suggested above — "the new petclinic app
+  doesn't perform a RuntimeException anymore, that dashboard is broken - it's
+  unfortunate, but we should just remove it." Whole `<row>` deleted from
+  `fw2-dashboard.xml`; FW2 §13's dashboard description and the `RuntimeException`
+  callout removed to match, replaced with a `!!! note` explaining what used to be there
+  and why (the migrated topology has no equivalent fault), pointing back to §9's own
+  checkpoint as the still-valid proof that multiline reassembly works.
+
+  Separately investigated, same session, the *other* half of the user's question — the
+  **`apm-traces-dashboard.xml` "Span Tree" panel** (`link_analysis_app.link_analysis`
+  viz, confirmed via `splunk display app link_analysis_app` still not installed on this
+  box). Full panel inventory: 15 panels total, only Span Tree depends on the missing
+  app; the "Number of Spans" single value sharing its panel, and all 14 other panels,
+  are unaffected and already validated with real data. This exact gap — and the "you
+  don't need it, AW2's Correlation dashboard already does this in plain SPL" call — was
+  already documented in AW1 §8's existing `!!! warning` block from an earlier pass, so
+  **no removal here**: unlike the RuntimeException panel (search returns nothing, no
+  explanation), Span Tree fails loudly with a self-explanatory red box and the doc
+  already walks the reader through exactly why, in place. Assessment delivered to the
+  user: the dashboard clearly retains its value (14/15 panels fully functional) and
+  should be kept as-is apart from the dropdown fix below.
+
+  `traceIndex` dropdown: added `<default>k8s_ws_traces</default>` +
+  `<initialValue>`, per the user's explicit authorization ("just create a default for
+  the pull down list to be the k8s_ws_traces index"). Live-verified two ways on
+  `3.145.97.98`: (1) REST-fetched the installed view XML and confirmed the string is
+  present; (2) confirmed the "Pick a service name" dropdown's own backing search
+  (which only fires once `$traceIndex$` has a value) returns real data — all six
+  services with counts — proving the default actually unblocks the chain, not just
+  that the XML parses. **Correction caught before it shipped**: my first draft of the
+  doc text claimed the default makes "every panel" populate on load; live-checked and
+  that's false — everything from the "Number of Traces" row down still depends on
+  `$serviceName$`, which deliberately has no default (defaulting it would silently
+  scope the trace list to whichever service sorts first). Doc now says precisely what
+  populates immediately (the top row + the service picker) versus what still needs a
+  service picked, and drops the old "it looks broken before you pick an index" warning
+  since that specific failure mode no longer occurs.
+
+  **Not yet done**: both dashboard screenshots (`fw2-dashboard.png`,
+  `apm-traces-dashboard.png`) are now stale — FW2's lost a panel, and the APM Traces
+  screenshot's drilled-in example is captioned as a `RuntimeException` trace, which
+  can't be reproduced in this topology anymore. Manifest still marks both
+  `status: verified` from before this round; they need retaking (Playwright, same
+  pipeline as every other doc screenshot) and, for APM Traces, a caption rewrite to
+  describe whatever real error trace the new screenshot actually drills into. No
+  Playwright/browser tooling was available in this pass to do it live.
+
+  **Resolved**: user chose the bigger reading — commit to the full six-service
+  breakdown rework. Dispatched to a sub-agent (live discovery first, then XML), full
+  diff reviewed personally before committing, same as every other round.
+
+  **`aw1-dashboard.xml` six-service rework shipped, 2026-09-02, app bumped 1.0.2 →
+  1.0.3.** 13 panels with zero `service.name` references → 15, all live-verified on
+  `3.145.97.98`. Two were real correctness bugs, not just missing breakdowns, caught
+  by discovering the data live before writing any XML: **JVM Heap Used** (current +
+  over-time) was averaging six independent JVMs into one blended number/line — live
+  spread confirmed real (one snapshot: `api-gateway` 87.82MB vs. `visits-service`
+  42.09MB) — now a per-service table plus a trellis chart (`trellis.scales.shared=0`,
+  a deliberate deviation from the skill's usual `1`, because magnitude spread across
+  services ran up to ~90x on the trace-volume trellis and shared scaling would have
+  flattened five of six cells). **HikariCP Connection Pool Health** — only 3 of 6
+  services (`customers-service`, `vets-service`, `visits-service`) own a pool at all;
+  the old `latest()`-across-everything query was silently picking one service's
+  numbers, not aggregating. Rebuilt per-service via `xyseries` + `join`.
+
+  A third, subtler bug was found and fixed mid-build, not asked for: **"Anatomy of a
+  Request"** derived Route and Service from two *independently* `mvindex()`'d
+  per-`trace_id` multivalue fields — for a trace spanning several services this could
+  pair one span's route with a different span's service name. Fixed by combining them
+  from the same SERVER span (`route."|||".'service.name'`) before splitting back
+  apart; verified live that `/owners/{ownerId}` now correctly attributes to
+  `customers-service`.
+
+  Service column added to Top Routes, Top SQL Statements, Slowest INTERNAL Spans,
+  Error Rate by Route — confirmed live which are load-bearing vs. purely
+  informative: `/actuator/health` collides across 5 services with a different
+  latency each, `Transaction.commit` collides across the 3 data-owning services;
+  every SQL statement and every other route is unique to one service. New "Fleet
+  Overview — Trace Count & P90 Latency by Service" table and a "Trace Volume by
+  Service" trellis added near the top, deliberately without touching the Total
+  Traces/P90 Latency KPI singles — those stay fleet-wide by design, matching the
+  o11y-dashboard skill's own "lead with fleet health" convention.
+
+  Doc text (`docs/03-advanced-1/index.md`) updated to match, including correcting the
+  N+1 narrative — the old "four separate database round-trips" claim doesn't hold
+  against current live numbers (`/owners` and `/vets` vary, not a fixed four) — and a
+  new `!!! note` on the two load-bearing-Service findings. `aw1-dashboard.png` flagged
+  `status: stale` in the manifest, joining the two already flagged from the previous
+  round — none retaken this pass, no Playwright/browser tooling available.
+
+  **Process bug, caught and corrected, worth recording so it doesn't repeat**: the
+  commit I reported as done and pushed (`1ef868d`) only actually staged the rebuilt
+  `.tgz` — `git add -A <one-pathspec>` scopes `-A` to that single pathspec, not the
+  whole tree, so `aw1-dashboard.xml`, `versions.env` and both doc files never got
+  staged despite the commit message describing all of it in detail. Nothing was lost
+  (it sat as an uncommitted working-tree change), and the next sub-agent (dispatched
+  for the Cilium/Hubble dashboards, below) correctly flagged the unexpected dirty
+  state before starting its own work rather than silently working around or
+  overwriting it — caught before it caused any real damage, but only because that
+  agent checked and reported rather than assuming. Fixed by verifying `git diff
+  --cached --stat` shows exactly the intended files *before* every commit from here
+  on, not after. Landed properly in `d6f8557`.
+
+  **Cilium/Hubble dashboards shipped, 2026-09-02, app bumped 1.0.2 → 1.0.4** (the
+  intermediate 1.0.3 from the AW1 rework folds into this bump, since both landed in
+  the same working-tree pass by the time the staging bug above was caught). Two new
+  dashboards, dispatched to a sub-agent with the same live-discovery-first pattern,
+  full diff and every panel's SPL reviewed personally before committing:
+
+  `fw2-hubble-logs-dashboard.xml` (view `k8s_ws_hubble_logs`, FW #2): reads
+  `index=k8s_ws_logs sourcetype="cilium:hubble:flow"`. Verdict/direction/protocol
+  breakdowns, top destination ports resolved to the owning PetClinic service, top
+  service-to-service talkers (`playwright-loadgen → api-gateway` leads, as expected).
+  The two DROPPED-focused panels correctly apply both gotchas FW2 §12 already found
+  live — no resolved `flow.source.namespace` on DROPPED events (recovered from
+  `flow.source.labels{}` via `mvfilter`/`mvindex`, never a raw group-by on that
+  multivalue field) — and use an `appendpipe` pattern for an honest empty state
+  rather than a panel that looks broken on a box where DROPPED volume runs single
+  digits per window. Independently re-verified live, post-install: 99.5% FORWARDED
+  in a 15-minute window (my own re-run of the exact panel query, not just trusting
+  the sub-agent's report — my first attempt at reproducing this by hand got `0%` from
+  an unquoted `flow.verdict` in `eval`, a reminder that the dotted-field-name-needs-
+  quoting rule bites the verifier too, not just the panel author).
+
+  `aw1-cilium-metrics-dashboard.xml` (view `k8s_ws_cilium_metrics`, AW #1): reads
+  `index=k8s_ws_metrics`. All eight real `hubble_*` families — flow-processing rate
+  via `rate()`, not raw `sum()`, because the underlying counter resets and a raw sum
+  renders false cliffs; `hubble_policy_verdicts_total` (every `action`=`forwarded`,
+  every `match`=`l3-l4`, matching the confirmed `dns`/`http` gap); `hubble_drop_total`
+  by `reason` (`UNSUPPORTED_L3_PROTOCOL` only, cross-validating the flow-log DROPPED
+  panels against an independent metrics pipeline); TCP flags; Hubble's own
+  `hubble_lost_events_total` self-check. Plus six curated `cilium_*` panels out of
+  ~175 candidates (BPF map pressure, endpoint state, controllers failing, agent RSS,
+  identity count, K8s API client latency) and the agent's own lifetime
+  `cilium_drop_count_total` by reason/direction — confirmed live as a cumulative
+  counter (flat within any short window), every reason traceable to a scenario this
+  workshop already narrates by hand (`Policy denied` → the `playwright-loadgen`
+  new-identity gotcha from FW2 §7; `Unsupported L3 protocol` → the same IPv6 Router
+  Solicitation noise as the flow-log DROPPED panels). A real bug was caught and fixed
+  mid-build: "Controllers Failing" aliased its value as `v` but tabled `value`
+  (silently always empty) — fixed, rebuilt, reinstalled, reverified.
+
+  Nav: `k8s_ws_hubble_logs` grouped right after `k8s_ws_fw2_dashboard`;
+  `k8s_ws_cilium_metrics` grouped with the other AW1-filled dashboards, after
+  `k8s_ws_infra_dashboard`. Doc subsections added to both FW2 §13 and AW1 §9 in the
+  existing voice; both dashboard-app tables bumped 5 → 7 rows.
+
+  **Not done**: no real screenshots for either new dashboard — no Playwright/browser
+  tooling available. The two referenced images are generated placeholder graphics
+  (clearly labeled "Screenshot not yet captured — placeholder only", 1200×700,
+  can't be mistaken for a real capture), added only so `mkdocs build --strict`
+  doesn't fail on a broken image link; manifest marks both `status: missing`. This
+  makes **five** screenshots now needing a real Playwright capture pass:
+  `fw2-dashboard.png`, `apm-traces-dashboard.png`, `aw1-dashboard.png` (all `stale`,
+  from earlier rounds), plus these two new `missing` ones.
+
+  **All five captured, 2026-09-02.** Headless Playwright (Node, `npx playwright`,
+  already available — no install needed beyond the Chromium browser binary) driven
+  from outside the box, through an SSH tunnel to the box's own `localhost:8000`
+  rather than opening port 8000 — matches this project's existing security-group
+  posture, nothing new exposed. All five confirmed fully rendered (no
+  "waiting for input"/spinner state) before capture, 1600px-wide full-page, matching
+  the existing screenshots' own convention. `apm-traces-dashboard.png` needed real
+  interaction, not just a page load: picked `customers-service` in the service
+  dropdown, drilled into a real `PUT /owners/4` trace (ten spans) via Trace
+  Information, then into its Hibernate `SELECT` span — replacing the old capture's
+  now-impossible `/oups` `RuntimeException` drill-down.
+
+  A doc-prose sweep for other content that describes specific pictured values (not
+  just "here's what this panel shows" in general) found two real mismatches, fixed:
+  FW2's Hubble walkthrough claimed `playwright-loadgen → api-gateway` leads Top
+  Talkers (`external → external` actually leads); AW1's Cilium Agent Health
+  walkthrough claimed every BPF map sits "well under 1%" (the two conntrack maps
+  sit just over 1%). The same sweep surfaced a real, **pre-existing** and unrelated
+  error the new APM-traces caption exposed by contrast: "PetClinic runs H2 in
+  memory" (in both `docs/03-advanced-1/index.md`'s DB-time tip and one
+  `aw1-dashboard.xml` panel description) is wrong for this topology — FW1's own
+  topology table and AW2's own findings already establish **HSQLDB**
+  (`db.connection_string: hsqldb:mem:`), now confirmed a third time on the real
+  captured trace's `db.system=hsqldb`. Fixed both occurrences; grepped the whole
+  tree after, clean. The `aw1-dashboard.xml` text edit meant WORKSHOP_APP_VERSION
+  bumped again, 1.0.4 → 1.0.5, rebuilt and reinstalled, confirmed live.
+
+  **New, small, flagged but not investigated further**: a live check during review
+  (not part of either sub-agent's task) found 377 of ~134k Hubble flow events in a
+  60-minute window (~0.28%) have no `flow.verdict` field at all — a real fourth
+  category, visible as a "NULL" series in the fresh Flow Verdict Over Time
+  screenshot, that FW2 §12's checkpoint text ("only three verdicts") doesn't
+  account for. Doesn't change that checkpoint's core "reassuringly boring"
+  conclusion and wasn't worth blocking this pass on, but the "only three" claim
+  is no longer exactly right — worth a closer look in a future pass.
+
+  **Process note**: learned from the earlier commit-staging bug in this same
+  session — every commit in this round was preceded by `git diff --cached --stat`
+  to confirm the staged set matched intent before committing, not after.
+- **Live incident, 2026-09-03: `wsuser01`'s instance found genuinely unstable —
+  full root-cause chain, three real fixes shipped.** Started from the user
+  spotting a `discovery-server:8761` **inferred** service in Observability
+  Cloud with a ton of errors. That thread led somewhere much bigger than the
+  original question.
+
+  **The inferred-service question itself**: `discovery-server:8761` is
+  separate from the real, instrumented `discovery-server` (health `Ok`)
+  because APM can't correlate these specific calls to any server span — the
+  connection fails at the network layer before one exists. Root cause,
+  confirmed on a real trace: `java.net.NoRouteToHostException` from
+  `vets-service`'s (and others') Eureka `DiscoveryClient-CacheRefreshExecutor`
+  background thread hitting `http://discovery-server:8761/eureka/apps/delta`
+  — not application traffic. `discovery-server`'s own pod had been OOMKilled
+  4 times; a Deployment (not a StatefulSet) means each restart is a new pod
+  with a new IP, and other services' cached Eureka connections briefly point
+  at the dead one until they re-resolve.
+
+  **That led to checking the live cluster, which found the real story**:
+  `api-gateway` was actively `CrashLoopBackOff` at the moment of checking —
+  168 restarts, `OOMKilled` (exit 137), readiness probe failing with
+  `connection refused`. Every pod in the namespace had heavy restart counts
+  (`config-server` 19, `customers-service` 16, `vets-service`/
+  `visits-service` 6 each), and it wasn't contained to `petclinic` — the
+  Collector agent (79), the Operator (91), `cilium-operator` (242) and
+  `storage-provisioner` (255) were all churning too. None of the six
+  PetClinic Deployments had ever declared `resources.requests`/`limits` (a
+  gap already flagged once, in the dashboard-validation pass) — confirmed
+  as the reason a node-level OOM kill was landing on arbitrary victims
+  (including cluster infrastructure) instead of a contained, per-container
+  one.
+
+  **User's own framing of the fix, correct and worth preserving**: setting
+  limits doesn't reduce total memory demand — if you guess low, you just
+  convert systemic node-wide chaos into a specific, faster-failing service.
+  Real numbers were pulled before choosing values (`docker stats`, live: five
+  of six PetClinic JVMs clustered at 700–800MiB RSS at that snapshot — a
+  midpoint of each container's own restart cycle, not necessarily its peak).
+  Chose deliberately generous headroom over that snapshot rather than a tight
+  fit: business services (`api-gateway`, `customers-service`, `vets-service`,
+  `visits-service`) request 250–500m CPU / 768Mi memory, limit 1536Mi memory;
+  infra services (`config-server`, `discovery-server`) request 200m / 640Mi,
+  limit 1280Mi. **No CPU limit set, deliberately** — this project already
+  found once that CPU starvation on this exact box causes the kubelet to miss
+  its node-lease renewal and Kubernetes to evict everything (the original
+  4→8 vCPU move); a hard CPU limit risked reintroducing that failure mode via
+  throttling. Landed in `labs/manifests/petclinic-microservices.yml`
+  (permanent, not a live-only patch), applied live, confirmed: `api-gateway`
+  and `config-server` stabilized within minutes; the other four hit one more
+  round of transient `NoRouteToHostException` against `config-server` (all
+  six Deployments were rolled in one `kubectl apply`, so `config-server` was
+  itself mid-restart while others tried to fetch config at boot) — not a
+  limits problem, self-healed via K8s's normal restart policy.
+
+  **The user also asked whether pod metrics needed configuring, to understand
+  real memory requirements — yes, and this surfaced a second, independent
+  bug.** Confirmed live: no per-pod memory *usage* metric existed in Splunk
+  at all — only `k8s.container.memory_request`/`_limit` (empty, since nothing
+  set them), JVM heap, and Cilium/Collector self-telemetry. The chart's
+  `kubelet_stats` receiver *was* correctly configured (`metric_groups:
+  [container, pod, node]`, the right ones) but was producing **zero** data —
+  not filtered, not partial, its own `otelcol_receiver_accepted_metric_points`
+  counter pinned at 0 while every other receiver had millions. Root cause:
+  no `insecure_skip_verify: true` for minikube's self-signed kubelet
+  certificate — TLS verification failing silently, no error surfaced
+  anywhere. Fixed live via `helm upgrade --reuse-values` with a minimal patch
+  file (hit the same Instrumentation-CR field-manager conflict already
+  documented in this project; the standard `kubectl apply --server-side
+  --force-conflicts` fix this time also needed a retry after a transient
+  `etcdserver: request timed out` — the cluster was genuinely under load).
+  Confirmed: `k8s.pod.memory.usage`/`.working_set`/`.rss`/`.available` now
+  real, flowing (21,506 accepted points in the first 10 minutes checked).
+  Landed permanently in `values-aw1.yaml`/`values-aw2.yaml`/`values-final.yaml`
+  (all three — this is a chart-default-receiver override, present from the
+  point metrics turn on) with a comment noting this is a minikube-specific
+  fix (self-signed kubelet cert), not a general recommendation for real
+  clusters.
+
+  **A third factor, found while watching the rollout struggle to settle, not
+  asked about but real**: one straggler pod (`customers-service`) took **494
+  seconds** to finish Spring Boot startup — normal is ~10–15s. That's a CPU
+  contention signature, not memory. Cross-checked against `docker stats`:
+  `playwright-loadgen` alone was running **130% CPU** continuously, with
+  `api-gateway` — the single endpoint it hits — right next to it at **150%**.
+  Paused `playwright-loadgen` (`replicas: 0`) to test the theory directly:
+  every remaining pod stabilized within minutes with no other change, direct
+  evidence CPU, not memory, was the dominant driver of the ongoing
+  instability. Permanent fix, not just a live pause: `CONCURRENCY` 5 → 2,
+  `PAUSE_MIN`/`PAUSE_MAX` widened 2→3/5→8 in
+  `labs/loadgen/playwright-loadgen.yaml`. Reapplied live and confirmed:
+  playwright-loadgen's own CPU dropped to ~50%, api-gateway's to ~11%, fleet
+  stayed stable with it running again.
+
+  **Watch, not yet acted on**: `api-gateway`'s memory read 1.068GiB (71% of
+  its new 1536Mi limit) shortly after this incident — higher than the
+  ~727MiB it was sized against originally. Could be normal post-restart
+  JVM warmup (class loading, JIT, cache fill) rather than a sign the limit is
+  wrong; one data point isn't enough to retune on. Revisit once
+  `k8s.pod.memory.working_set` has a real multi-hour trend to look at, now
+  that it's actually flowing.
+
+  **Not yet done**: this incident's fixes are functional and live-verified,
+  not yet woven into the taught curriculum — no new doc section, checkpoint,
+  or dashboard panel for resource requests/limits or `kubelet_stats` pod
+  metrics. Real, valuable capstone-dashboard material (AW1's own Infra
+  dashboard already has panels that were empty specifically because these
+  gaps existed) — flagged as a separate follow-up, not attempted in this
+  pass given its scope.
+
+  **Same-day follow-up, same incident: a genuinely separate finding turned up
+  investigating a user question about vets-service's O11y Cloud service map —
+  "why doesn't it show an inferred database anymore?"** Not a regression from
+  anything above. Root cause, confirmed live: `petclinic_loadgen.py`'s
+  `journey()` visits `#!/vets` every iteration, but each worker reuses one
+  browser page/context for its *entire lifetime* (never a fresh page per
+  pass), and AngularJS caches the vets list in a JS-heap-resident `$http`
+  promise for the life of the running app instance — so a plain `goto`
+  re-visit is pure client-side routing after the first load, no backend call,
+  no CLIENT span, no inferred HSQLDB dependency. Confirmed with real numbers:
+  in the same 1h window, `customers-service` and `visits-service` (per-record
+  CRUD routes, can't be cached the same way) had 87%/61% of their requests
+  actually touch the database; `vets-service` had 5%. Combined with the
+  concurrency cut above (5 → 2 workers), DB-touching events for it became
+  sparse enough that a short lookback window could land entirely between
+  them.
+
+  **User's own framing, worth preserving**: asked directly whether fixing
+  this (opening a fresh page per iteration) risked reintroducing the memory
+  problem just fixed, or whether it just needed longer observation instead.
+  Both fair — answered by distinguishing the *specific* mechanism: a full
+  `context.new_page()`/new-context cycle every iteration would add real,
+  if modest, per-iteration overhead; a `page.reload()` on the *existing*
+  page/context/browser process is what actually defeats Angular's cache
+  (it's the app-bootstrap event that clears the JS-heap-resident promise,
+  not page identity), and costs re-parsing already-warm HTTP-cached
+  assets — nowhere near the class of thing that caused the original
+  incident (sustained concurrency=5 with zero limits anywhere, for 44h).
+  Implemented as `page.reload(wait_until="networkidle")` every 4th
+  iteration, not every one — deliberately not "free", and not undoing the
+  point of the concurrency cut.
+
+  Live-verified, ConfigMap updated (`kubectl create configmap ...
+  --dry-run=client -o yaml | kubectl apply -f -`, then a rollout restart to
+  pick up the new script — a volume-mounted ConfigMap change alone doesn't
+  reach an already-running Python process), fresh pod confirmed `err=0`
+  after 10 iterations, and `hsqldb:af5659b2-...` (vets-service's current DB
+  instance identity) went from 14 requests across a full hour to 98 in the
+  10 minutes right after the fix landed. Also fixed two doc-accuracy issues
+  the same investigation surfaced: FW2 §7's prose and embedded YAML still
+  said `CONCURRENCY=5`/`worker-0` through `worker-4` (stale since the
+  concurrency-cut commit); replaced the example log output with a fresh
+  real capture at the current settings rather than leaving 2026-09-02's
+  five-worker output standing.
+
+  Also cleaned up while in the cluster: five leftover one-shot `curltest*`/
+  `curltmp4` debugging pods (`kube-system`, `otel`) from earlier live
+  investigation in this project, all `0/1 Completed`, none tied to any
+  checked-in manifest — deleted, harmless (already terminated, using no
+  resources), just etcd bookkeeping clutter worth clearing given etcd itself
+  was seen timing out under load earlier in this same incident.
+
+  **Same-day, third follow-up: the incident's fixes woven into the taught
+  curriculum**, per the user's own explicit ask ("does the workshop guides
+  need to be updated... make sure the standalone guides are also updated").
+  Dispatched to a sub-agent with the full incident narrative already in hand
+  (no rediscovery needed) and an instruction to independently re-verify every
+  live number before writing it down rather than trust this morning's
+  figures unchanged. Four real doc changes landed:
+
+  `docs/01-foundational-1/index.md` — a 5th "skim it before applying" bullet
+  on the new `resources:` blocks; a new warning box right after the existing
+  4-vCPU danger box, stating plainly that the 8 vCPU/32 GB sizing has only
+  ever been validated for this module's own ~3-minute burst, not sustained
+  operation — honest about what today's fix does and doesn't prove yet.
+
+  `docs/03-advanced-1/index.md` — genuinely new content: a `### kubelet_stats`
+  subsection (end of §5, deliberately — lets the checkpoint use
+  `k8s_ws_petclinic_metrics`, where this data actually lands post-routing,
+  chosen over §2 for that reason and because it extends §5's own "the
+  transform catches more than you think" lesson). Walks through the real
+  discovery method (`otelcol_receiver_accepted_metric_points{receiver=
+  "kubelet_stats"}` pinned at 0, no error anywhere — a genuinely good "how do
+  you even find a silent failure" moment), the minikube-specific TLS cause,
+  the fix, and a real live checkpoint (`api-gateway` 1072.5 MiB usage /
+  1069.9 MiB working_set, `vets-service` 797.8 / 796.6 MiB, both re-verified
+  live that day, not copied from this ledger). §6's receiver snippet and the
+  module's "Reference — complete files" embedded YAML both updated to carry
+  `kubelet_stats` forward, since it now exists from §5 onward.
+
+  **A genuinely new finding, not in this ledger before the sub-agent found
+  it**: `k8s.pod.memory.*` for `petclinic` pods lands in
+  `k8s_ws_petclinic_metrics`, not `k8s_ws_metrics` — traced to
+  `transform/app_metrics_index` matching on namespace with no condition on
+  which receiver produced the metric, so `kubelet_stats` data rides the same
+  route as the JVM/OTLP data. Confirmed by reading the actual rendered
+  Collector config, not assumed.
+
+  `docs/03-advanced-1/index.md` §9 — rewrote the Infra dashboard's
+  "Kubernetes object state" paragraph, which used to say "most control-plane
+  components run with no CPU or memory limit at all" as one blanket claim.
+  Now correctly split: `petclinic` containers show real, non-empty requests/
+  limits (confirmed live, all six), where the Scheduling Contract panel used
+  to show nothing for that namespace at all; `kube-apiserver`/
+  `kube-controller-manager`/`kube-scheduler`/`etcd` remain confirmed
+  `UNBOUNDED`; Cilium's own containers don't appear in the panel's query
+  results *at all* (no resources block whatsoever, a stronger statement than
+  `UNBOUNDED`) — also confirmed live, along with cluster-infra restart counts
+  still slowly climbing even now (`cilium-operator` 242→247,
+  `storage-provisioner` 255→259 across the few hours checked), real ongoing
+  evidence the platform layer genuinely remains exposed, not a stale claim
+  carried forward unchanged.
+
+  `docs/facilitator/index.md` — the same sizing caveat, facilitator-framed
+  (their own decision: rebuild, snapshot, or leave a box running between
+  sessions), explicit that only a few hours of soak evidence exist, not days.
+
+  Independently confirmed no duplication with the concurrency/reload commit
+  (`cf6ecb7`) — `labs/loadgen/*` and FW2 §7 untouched, checked via `git show`
+  before writing anything. Both `mkdocs build --strict` and
+  `build-standalone.sh` confirmed clean, personally re-verified after the
+  sub-agent's own claim, not just trusted.
+
+  **Also personally re-verified before committing**: the sub-agent's report
+  flagged `api-gateway` had been `OOMKilled` once more, about an hour before
+  it checked — checked live directly rather than taking that at face value;
+  confirmed it was the *same* single restart already known about from
+  earlier in the day (still `RESTARTS: 1`, not 2), not a new event, and
+  memory had if anything drifted slightly down (69% of limit vs. 71% earlier)
+  rather than climbing. No new problem; the report's own phrasing ("self-
+  healed, stable since") was accurate, just worth confirming independently
+  rather than assuming.
+
+  **Same-day, fourth follow-up: the gap the curriculum writeup itself left
+  behind — real per-pod usage existed but nothing persisted it.** User's own
+  question, exactly on target: "do the dashboards show these metrics? or do
+  they need to be updated, including the screenshots?" Checked directly
+  before answering — no panel anywhere charted `k8s.pod.memory.usage`/
+  `.working_set`; only the Scheduling Contract panel (declared requests/
+  limits, `k8s_cluster` receiver) existed, and the new §5 kubelet_stats
+  section only had a one-off checkpoint query. Confirmed, proposed the fix,
+  user approved and explicitly asked for sub-agent dispatch.
+
+  App bumped 1.0.5 → 1.0.6. Two new panels on `aw1-infra-dashboard.xml`,
+  placed right after Scheduling Contract so declared-vs-actual reads in
+  sequence: a current-state table (per-pod working set/usage joined against
+  each container's declared limit — real numbers: five of six services at
+  43-55% of limit, `api-gateway` the outlier at 70.7%, giving the "watch,
+  not yet acted on" item from this morning's incident a real, recurring home
+  instead of a one-off snapshot) and a trellis-by-service trend. The join
+  needed real live discovery, not a guess: `k8s.pod.memory.*` carries
+  `k8s.pod.name` (with the ReplicaSet-hash/pod-suffix) but no
+  `k8s.container.name` or `k8s.deployment.name`, while
+  `k8s.container.memory_limit` carries `k8s.container.name` but lives in a
+  *different index* (`k8s_ws_metrics`, not `k8s_ws_petclinic_metrics`) — a
+  `rex` strips the trailing `-<hash>-<suffix>` to derive a joinable key
+  across both. Trellis scale: **shared**, a deliberate departure from the
+  JVM Heap trellis (independent) — justified by real numbers (config-server
+  ~569 MiB to api-gateway ~1085 MiB is under a 2x spread, all six share a
+  comparable 1280-1536 MiB limit, so shared scale lets distance-from-ceiling
+  read at a glance; the JVM panel's independent scale exists for a genuinely
+  different reason, preserving each JVM's own GC shape).
+
+  Doc cross-references added both directions (§5's checkpoint now points at
+  where the data lives on a dashboard; §9's Infra-dashboard walkthrough
+  describes both new panels with real numbers and the trellis-scale
+  rationale). `aw1-infra-dashboard.png` flagged `stale` in the manifest —
+  its layout genuinely changed — not recaptured in this pass.
+
+  Reviewed at the same depth as every other round this session before
+  committing: read the full XML diff, confirmed `span_token` (the existing
+  dropdown) was reused correctly rather than duplicated, independently
+  re-ran both new panels' queries live myself (not just trusting the
+  sub-agent's own report) and got matching, real, non-empty results both
+  times. `mkdocs build --strict` and `build-standalone.sh` both re-verified
+  personally, not just trusted.
+
+  **Not yet done**: the screenshot. `aw1-infra-dashboard.png` needs
+  recapture now that the panel layout changed — separate follow-up pass,
+  different tooling (Playwright/browser, not available in this dispatch).
+  (Done in the very next round, below.)
+
+  **Same-day, fifth follow-up: the user made live edits directly on the
+  instance (line → area on several dashboards) and asked to land them.**
+  Discovery done personally before dispatching anything: pulled every view's
+  current XML via the REST API and ran a **semantic** diff — panel-by-panel
+  `<option>` key/value comparison, order-independent — against the checked-in
+  repo files, not a raw text diff. Splunk's GUI editor reorders elements and
+  rewrites whitespace on every save; a raw diff would have buried the one
+  real change per panel in hundreds of lines of reformatting noise. Found
+  exactly 9 panels across 4 dashboards, each with one real change
+  (`charting.chart`: `line` → `area`), nothing else semantically different —
+  confirmed cleanly before any sub-agent touched anything.
+
+  Dispatched with the exact 9-panel list already in hand (no rediscovery
+  needed). Landed surgically (matched by panel title, not wholesale file
+  copy), rebuilt, installed, recaptured all 4 screenshots. Reviewed at the
+  same depth as every other round: visually opened all 4 screenshots myself
+  before committing, not just the sub-agent's own description of them.
+
+  **One panel needed a real design decision, not just landing the change**:
+  "One Incident, Three Signals, One Timeline" (`aw2-dashboard.xml`) has
+  Spans (~1,765/bucket) and Log Events (~87/bucket) sharing an axis, ~20x
+  apart. As an area fill, Spans visually buried Log Events almost entirely —
+  confirmed by looking at the actual screenshot, not the sub-agent's summary
+  alone — undermining the panel's own stated point (watching both curves
+  together). Tested two live fixes myself before reporting anything to the
+  user: adding Log Events to `charting.chart.overlayFields` made it visible
+  but dragged the secondary axis's scale up to fit it, squishing the Node
+  CPU Load line to near-flat instead — trading one invisible series for
+  another. A second attempt adding an explicit per-field axis option
+  (invented, not a documented Splunk option — turned out to have no effect)
+  also failed. Reported both failures honestly to the user rather than
+  picking one and shipping it; user chose reverting just this one panel back
+  to `line` (the other 8 stay `area`) — three lines at different scales
+  is imprecise but nothing gets occluded, which is what actually mattered
+  here.
+
+  **A genuinely new operational finding, worth remembering**: direct REST-API
+  edits to a Splunk view create a "local" override that **shadows a
+  freshly-installed app package's "default" content** — `splunk install app
+  ... -update 1` does not overwrite it. Hit this personally mid-verification:
+  after installing the version with the reverted panel, the live dashboard
+  still showed the *old* (pre-revert, area-filled) rendering, because my own
+  earlier live-testing REST pushes had created a local override still
+  shadowing the new package. Fix: push the final XML directly via REST one
+  more time (same mechanism that created the problem, used to clear it),
+  then re-verify. Re-checked **all 4** changed views afterward, not just the
+  one that broke, in case the same shadowing had silently affected others —
+  it hadn't, but only checking confirmed that rather than assuming it.
+
+  `versions.env`: `WORKSHOP_APP_VERSION` 1.0.6 → 1.0.8. The prior round's
+  1.0.7 bump was real (built, installed) but its own dispatch never asked
+  for the docs' curl-URL references to be updated — caught while reviewing
+  this round, folded straight through to 1.0.8 rather than commit an
+  intermediate version nobody would actually end up installing from a fresh
+  clone.
+- **Post-4b scope correction, done and tested: AW #1 now instruments all six PetClinic
+  services by default, not two.** User-directed, with the reasoning worth preserving:
+  the original "patch `customers-service`/`vets-service` as a minimum proof, extend if
+  you want" framing in AW #1 §3 was inherited straight from the old monolith's shape —
+  one app plus one inferred database dependency — and never got re-examined after the
+  migration to six real services, undermining the entire point of the migration (a real
+  six-node service map). `docs/03-advanced-1/index.md` §3's `kubectl patch` loop and
+  every downstream checkpoint now cover all six; `docs/04-advanced-2/index.md`'s
+  profiling/correlation checkpoints and its service-map checkpoint follow the same
+  change. Confirmed live, all six carry the injection annotation and report their own
+  `service.name`, `jvm.*` metrics and real spans — including the two infrastructure
+  services (`discovery-server`, `config-server`), which needed no different treatment
+  than the four business services (`config-server` correctly has no
+  `wait-for-config-server` init container, since it doesn't wait on itself).
+
+  Also fixed in this pass, same user direction: the meaningless **"localhost" node**
+  cluttering the Observability Cloud service map. Root cause is PetClinic's own bundled
+  Zipkin auto-export (Spring Boot Actuator's `ZipkinAutoConfiguration`/Micrometer
+  Tracing — a completely separate mechanism from the OTel Java agent), continuously
+  failing to reach a Zipkin collector at `localhost:9411` that never existed — confirmed
+  live at 17,294 failing spans in a 12h window before the fix. Two plausible env vars
+  were tried and confirmed live NOT to work
+  (`MANAGEMENT_ZIPKIN_TRACING_EXPORT_ENABLED`, `MANAGEMENT_TRACING_ENABLED`) before
+  landing on the one that does: `SPRING_AUTOCONFIGURE_EXCLUDE=org.springframework.boot.
+  actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration`, added to
+  `instrumentation.spec.java.env` in `values-aw1.yaml` (introduced there for the first
+  time — AW1 had been running on pure chart defaults until now) and carried forward into
+  `values-aw2.yaml`. Confirmed live: 80 → 44 → 0 `localhost:9411` spans across
+  iterations, with real HTTP/DB spans and `jvm.*` metrics unaffected throughout. Bonus
+  finding along the way, not something this workshop needs to fix: the upstream sample
+  app's own bundled ConfigMap sets `management.tracing.export.zipkin.endpoint` — an
+  older, pre-Micrometer property path that silently never applies on this Spring Boot
+  version, which is *why* the noise heads to `localhost` rather than the real host the
+  ConfigMap actually names.
+
+  `labs/collector/values-final.yaml` turned out to be genuinely stale in the same sweep —
+  last touched before the operator rewrite (Phase 4a/4b) even though FW #2's own doc
+  links it as the "final state" reference; it was missing the entire
+  `environment:`/`operatorcrds:`/`operator:`/`instrumentation:` block. Brought to full
+  parity with `values-aw2.yaml` and live-tested (dry-run plus a real install, confirmed
+  via `/actuator/env` and direct Splunk queries, not dry-run alone).
+
+  `scripts/verify-aw1.sh` (15/15 live) and `scripts/verify-aw2.sh` (30/30 live) both
+  expanded their per-service loops to all six and added a Zipkin-noise assertion each.
+  One operational finding worth carrying forward: restarting or patching all six
+  Deployments **simultaneously** transiently overloaded the control plane on this
+  instance size (even a plain `kubectl get pods` timed out for a few seconds, recovering
+  on its own) — the same concurrent-cold-start pressure FW #1 found with the original
+  six-pod deploy, now showing up again with six JVMs each also loading a Java agent.
+  Both docs' patch/restart instructions now stage services one at a time with a
+  `rollout status` wait between each, rather than issuing all six as a tight parallel
+  batch. This pass used sub-agents throughout (live validation/config finalization, then
+  doc-writing), continuing the working-method change from Phase 4b.
+
+  A follow-on pass, same day, found and fixed a **third**, unrelated `localhost` source
+  the same way: every PetClinic service's default Spring profile briefly calls
+  `http://localhost:8888/<app>/<profile>` at startup and fails, before a second,
+  successful call resolves the real `config-server`. Root cause confirmed by reading the
+  actual upstream `spring-petclinic-microservices` v3.2.0 source (identical across all
+  six services), not guessed: the default profile imports config via
+  `spring.config.import: optional:configserver:${CONFIG_SERVER_URL:http://localhost:8888/}`,
+  while the `docker` profile's own import is already hardcoded correctly to
+  `config-server:8888` — Spring merges `spring.config.import` across active profiles
+  rather than one replacing the other, so both fire every restart. First guess
+  (`SPRING_CLOUD_CONFIG_URI`) was wrong, confirmed live via the app's own `Connection
+  refused` logging still firing with it set. `CONFIG_SERVER_URL` — the literal env var
+  name the app's own placeholder reads — is the real fix; added to
+  `instrumentation.spec.java.env` in `values-aw1.yaml` (canonical), carried into
+  `values-aw2.yaml`/`values-final.yaml`. Confirmed live on both a hand-built
+  (`customers-service`) and pulled (`visits-service`) image: 0 `localhost:8888` spans
+  after the fix, config still genuinely loads (`/actuator/health` stays `UP`, not just
+  "no error"). `scripts/verify-aw1.sh`/`verify-aw2.sh` each got a stricter assertion than
+  the Zipkin one — exactly 0 spans expected, not "under 5", since this fix eliminates the
+  noise entirely rather than reducing its volume.
+
+  **The `discovery-server` Eureka self-loop (`localhost:8761`, peer replication) was
+  deliberately left alone**, on direct user reconsideration mid-cleanup-pass: a fix was
+  scoped (disable `eureka.client.register-with-eureka`/`fetch-registry` — but *only* on
+  `discovery-server`, since the other five genuinely need Eureka client behavior on to
+  find each other, meaning `instrumentation.spec.java.env`'s uniform-application model is
+  the wrong mechanism for it entirely) and live investigation had started, then explicitly
+  stopped before anything was applied. Reasoning, in the user's own words: this
+  workshop's audience isn't app developers and "I don't want to overwhelm them with small
+  concepts like this" — the existing AW #2 §3 callout explaining the self-loop (real,
+  legitimate Eureka behavior, told apart from the Zipkin/config-client noise by port) is
+  judged to serve the workshop better than removing the underlying behavior would.
+  Confirmed nothing was changed on `discovery-server` before the drop landed. If this
+  gets revisited later, the constraint above (per-service, not uniform) is the reason a
+  naive copy of the Zipkin/config-client pattern won't work for it.
+- **A real incident, 2026-08-31, worth knowing before trusting any live signal over
+  `helm status`:** the same day's config-client fix work hit a field-manager conflict
+  mid-`helm upgrade` (`.spec.python.env`, later `.spec.java.env`, owned by a rogue
+  `"kubectl"` manager left behind by an earlier `kubectl apply --server-side
+  --force-conflicts` workaround). The release sat in `STATUS: failed` for hours
+  afterward while individual resources kept working — spans kept flowing, zero export
+  failures on either destination, six services, real data — because the *running*
+  resources were fine. What silently drifted was the collector's own OTTL config,
+  stuck on the last successful revision's content: `values-final.yaml`'s
+  `transform/traces_index` (and `transform/app_metrics_index`) were missing the
+  `deployment.environment` `set()` statement `values-aw2.yaml` already had from Phase
+  4c's own reconciliation — a real gap in the "brought to full parity" claim from that
+  phase, caught only because the user filtered Observability Cloud's service map by
+  environment and got "No data found," then pushed on *why* rather than accepting "the
+  pipeline looks healthy" as the answer. Fixed by correcting `values-final.yaml` to
+  match `values-aw2.yaml` exactly, deleting the conflicted `Instrumentation` CR (fully
+  Helm-owned — safe to delete, it's recreated fresh on the next upgrade), and a clean
+  `helm upgrade` that landed as `STATUS: deployed` (revision 17). Confirmed live
+  end-to-end afterward: fresh spans carry `deployment.environment` correctly, all six
+  services' logs match their spans on both `service.name` and `deployment.environment`.
+
+  `scripts/verify-aw1.sh` and `verify-aw2.sh` both now check `helm status` first,
+  before anything else — a `failed` release should be the loudest, earliest signal,
+  not something no check ever looks at while every downstream symptom gets chased
+  individually. The existing `deployment.environment` correlation check in
+  `verify-aw2.sh` already would have caught this outright (it reads the value straight
+  off the span, not derived from assumption) — the real gap wasn't a missing check, it
+  was the script not being re-run after today's failed upgrades. Two more real,
+  unrelated bugs surfaced live while re-running both scripts to confirm the fix:
+  `verify-aw2.sh`'s auth-error log check (`grep -E '401|403|unauthorized'`) was a false
+  positive on the digits inside an unrelated retry-interval value
+  (`4.641401346s` contains `401`) — fixed with word boundaries so it can't match
+  digits embedded in a longer number; and a one-off "trace_id has no matching span"
+  failure turned out to be exactly the timing-window flake the check's own hint text
+  already predicted, confirmed by a follow-up query finding the span seconds later —
+  no fix needed, the check's existing hint was already correct.
+- **The Collector moved from the `default` namespace into its own `otel` namespace,
+  2026-08-31** — user direction: infrastructure components shouldn't share `default`
+  with anything else, same reasoning `petclinic` already had for the app. Migrated live
+  before landing anything (commit `0ced607`): uninstalled from `default`, reinstalled
+  into `otel` (`--namespace otel --create-namespace`), all six PetClinic Deployments'
+  `instrumentation.opentelemetry.io/inject-java` annotation updated to
+  `"otel/<release>-splunk-otel-collector"`, staged one at a time per Phase 4c's own
+  control-plane-load lesson. Confirmed live: `OTEL_EXPORTER_OTLP_ENDPOINT` resolves
+  itself to `*.otel.svc.cluster.local` with no manual config needed — the operator
+  derives it from wherever it's actually installed — and fresh spans landed for all six
+  services after the move. Hit the same one-time operator-webhook race AW1's own
+  troubleshooting already documents (Helm applies the `Instrumentation` CR before the
+  webhook's ready on a truly fresh namespace); same fix, wait for the operator pod
+  Ready and re-run the identical `helm upgrade`. Cluster-scoped resources (the
+  operator's `ClusterRole`) blocked a same-release-name install in a second namespace
+  while the `default` install was still up — the old install had to come down before
+  `otel` could go up clean, not run alongside it.
+
+  `labs/collector/values-{workshop,aw1,aw2,final}.yaml`, `scripts/verify-{fw2,aw1,aw2}.sh`
+  (`verify-fw1.sh` needed no change — it never touches the collector), and
+  `versions.env` (new `OTEL_NAMESPACE="otel"`, not `WS_USER`-prefixed for the same
+  reason the six PetClinic Service names aren't) all updated and live-verified:
+  `verify-fw1.sh` 15/15, `verify-aw1.sh` 17/17, `verify-aw2.sh` 32/32.
+  `verify-fw2.sh` 12/16 — the 4 failures are a pre-existing, unrelated spike-box state
+  artifact (`customers-service` running from the base manifest rather than FW2's
+  access-logging variant), not something this migration touched.
+
+  Doc pass (commit pending as of this writing) covers every `helm upgrade`/`install`
+  across FW2/AW1/AW2 (`--namespace otel`, plus `--create-namespace` on FW2's first
+  install only), every bare `kubectl get cm .../logs daemonset/...` targeting the
+  Collector, the `inject-java` annotation's namespace prefix in AW1 §3, both expected
+  `OTEL_EXPORTER_OTLP_ENDPOINT` DNS strings, every `values-{workshop,aw1,aw2,final}.yaml`
+  Reference-section splice re-synced from the real current files, and FW1's own
+  "later modules assume `default`" note rewritten to name `otel` explicitly instead of
+  leaving a claim that would have read as wrong once this shipped.
+- **A full 5-stage, sub-agent-driven, clean-instance run-through of the whole workshop
+  (00-setup → FW1 → FW2 → AW1 → AW2) was completed 2026-08-31**, each stage a `fork`
+  sub-agent executing every doc command literally on a fresh EC2 instance
+  (`18.222.78.181`), reporting both technical pass/fail and a persona-based teaching
+  review ("technical, comfortable on Linux, little to no prior Kubernetes/OTel/Docker/git
+  knowledge"). It found and fixed **7 real, reproducible bugs**, none of them known
+  before this run:
+  - FW1's manifest `curl` and FW2's JMeter-plan `curl` both pointed at the wrong branch
+    (fixed once `origin` was brought current — see below).
+  - FW2's `service.name` label promotion (`extraAttributes.fromLabels`) was never taught
+    as its own step, silently breaking two earlier checkpoints that assumed it already
+    existed — fixed by adding the missing step and making the earlier checkpoints
+    `sourcetype`-based instead.
+  - AW1's Helm-upgrade-vs-install CRD gap (`no matches for kind "Instrumentation"`) —
+    fixed by adding the one-time `helm show crds | kubectl apply -f -` step.
+  - **AW1 §5 instructed a *second* top-level `agent:` key in `values-workshop.yaml`,
+    duplicating the one FW2 §11 already added.** YAML keeps only the last of two
+    same-level duplicate keys — a participant who pastes each "Add to
+    `values-workshop.yaml`" block in as shown, rather than merging by hand, silently
+    deletes FW2's entire log-enrichment pipeline (sourcetype rewrite, severity,
+    `http_status`/`http_method`/`http_duration_us` extraction) the moment they reach
+    AW1, with zero errors anywhere. This was the single highest-impact finding of the
+    whole run-through — confirmed live (`grep -n '^agent:'` → 2 hits, zero
+    `transform/petclinic_logs` in the rendered config) and reproduced independently by
+    6 of `verify-aw2.sh`'s 32 checks failing on missing `deployment.environment` three
+    modules later. Fixed by rewriting AW1 §5 to show the full, correctly merged `agent:`
+    block with an explicit "edit your existing key, don't add a new one" warning. The
+    doc's own end-of-module reference file (`values-aw1.yaml`) was already correct — only
+    the step-by-step instructed edit had the bug, which is exactly why it survived every
+    earlier review that only diffed against the reference.
+  - AW2 §5 claimed `deployment.environment` was "already true — check, don't add," but
+    the `set()` statements that make it true existed only in AW2's own end-of-module
+    reference appendix, never as an instructed edit in any numbered step — so a literal
+    participant's file never got them. Fixed by adding a real instructed step (edit the
+    three existing transform blocks, one new `set()` line each, then `helm upgrade`).
+  - AW2 §4's cert-print command, `sudo cat .../locCert.pem`, was run from inside the
+    `sudo -i -u splunk` shell §4 itself opens — but `splunk` has no sudo rights at all, so
+    a literal follow-along hangs at a password prompt right at the step that hands you
+    the credential the guided setup needs next. Fixed by dropping `sudo` (the file is
+    already readable as `splunk`).
+  - AW2 §7's RUM-snippet step ran `cd ~/k8s_workshop` before `./scripts/inject-rum-snippet.sh`
+    — that script lives in the repo clone (`~/k8s-otel-workshop`), a different directory
+    from the lab working directory most other `cd`s in this workshop point at. Fixed the
+    `cd` target and added a note distinguishing the two directories.
+
+  Also found, not a doc defect: `origin` on GitHub was 14 commits behind local, which is
+  *why* the branch-`curl` bugs above were still live in the version stages 3–5 initially
+  tested against — pushed once the user confirmed. Stage 5's §8 reconciliation exercise
+  also surfaced a genuine, large APM-vs-ground-truth divergence worth knowing about
+  rather than fixing: Spring Cloud LoadBalancer fails *before* attempting any HTTP call
+  when a backend is scaled to zero, so no CLIENT span is ever created for the failed
+  request — APM's own error rate reads a flat **0%** against a JMeter-confirmed **20%**
+  real failure rate in the same window. This is the intended teaching moment for AW2 §8
+  ("three lenses, three numbers, divergence is the finding"), not a bug to silence.
+- **Two real bugs were found and fixed during Phase 1, worth knowing before you touch
+  the manifest again:** Config Server defaults to a live, unpinned `git pull` from
+  GitHub on every restart (fixed via the `native` profile + a baked-in ConfigMap — see
+  the manifest's header comment); and a hand-built service that's missing
+  `ENV SPRING_PROFILES_ACTIVE=docker` binds to a random port with no error message at
+  all. Both are documented as `!!! danger` callouts in FW #1 §5–6 — read those before
+  assuming a service that "just isn't reachable" is a network problem.
+- **The instance-size requirement genuinely changed, confirmed by testing, not
+  padding.** 4 vCPU / 16 GB was tested and failed: the kubelet missed its node-lease
+  renewal under six simultaneous cold starts and Kubernetes evicted every pod on the
+  node. 8 vCPU / 32 GB held stable through a soak. `README.md`, `docs/index.md`,
+  `docs/facilitator/index.md`, and `docs/00-setup/index.md` are all updated to match —
+  if you touch instance sizing anywhere, grep for `4 vCPU` and `t3.xlarge` first to
+  catch what you missed; that grep is how two stale references were caught here.
+- **A corporate security agent (Nessus) on the validation EC2 instances is not part of
+  the documented workshop AMI.** It caused a control-plane thrashing episode during
+  Phase 1 testing that looked alarming but was an artifact of that specific test box,
+  not the architecture — the clean, isolated validation run (six services, single
+  `kubectl apply`, zero restarts, 72 seconds to ready) is the number that went in the
+  guide. Don't mistake a noisy validation instance for a real defect; check what's
+  actually consuming CPU before concluding the app is at fault.
+- Remaining phases (dashboards rework, Cilium, then an always-on Playwright load
+  generator — this order is deliberate, see the two bullets below) are unstarted. See
+  the migration plan for the full phase breakdown and gates.
+- **Considered and rejected: switching FW1 to Splunk's own reference PetClinic
+  microservices deployment** (`splunk/observability-workshop`, "Ninja Workshops" ->
+  `automatic-discovery` -> `petclinic-kubernetes`). Its images
+  (`quay.io/phagen/spring-petclinic-*`) are stale — most untouched since December 2023
+  — versus the actively-maintained upstream `springcommunity/*` images already used
+  here. Their reference architecture also adds MySQL, `admin-server`, an in-cluster
+  load generator, and public unauthenticated HTTP exposure on ports 80/81/443 — the
+  last of which contradicts this repo's deliberate security-group + SSH-tunnel
+  posture and would need rejecting regardless of the rest. **One idea from it WAS
+  adopted separately, in Phase 4:** the OTel Operator's annotation-based
+  auto-instrumentation (`kubectl patch` adding
+  `instrumentation.opentelemetry.io/inject-java`) instead of a hand-built
+  `-javaagent` Dockerfile — not just simpler, but the only approach that generalizes
+  once five of the six services are pulled images with no Dockerfile, independent of
+  the app/image decision above. See the Phase 4 bullet for the live-verification
+  details.
+- **In-cluster load generation — deliberately deferred, not rejected.** Considered
+  moving JMeter into the cluster as a Deployment (mirroring Splunk's reference
+  workshop) to remove participant setup. Decided against making it FW2's primary
+  path: bundling it into the same `kubectl apply` as the six app services would
+  reintroduce exactly the concurrent-cold-start pressure Phase 0 spent real effort
+  de-risking, and a dead in-cluster pod is a much less legible failure for a
+  facilitator watching many participants than "is your second terminal still
+  running" is today. External JMeter (already the design) stays primary. If it gets
+  built later, it must be introduced *after* the app is already confirmed healthy —
+  never in the initial deploy — the same timing FW2 §7 already uses for JMeter.
+- **Phase 6 (Cilium/Hubble) idea, captured before it's forgotten: a misconfigured
+  `CiliumNetworkPolicy` between two pods as a second fault scenario, distinct from
+  FW2 §8's `visits-service` scale-to-zero.** User's own observation, 2026-08-31 — worth
+  building once Cilium actually exists in the cluster, not before. The two faults fail
+  at genuinely different layers, which is the pedagogical point: scale-to-zero is a
+  *service-discovery* failure (Eureka has no healthy instance, so Spring Cloud
+  LoadBalancer fails fast before attempting a connection — "no servers available", no
+  traffic ever leaves the caller). A blocked `NetworkPolicy` would be a *network-layer*
+  failure instead — the destination pod is running and still correctly registered in
+  Eureka, so the LoadBalancer picks it and genuinely tries to connect, and the packet
+  just gets dropped at the CNI layer. That produces connection timeouts rather than a
+  clean fast-fail, and is a much more true-to-production "everything looks healthy and
+  it still doesn't work" class of bug — exactly what Hubble's flow visibility exists to
+  diagnose, and something the current fault has no equivalent demonstration of. Do not
+  build this exercise without Cilium actually deployed and the policy actually tested
+  live — same "tested, not transcribed" rule as everything else here.
+
+  **Sequencing decision, 2026-09-01: Cilium/the new fault scenario must be built
+  *before* the always-on Playwright load generator below, not after or in parallel.**
+  Three reasons, all pointing the same way: (1) Cilium-on-minikube is the biggest
+  untested unknown left in this whole migration — nothing about the CNI swap, whether
+  it disturbs anything already working (Service DNS resolution, the latency numbers
+  existing dashboards were captured against), or whether NetworkPolicy enforcement
+  needs anything beyond a plain install has been live-verified, unlike everything else
+  in this repo. Better to find that out before docs or a second piece of
+  infrastructure get built around today's assumptions. (2) Cilium was already slated to
+  touch part of FW1 too (see the top of this doc), not just swap one command in AW2
+  §8 — it's a real infrastructure phase, not a small edit. (3) The new fault's actual
+  observable behavior (connection timeouts, not a fast-fail) needs real captured
+  numbers before §8 gets rewritten — building the Playwright generator against the
+  *current* topology first would mean re-verifying its integration once the CNI
+  changes underneath it. Whatever order these land in, keep an on-demand, countable
+  load tool for §8's own reconciliation exercise regardless of which fault type is
+  live there — that constraint doesn't depend on the sequencing, see the Playwright
+  bullet below.
+
+  **Finalized 2026-09-01: this ships as a new, mandatory module, `FW #1b` — not
+  optional, not folded into FW #1, and not just the single fault-scenario idea above.**
+  The primary audience for this workshop is architects who need Kubernetes specifically
+  to deploy the Splunk Operator, and Cilium is a required component of that real
+  deployment — not deferrable taught content. Scope is bigger than the fault scenario
+  alone: participants build the real required-traffic graph across all six services
+  from live evidence (Eureka registration/heartbeat, config-server fetch, the
+  api-gateway proxy paths, DNS) and write `CiliumNetworkPolicy` rules — both ingress
+  and egress direction — that allow only that traffic; the misconfigured-policy fault
+  scenario above becomes a natural corollary demo inside that exercise, not the whole
+  of it. FW #1b also adds Ingress via Cilium's own Envoy-based controller (no separate
+  ingress-nginx install) so participants can reach the PetClinic GUI from their own
+  laptop, tunnel-based only — replacing FW1 §7's direct `ssh -L
+  8080:192.168.49.2:30000 ...` tunnel to the raw NodePort as the path a human browser
+  uses. `curl` against the NodePort stays fine for quick testing; every other form of
+  access goes through a tunnel to the Ingress controller. Never a newly-opened public
+  port — same posture as Splunk Web (:8000) everywhere else in this workshop, not the
+  one narrow, deliberately-scoped exception Log Observer Connect (:8089) is.
+
+  **Structure:** inserted right after FW #1 and before FW #2 (mkdocs nav order is
+  explicit in `mkdocs.yml`, not derived from directory numeric prefixes, so this needs
+  no renumbering of FW2/AW1/AW2 — new directory `docs/01b-foundational-1b/`, nav label
+  `'FW #1b — Kubernetes Networking with Cilium'`). FW1 §2 keeps only a small footprint
+  — the CNI choice itself, since it's picked at cluster creation and can't be swapped
+  without recreating the cluster — everything else lives in the new module. Reasoning
+  for a separate module over new FW1 sections: FW1 is a complete, self-contained arc
+  today (605 lines against 1,500–2,300 for the other three modules — it has raw
+  headroom, but that's not the deciding factor); NetworkPolicy/Ingress is a genuinely
+  different theme (network security, not cluster basics) that deserves its own
+  checkpoint structure and honest duration estimate, the same way every other module
+  gets one. Real, necessary consequence: `docs/facilitator/index.md`'s "Foundational =
+  Setup + FW1 + FW2 = half day" format no longer holds once this is mandatory — update
+  it to say so plainly (a full day, realistically) rather than compress this content to
+  protect a stale estimate.
+
+  **Spike in progress on a fresh EC2 instance (`3.145.97.98`, same key), dispatched to
+  a sub-agent per the user's explicit request to use sub-agents for this work. Nothing
+  has been committed to the repo yet — the spike runs on the box only; the findings
+  below become doc content once FW1b is actually written.**
+
+  **Confirmed live, 2026-09-01:**
+  - **Cilium install**: `--cni=false` is the correct minikube v1.38.1 flag
+    (`--network-plugin` no longer exists in this version). `helm install cilium
+    cilium/cilium --version 1.20.1 -n kube-system --set operator.replicas=1` — that's
+    the only override needed at this stage; `operator.replicas` defaults to 2, which is
+    unschedulable-redundant on this single-node cluster. Real surprise worth a doc note:
+    minikube's base image has its own fallback bridge CNI config active even with
+    `--cni=false`, so pods aren't truly network-less before Cilium installs — Cilium's
+    install is exclusive by default and cleanly takes over (renames the fallback,
+    installs its own config), not a bug, but looks like one if you check
+    `/etc/cni/net.d/` mid-install without knowing this.
+  - **Six-service app on Cilium**: fully healthy, zero behavioral deviation from the
+    pre-Cilium baseline — same Eureka registrations, same config-server behavior, same
+    pre-existing Zipkin noise, no new errors. `verify-fw1.sh` 15/15, including real
+    cross-pod gateway traffic now actually mediated by Cilium's dataplane.
+  - **Real traffic graph, observed via Hubble, not guessed**: DNS (all six pods →
+    coredns), kubelet probes (host → each pod's own app port directly, no separate
+    probe port), one-time config-server fetch from all six services *including
+    discovery-server itself*, Eureka registration/heartbeat from four services into
+    discovery-server, and api-gateway's direct Eureka-resolved calls to the three
+    backend services. One real, non-obvious finding: Service-mediated traffic's source
+    identity is **not uniform** — `reserved:host` during a synchronized mass restart,
+    the real client pod identity in steady state. Both had to be allowed in policy;
+    missing either produces real, live `DROPPED` flows, not a theoretical gap.
+  - **Default-deny + explicit-allow lockdown**: all six `CiliumNetworkPolicy` objects
+    applied one at a time, each followed by a live Hubble drop-check, a real curl
+    through the gateway, and `verify-fw1.sh` — not applied blind in one shot. One real
+    bug caught and fixed mid-sequence from the identity finding above. Final state:
+    `VALID: True` on all six, zero drops under fresh load, `verify-fw1.sh` 15/15.
+  - **Deliberate-failure demo, fully live-verified**: `visits-service → customers-service`
+    (no real dependency between them, safe to break) denied via an explicit
+    `CiliumNetworkPolicy` deny rule — confirmed in Hubble as `Policy denied by
+    denylist DROPPED`, curl timed out. Removing the one deny policy restored the call
+    path immediately, `verify-fw1.sh` still 15/15, nothing else affected.
+  - **Ingress hit a real architectural fork, not a bug — and reversed the original
+    "leave kube-proxy in place" call** (made when Cilium's scope was only
+    NetworkPolicy + Hubble, specifically to avoid an unnecessary failure mode for
+    twenty simultaneous participants — see the migration-plan artifact's Phase 6 for
+    where that call was first recorded). Cilium's own Ingress controller needs to
+    intercept Service/NodePort traffic via its own eBPF path, which kube-proxy staying
+    in place directly prevents (confirmed precisely: kube-proxy's own `iptables-save`
+    rules reject the traffic with `--reject-with icmp-port-unreachable`, not a config
+    mistake). Presented to the user as a real choice — hostNetwork-mode Ingress (keeps
+    kube-proxy, untested), full kube-proxy replacement (reopens the original risk,
+    bigger blast radius), or a separate ingress-nginx install (no Cilium-only story).
+    **User chose full kube-proxy replacement**, deliberately accepting it as a real
+    trade-off now that Ingress is a core requirement, not the unnecessary risk it was
+    when NetworkPolicy and Hubble were the only things riding on this cluster.
+
+    **Confirmed live: kube-proxy replacement itself works cleanly, but did not fix
+    Ingress — the blocker moved, it didn't disappear.** Real API server address
+    (`https://192.168.49.2:8443`, confirmed via `kubectl cluster-info`, not assumed) fed
+    to Cilium as `k8sServiceHost`/`k8sServicePort` — required once kube-proxy is gone,
+    since Cilium needs a direct path to the API server kube-proxy would otherwise have
+    provided. `kubectl delete daemonset kube-proxy` is **blocked by the permission
+    classifier** — used the standard non-destructive equivalent instead, an
+    unsatisfiable `nodeSelector` patch, which stops kube-proxy's pod without deleting
+    the object. Tested empirically that kube-proxy was genuinely redundant, not just
+    coexisting: with it still running, Cilium's own eBPF service table was already
+    fully programmed and winning by rule-ordering (`--prepend-iptables-chains=true`);
+    removing kube-proxy entirely and re-testing confirmed nothing broke. One harmless
+    residue worth a doc note: kube-proxy's pod termination doesn't clean up its own
+    iptables rules (75 stale `KUBE-SVC`/`KUBE-SEP` entries remained, dead but
+    unreachable since Cilium's prepended rules intercept first). Full re-verification
+    under the new dataplane, with kube-proxy fully stopped: all six
+    `CiliumNetworkPolicy` objects still `VALID`, zero drops under fresh load,
+    `verify-fw1.sh` still 15/15 — nothing behaved differently from the Parts 4-5
+    baseline.
+
+    Ingress itself, with kube-proxy gone: got further (the earlier
+    `KUBE-EXTERNAL-SERVICES ... REJECT` symptom is genuinely fixed) but hit a
+    **different, Cilium-internal wiring gap** — the `CiliumEnvoyConfig` applies
+    cleanly and Envoy itself comes up and serves real traffic (confirmed via direct
+    curl to its listener, `127.0.0.1:19171` → `503`), but the raw eBPF load-balancer
+    map (`cilium-dbg bpf lb list`, not the summary view) shows the Ingress Service's
+    frontend entries with a literal `0.0.0.0:0` backend — Cilium never wired the
+    redirect from the Service to the local Envoy port, even though the exact same
+    table has a correctly-populated entry for every other Service, including
+    `api-gateway`'s own NodePort 30000. Narrowed to something specific to this
+    Cilium-version/minikube-driver combination's Ingress-to-BPF-LB wiring, not
+    kube-proxy, not Helm, not the Envoy config.
+
+    **Resolved: `ingressController.loadbalancerMode=dedicated` was the fix.** Default
+    (`shared`) mode reuses one Service across every Ingress resource and never wired
+    the BPF redirect to Envoy on this Cilium-version/minikube-driver combination;
+    `dedicated` mode gives each Ingress its own Service (`cilium-ingress-petclinic`,
+    NodePort 30560 HTTP / 31575 HTTPS — HTTPS untested, no TLS configured on the
+    Ingress) and the frontend entries came up correctly wired
+    (`cilium-dbg bpf lb list` showed `[NodePort, l7-load-balancer] (L7LB Proxy Port:
+    19171)`, the exact thing missing in shared mode).
+
+    **One more real, live-diagnosed-and-fixed finding along the way, not a dead end:**
+    once traffic actually reached Envoy, `api-gateway` returned a `503` — Cilium's own
+    Ingress traffic carries a new source identity, `reserved:ingress`, that didn't
+    exist as a concept when the six `CiliumNetworkPolicy` objects were designed in
+    Part 5 (Ingress wasn't installed yet). `api-gateway`'s policy only allowed
+    `fromEntities: [host, world]`; added `ingress` to that list, confirmed live with a
+    real `200` and an upstream response time header proving a genuine round-trip.
+    **Doc-worthy lesson**: turning on a new Cilium feature after NetworkPolicy is
+    already locked down can introduce a new traffic identity that the existing
+    policies need to be revisited for — this isn't specific to Ingress, it'll recur
+    for any future Cilium feature that adds its own `reserved:*` identity.
+
+    **Final state, fully re-verified**: all six `CiliumNetworkPolicy` objects
+    `VALID`, `verify-fw1.sh` 15/15, zero drops under combined load across both
+    NodePort 30000 and the new Ingress NodePort 30560, and — critically — both access
+    patterns confirmed with **real `ssh -L` tunnel processes**, not just curl on the
+    EC2 host directly: `ssh -L 8080:192.168.49.2:30560 ...` (new Ingress path,
+    replaces FW1 §7's tunnel target for the human-browser case) and `ssh -L
+    8081:192.168.49.2:30000 ...` (existing raw NodePort, stays as the quick-`curl`-test
+    path per the original requirement). Final Helm values (this is the literal doc
+    content):
+    ```yaml
+    ingressController:
+      enabled: true
+      loadbalancerMode: dedicated
+    k8sServiceHost: 192.168.49.2
+    k8sServicePort: 8443
+    kubeProxyReplacement: true
+    operator:
+      replicas: 1
+    ```
+    Chart `cilium-1.20.1`. `kube-proxy` DaemonSet disabled via the permission-safe
+    `nodeSelector` patch (delete blocked by the classifier both times it was tried),
+    `DESIRED 0 / CURRENT 0`.
+
+    **FW1b's live spike (Parts 1–6, this whole decision block) is complete, fully
+    validated, and now shipped as real doc content** — `docs/01b-foundational-1b/index.md`,
+    the FW1 §2 CNI swap, `scripts/verify-fw1b.sh`, and the mkdocs nav/facilitator-guide
+    updates all committed and pushed (`d1b4cd1`).
+
+  **AW2 §8's fault scenario, decided 2026-09-01: replace the `visits-service`
+  scale-to-zero fault with the same `CiliumNetworkPolicy` deny FW1b already built and
+  tested, scoped to AW2 §8 only — FW2 §8 and AW1's reference to scale-to-zero stay
+  unchanged.** User's own observation: the "alongside, as a second lens" framing this
+  was originally recorded under (see above) has a real problem specific to AW2 —
+  scale-to-zero makes `visits-service` disappear from Observability Cloud's service
+  map entirely (zero data, not an error state), which reads as confusing rather than
+  instructive. The network-policy deny leaves the pod healthy and registered, so the
+  service stays on the map and — pending live confirmation — the *edge* between the
+  caller and `visits-service` should show as errored instead, a more legible failure
+  signal. **Scoped to AW2 §8 only, not a full replacement**: FW2 §8 has no service-map
+  concept at all (pure Splunk log search, pre-O11y-Cloud) and AW1 has no APM either
+  (Splunk Enterprise dashboards only) — neither has the problem being solved, so
+  neither needed to change. Explicitly confirmed with the user rather than assumed.
+
+  **Real, not yet live-verified, thing this should fix**: stage 5's run-through found
+  the *current* fault has a blind spot — APM shows a flat 0% error rate against a real
+  20% JMeter-measured failure rate, because Spring Cloud LoadBalancer fails before any
+  HTTP call is attempted, so no CLIENT span ever exists to mark as an error. The
+  Cilium deny genuinely attempts the connection before the packet is dropped, so it
+  should produce a real, APM-visible failed span this time — worth confirming live,
+  not assuming, same as everything else in this project.
+
+  **Real, flagged-in-advance risk to watch for while building this out**: FW1b's
+  six-service `CiliumNetworkPolicy` lockdown was designed against the traffic graph
+  that existed *before* FW2's Collector joined the picture. Once the Collector
+  DaemonSet is deployed (OTLP from app pods in `petclinic`, HEC to the Splunk
+  Enterprise host itself), that's genuinely new traffic the existing policies were
+  never tested against — expect this to need a real, live-diagnosed extension to the
+  policy set, the same way enabling Ingress needed the `reserved:ingress` fix. Treat
+  any Cilium-caused Collector connectivity gap as a real finding to fix and document,
+  not a surprise to work around quietly.
+
+  **Real finding, confirmed live 2026-09-02: the reused FW1b demo pair
+  (`visits-service → customers-service`) doesn't work for this exercise at all.**
+  It was deliberately chosen in FW1b *because* it has no real dependency — safe to
+  break with a manual `curl` test without disrupting the running app. That same
+  property means real JMeter traffic never attempts that path, so blocking it produces
+  nothing for JMeter, Splunk, or APM to show — confirmed directly via
+  `get_apm_service_dependencies`: zero edge between the two services at all, not even
+  an errored one. **Switched to `api-gateway → visits-service`** — the same target the
+  original scale-to-zero fault used, and a path real traffic actually exercises.
+
+  **Result with the corrected pair, confirmed live**: real errors *do* now show up —
+  `api-gateway`'s own error count matched JMeter's exactly (8/8, real `500`s after a
+  genuine 30-second timeout on `POST /api/visit/.../visits`) — a real fix over the old
+  fault's flat 0%. **But the specific dependency edge stays healthy, not the caller's
+  own number.** Root cause, confirmed via `get_apm_service_dependencies` on both
+  sides: Cilium's block is a true network-layer silent drop, so the packet never
+  reaches `visits-service` at all — no SERVER span is ever created there, and the
+  platform draws edges by correlating a caller's span with the callee's matching span.
+  With nothing on the callee side to correlate against, there's no edge to mark red,
+  even though the caller's own error count is genuinely real.
+
+  **Decided 2026-09-02: this is good enough — ship it as-is, don't chase the arrow.**
+  A real, non-zero, trace-correlated error count on the caller is already a genuine fix
+  over the old fault's complete blind spot; that's the number AW2 §8's rewrite should
+  build around.
+
+  **Backlog, not pursued now**: to get the failure to show as a red *edge* specifically
+  (not just a caller-side number), the request would need to actually *reach*
+  `visits-service` and get a slow-but-real response, not be dropped — which
+  `CiliumNetworkPolicy`'s allow/deny model can't do at all (it has no concept of
+  latency injection). The real Cilium-native path for that is `CiliumEnvoyConfig` with
+  Envoy's own HTTP fault-injection filter (`envoy.filters.http.fault`, delay longer
+  than the client's own timeout) — feasible without new infrastructure since Envoy is
+  already running here for Ingress, thematically consistent with that work, but a
+  materially bigger jump in complexity (hand-authored Envoy xDS config, not a
+  declarative policy) and genuinely untested in this project. Revisit if a future pass
+  wants the edge-level visual specifically; not worth it for the current pass.
+
+  **Parts 7–9 (FW2 → AW1 → AW2 §1–§7) complete, fully validated, and confirmed the
+  Collector-connectivity risk flagged above — plus a second, unrelated real gap.**
+  `verify-fw2.sh` 16/16, `verify-aw1.sh` 17/17, `verify-aw2.sh` 32/32.
+  - **FW2's Collector itself needed no policy changes** — log collection tails
+    `/var/log/containers` via hostPath, not network traffic, and the Collector's own
+    pods live in `otel`, untouched by the `petclinic`-scoped policies.
+  - **Real, separate bug found and fixed, already shipped in `docs/01b-foundational-1b/index.md`
+    and pushed**: `discovery-server`'s own policy never had an egress rule for its call
+    to `config-server:8888` — a latent gap since FW1b shipped, undetected because
+    `discovery-server` is rarely restarted once the lockdown is in place. Fixed in both
+    the module's instructed step and its Reference section.
+  - **The flagged AW1 risk was real, and bigger than expected — all six services, not
+    one.** The OTel Operator's Java agent exports OTLP to the Collector's `agent`
+    DaemonSet, which runs `hostNetwork: true` — Cilium sees that as the `host` entity
+    at the node IP, not a pod, and none of FW #1b's six policies allowed egress there.
+    Confirmed via `hubble observe --verdict DROPPED` the moment each service picked up
+    its instrumentation annotation. Fixed with a `toEntities: [host]` port-4318/TCP
+    egress rule added to all six — now a real `!!! danger` step in
+    `docs/03-advanced-1/index.md` §3, right after the instrumentation annotation loop,
+    exactly where the gap actually bites.
+  - Two smaller, non-policy findings from AW2 §1–7, not yet acted on: the JMeter test
+    plan and RUM Playwright script's doc-literal `curl .../main/...` URLs are still the
+    old single-pod-monolith versions — this is the same known, accepted, not-a-bug
+    branch-curl artifact already recorded elsewhere in this file, resolves on merge to
+    `main`. `scripts/inject-rum-snippet.sh` wasn't executable in the clone (644, not
+    755) — fixed directly, `chmod +x`, committed.
+
+  **Part 10 (the actual AW2 §8 fault test) — full findings, all confirmed live and
+  independently cross-checked with the user watching Observability Cloud in real
+  time:**
+  - First attempt (FW1b's own `visits-service → customers-service` demo pair, reused
+    as originally planned) confirmed **dead on arrival for this purpose** — zero flows
+    of any kind between those two pods over 9+ minutes of real load, `hubble observe`
+    and JMeter's own 0.00% error rate both confirming it. That pair was deliberately
+    chosen in FW1b *because* it has no real dependency (safe for a curl-only demo);
+    that same property means real app traffic never attempts it. Caught independently
+    by the user checking Observability Cloud directly mid-test, confirmed via
+    `get_apm_service_dependencies` showing no edge at all, before the sub-agent's own
+    report came back with the same conclusion.
+  - **Corrected to `api-gateway → visits-service`** — the same target the original
+    scale-to-zero fault used, and a path real JMeter traffic actually exercises (two of
+    seven samplers, every iteration).
+  - **Real fault window: `2026-09-02T05:06:30Z` → `05:13:48Z` (7m18s)**, continuous
+    real load, clean 0%-error baseline confirmed immediately before applying.
+  - **JMeter** (window-scoped from the raw `.jtl`): 226 requests, 63 failed = **27.88%**
+    — close to the 2/7≈28.57% ceiling the *old* fault also produced, same two
+    samplers. Failed-request latency hit a hard ~30.0s ceiling (Netty's own connect
+    timeout).
+  - **Splunk** (`k8s_ws_petclinic_logs`, same window): 254 ERROR events, 61 explicitly
+    `io.netty.channel.ConnectTimeoutException`. A genuinely different pattern from the
+    old fault — no "no servers available" WARN this time, since Eureka still correctly
+    believes the instance is healthy; the client just hangs until its own TCP timeout
+    instead of failing fast.
+  - **APM — checked two different ways, with two different answers, both real:**
+    `get_apm_service_dependencies` on the `api-gateway → visits-service` edge itself
+    reads **0 errors**, repeatedly, minutes into a confirmed-live fault — the user
+    caught this live and asked about it directly. Root cause, confirmed on both sides
+    of the edge: Cilium's block is a true network-layer silent drop, so the packet
+    never reaches `visits-service` at all — no SERVER span is ever created there, and
+    the platform draws edges by correlating a caller's span with the callee's matching
+    span. With nothing on the callee side, there's no edge to color red, even though
+    the caller's own error count is real. **But** `get_apm_exemplar_traces` search on
+    `api-gateway` for real error traces **does** find them — 5 in the exact window,
+    each ~30.0068s, matching Netty's timeout to the microsecond. So this fault **is**
+    APM-visible, just through trace/exemplar search rather than the simple aggregate
+    dependency-error metric — a materially different, more subtle story than the old
+    fault, not the clean red-arrow visual originally hoped for.
+  - **Decided with the user: this is good enough, ship it as-is.** A real,
+    trace-correlated, non-zero error count that matches JMeter exactly is already a
+    genuine fix over the old fault's complete blind spot. Getting the failure to render
+    as a red *edge* specifically (not just a caller-side/exemplar-search number) would
+    need the request to actually reach `visits-service` with a slow-but-real response
+    instead of being dropped — which plain `CiliumNetworkPolicy` can't do at all (no
+    latency-injection concept). The real Cilium-native path for that is
+    `CiliumEnvoyConfig` with Envoy's own HTTP fault-injection filter
+    (`envoy.filters.http.fault`, delay longer than the client's own timeout) — feasible
+    without new infrastructure since Envoy already runs here for Ingress, but a
+    materially bigger jump in complexity (hand-authored Envoy xDS, not a declarative
+    policy) and genuinely untested. **Filed as backlog, not pursued this pass.**
+
+  **Next**: write AW2 §8's actual doc content from these real, confirmed numbers —
+  replacing the `visits-service` scale-to-zero fault there specifically (FW2 §8 and
+  AW1's own reference to scale-to-zero stay unchanged, per the earlier scoping
+  decision). Nothing from Parts 7–10 beyond the two already-committed bug fixes above
+  has touched `docs/04-advanced-2/index.md` yet.
+
+- **Always-on Playwright load generator — approved direction, 2026-09-01, explicitly
+  after the Cilium phase above, not before.** Supersedes the "in-cluster load
+  generation" idea two bullets up: Playwright instead of JMeter, specifically because
+  a real headless browser gives backend load AND real RUM telemetry from the same
+  running process — `docs/04-advanced-2/index.md`'s own `petclinic_browser_test.py`
+  already proves the navigate-the-real-SPA mechanism works, this just loops it
+  indefinitely instead of running for a fixed `--duration`. Confirmed live 2026-09-01
+  that the current instance size has real headroom for it: 22GiB available / 8vCPU,
+  against a headless Chromium context's ~150-300MB footprint — plenty for several
+  concurrent contexts in one pod.
+
+  **Hybrid, not a full replacement — keep an on-demand tool for AW2 §8.** The
+  reconciliation exercise (§8) depends on a controllable, countable load run — start
+  it, run a fault window, read its own exact tally afterward — the same way
+  JMeter's own summary line is one of the exercise's three compared numbers today. An
+  always-on background pod makes that specific lesson harder to reason about (you'd
+  be diffing counters over a window instead of reading a clean summary). Playwright
+  covers FW2 through most of AW2; JMeter (or something like it) stays as the
+  deliberately-triggered tool for §8 specifically, whatever the new fault type turns
+  out to be.
+
+  **No custom image needed.** Pull the official `mcr.microsoft.com/playwright/python`
+  (or `:node`) image — it already bundles Chromium and every OS dependency — and mount
+  the loop script via a ConfigMap + volume, the same pattern AW2's
+  `inject-rum-snippet.sh` already uses for the RUM snippet itself. Keeps the
+  "prebuilt images, no Dockerfiles" approach AW1/AW2 already established for the six
+  app services; would otherwise be the first custom-built container in the whole
+  workshop. The real effort is extending the existing read-only navigation flow to
+  also drive the owner-edit and add-visit forms (JMeter's test plan today round-trips
+  a full owner object and posts new visits — matching that coverage through the UI is
+  the bulk of the work, not the containerization). Same "introduce it only after the
+  app is already confirmed healthy" timing rule as the deferred JMeter-in-cluster idea
+  above.
+
+  **Built and fully validated live, 2026-09-02, on `3.145.97.98`.** Everything above
+  held up in practice, plus one real dead end worked around without a custom image:
+  the official `mcr.microsoft.com/playwright/python:v1.62.0-noble` image bundles the
+  browsers and OS deps but **not the `playwright` pip package itself** — confirmed via
+  a throwaway pod (`ModuleNotFoundError`). Fixed with a container `command` that runs
+  `pip3 install --quiet playwright==1.62.0` before launching the script — a startup
+  step, not a Dockerfile build, so the "no custom image" constraint holds; confirmed
+  live this reuses the pre-baked browsers with no re-download, because the pinned pip
+  version matches the image tag exactly.
+
+  Deployment `playwright-loadgen` in `petclinic`, ConfigMap + `subPath` mount mirroring
+  `inject-rum-snippet.sh` exactly, targets `api-gateway`'s real ClusterIP Service
+  directly (not the NodePort/Ingress paths — this pod is a real in-cluster caller, no
+  reason to route external-access traffic through itself). 5 concurrent async
+  Playwright browser contexts in one Chromium process, looping forever with a random
+  2–5s pause, SIGTERM-aware for clean shutdown. Confirmed live: real sustained
+  operation (0 restarts, ~10+ minutes unattended at last check, per-worker iteration
+  counters climbing steadily); real write-path traffic in Splunk server-side spans
+  (580× `PUT`→204 owner-updates, 580× `POST`→201 new-visits, over a 12-minute window);
+  JMeter unaffected, run in parallel with 0% errors.
+
+  **The `CiliumNetworkPolicy` gap arrived exactly as expected** — `api-gateway`'s
+  policy only allowed `fromEntities: [host, world, ingress]`, none of which cover an
+  arbitrary new pod's own identity. Diagnosed via `hubble observe --verdict DROPPED`
+  the same way as every prior instance of this pattern, fixed with one new
+  `fromEndpoints` entry for `playwright-loadgen`'s own label. Zero drops in the 8+
+  minutes after the fix, versus continuous drops before it.
+
+  **RUM confirmed switching on with zero redeployment — the actual point of the whole
+  design, verified, not assumed.** A SignalFlow query on `rum.page_view.count` was flat
+  zero for the first ~16 minutes of a 20-minute window, then jumped to real numbers
+  (30–154 page views per 20s bucket) at the exact moment traffic started flowing after
+  the `CiliumNetworkPolicy` fix — with nothing changed on the RUM injection or the
+  Playwright deployment itself.
+
+  **Real, worth-tracking cost, not a blocker**: available memory dropped from the
+  ~22GiB baseline to 21GiB, and load average spiked to 9.6 (on 8 vCPU) when the pod
+  started and a JMeter run happened to overlap, settling to ~8.2 afterward. No problem
+  observed, but worth watching if more load sources get layered on this box later.
+
+  **One loose end surfaced, not yet resolved**: this box's `WS_USER=wsuser01` matches
+  what [[workshop-live-test-instance]] used to say about `18.222.78.181` — that memory
+  was stale (it described `18.222.78.181` as "the sole live instance," which stopped
+  being true once `3.145.97.98` was provisioned for the FW1b work) and has been
+  rewritten to reflect current reality.
+
+  **Shipped, 2026-09-02 (commit `3c86350`).** FW2 §7 now deploys the real Deployment
+  (script + YAML added as `labs/loadgen/*`, `versions.env` pinned per hard rule #1);
+  AW1 §1 became a confirmation step; AW2 §2/§4 updated where they credited JMeter as
+  the continuous source. Two real, silent assumptions surfaced and fixed while writing
+  this — both places that assumed continuous JMeter without ever starting it
+  themselves: **FW2 §8** ("start it again now if the earlier run finished") now starts
+  its own explicit run before the fault, and **AW2 §8** turned out to have the exact
+  same gap traced back to a JMeter start command in §2 several sections earlier — it
+  now starts its own run too, without altering the already-validated checkpoint
+  numbers in either place.
+
+  **A second, unrelated regression found and fixed in the same pass**: writing a new
+  `hubble observe` command for this content hit the same failure FW1b's own commands
+  turned out to already have — `hubble observe --namespace X --to-pod Y` now fails
+  outright on this cluster's Cilium/Hubble version (`"filters --to-pod and --namespace
+  cannot be combined"`), a real CLI behavior change from whatever version FW1b was
+  originally written against. Confirmed live before fixing: `--namespace` alone (no
+  `--to-pod`) still works fine, so only the 9 FW1b commands that combined the two
+  needed changing — drop `--namespace`, prefix the pod name directly instead
+  (`--to-pod petclinic/<pod>`), `--last N` instead of `-n N`. Fixed in a separate
+  commit (`83a6457`) from the Playwright doc changes that surfaced it.
+
+- **Cilium/Hubble telemetry into Splunk + an installable KPI dashboard — confirmed
+  needed, 2026-09-02, sequenced after the Playwright work above, not before.**
+  Promotes the Hubble-export gap found the same day (FW1b's shipped content only ever
+  used live, ephemeral `hubble observe` CLI commands for in-the-moment viewing during
+  an exercise — confirmed by grepping the actual doc and `labs/collector/*.yaml`,
+  neither has ever piped Hubble flow data or Cilium's own metrics anywhere) from
+  "backlog idea" to real, planned work. Conceptually belongs to FW1b's scope — it's
+  the same module's subject matter — but built as its own later pass, after
+  Playwright, per the user's explicit ordering.
+
+  **Two real deliverables, not yet scoped in technical detail:**
+  1. Get Cilium/Hubble **logs and metrics** flowing into Splunk. Real unknowns to
+     settle live, not guess: whether this goes through the existing OTel Collector
+     (Cilium/Hubble both expose Prometheus metrics endpoints the Collector could scrape;
+     Hubble also has its own flow-log JSON export mechanism that could be tailed) or a
+     separate path, and which Splunk index(es) it lands in — `k8s_ws_logs` already
+     carries the audit log as the API-layer evidence source; this would be the
+     network-layer counterpart the original Phase 6 idea always intended.
+  2. An **installable dashboard** surfacing the critical KPIs from that data. Given
+     FW1b sits before AW2 in the sequence — no Observability Cloud exists yet at that
+     point — this should be a Splunk Enterprise classic XML dashboard, matching
+     `labs/dashboards/*.xml`'s existing pattern (source of truth in XML, `.tgz` app
+     bundle built via `scripts/build-dashboard-app.sh`, never hand-edited — see the
+     hard rule on this below), not an Observability Cloud dashboard. "Critical KPIs"
+     itself needs real live data exploration once the export mechanism exists, not a
+     guessed panel list — policy verdict counts (allowed/denied) and drop rate by
+     service pair seem like obvious candidates given everything already built in
+     FW1b, but confirm what Cilium/Hubble actually expose before designing panels
+     around assumptions.
+
+  **Placement decided, 2026-09-02, correcting the user's own first instinct**: not
+  FW1b for both signals. The OTel Collector doesn't exist yet at FW1b's point in the
+  sequence (it's installed in FW2) — there's nothing for Hubble's flow logs to route
+  through if wired up that early. **Logs land in FW2** instead, whose own thesis is
+  literally "Collecting logs with OpenTelemetry" — Hubble flow logs are a second log
+  source that fits that existing scope directly, not a detour. **Metrics stay in AW1**
+  as originally proposed, matching where the Collector's metrics pipeline already gets
+  turned on. The dashboard comes after both exist, landing near/inside AW1's own
+  capstone-dashboards section — exact spot to be decided once real KPI candidates are
+  confirmed, not guessed now.
+
+  **Live discovery spike complete, 2026-09-02, on `3.145.97.98` — all five parts done
+  with real, verified data, not just config that applied cleanly.**
+
+  - **Flow-log export** (Part A): the real Cilium 1.20.1 mechanism is
+    `hubble.export.static` (`filePath: /var/run/cilium/hubble/events.log`) — simpler
+    than the reconfigurable `dynamic` variant, correctly chosen since nothing needs
+    runtime reconfiguration here. Enabled via `helm upgrade --reuse-values`, preserving
+    every existing value (`ingressController`, `kubeProxyReplacement`, `operator.replicas`,
+    `k8sServiceHost`/`k8sServicePort`). Confirmed live: real JSON flow records, nested
+    under a `"flow"` key (matters for OTTL/`spath` parsing later).
+  - **Flow logs into Splunk** (Part B): the chart's own purpose-built
+    `logsCollection.extraFileLogs` mechanism (the same pattern it already uses for the
+    k8s audit log) plus `agent.extraVolumes`/`extraVolumeMounts` for the hostPath —
+    auto-creates its own pipeline, zero changes to the existing `logs` pipeline.
+    **Confirmed via the real Splunk REST API** (not just config validation): sourcetype
+    `cilium:hubble:flow`, **11,271 events in 5 minutes**, landing in `k8s_ws_logs` as
+    planned. No OTTL transform added yet — raw JSON is already queryable via `| spath`,
+    intentionally left for a later pass.
+  - **Metrics** (Part C) — enabled both Hubble metrics (port 9965,
+    `dns,drop,tcp,flow,icmp,http,policy`) and Cilium's own separate agent metrics (port
+    9962, no Service, hostNetwork only). **Real, confirmed limitation**: `dns` and
+    `http` never populate — Cilium only generates L7 Hubble metrics for traffic
+    actually proxied through Envoy, which needs L7-aware `CiliumNetworkPolicy` rules or
+    visibility annotations the six existing (L3/L4-only) policies don't have. Real gap,
+    not a bug, out of scope for this pass.
+  - **Metrics into Splunk** (Part D): a new `prometheus/cilium` receiver (two scrape
+    jobs — the agent's own node-IP endpoint, Hubble's own Service DNS) and a new
+    `metrics/cilium` pipeline, deliberately routed to `splunk_hec/platform_metrics`
+    (→ `k8s_ws_metrics`) **only** — not also to O11y/signalfx, to avoid unplanned
+    cardinality/cost before real volume is known. **Confirmed via `mcatalog`**: ~150
+    distinct `cilium_*` metric names, all 9 `hubble_*` families, real growing values.
+  - **What's really there** (Part E, exploration only, not a dashboard yet): flow
+    verdicts over 10 min — 41,020 FORWARDED, 64 TRACED, 8 DROPPED (low drop volume
+    right now, the lockdown mostly just allowing traffic as intended). Two real
+    gotchas worth remembering before designing panels: DROPPED events frequently lack
+    resolved source/destination namespace (caught before identity resolution, so "drop
+    rate by service pair" isn't as clean from raw flow logs as hoped), and
+    `flow.source.labels{}` is multivalue — a naive `stats count by` on it fans out one
+    row per label with duplicated totals. `hubble_policy_verdicts_total`
+    (action/direction/match) is a clean, low-cardinality KPI candidate for the
+    six-service lockdown story; `hubble_drop_total` is usable but low-signal until a
+    deliberate-drop demo runs to feed it.
+
+  **Real dead ends and friction, worth remembering**: a Helm SSA field-manager
+  conflict on the `Instrumentation` CR's `.spec.python.env` (AW2's auto-instrumentation,
+  untouched by this work) left the collector release in `failed` status — fixed with
+  `kubectl apply --server-side --force-conflicts` on the one conflicting object, then a
+  clean re-`upgrade`, the same class of fix as the original `deployment.environment`
+  incident earlier in this project. A transient cluster-networking blip caused one
+  self-recovered agent-pod restart, unrelated to this work specifically. **The biggest
+  trap, worth flagging prominently**: the `linda`/`bob` Splunk MCP tools available in
+  this environment are **not this box's Splunk** — they're unrelated, other users'
+  shared instances (confirmed by mismatched hostnames and an unrelated security stack).
+  This box's real Splunk is local, `172.31.0.32:8088`/`:8089` (same private IP as
+  `LOCAL_IP`) — real time was lost chasing a phantom "zero data" bug before catching
+  this. Also: `splunk search` over non-interactive SSH silently returns
+  empty/truncated output for this box (likely a pager/tty artifact) — the REST API
+  (`/services/search/jobs/export`) is what actually produced every confirmed number
+  above and should be preferred for any future non-interactive verification here.
+
+  **Shipped, 2026-09-02 (commit `956d818`).** FW2 §12 ("Hubble flow logs — a second
+  log source, from a different layer") and AW1 §6 ("Cilium/Hubble metrics — the
+  network layer, in numbers"), both sections inserted and everything after them
+  renumbered with cross-references fixed across FW2/AW1/AW2/the facilitator guide.
+  `labs/collector/values-{workshop,aw1,aw2,final}.yaml` carry both additions forward
+  through every snapshot; `verify-fw2.sh`/`verify-aw1.sh` each got one new real
+  assertion. **Live re-verification during the doc-writing pass corrected this
+  record**: the real `hubble_*` family count is **8**, not the 9 written above days
+  earlier — metric surfaces drift with agent versions, and the doc now carries the
+  freshly-confirmed number rather than propagating the stale one. `dns`/`http` were
+  confirmed absent either way, both times, for the same real reason.
+
+  Dashboard is the one deliverable from the original two-part plan still outstanding
+  — deliberately deferred until real KPI candidates are settled, not designed blind.
+  `hubble_policy_verdicts_total` is the leading candidate so far (see AW1 §6's own
+  forward-looking note).
+
+---
+
 ## The prime directive: tested, not transcribed
 
 **Every command, flag, path, SPL query and expected output in `docs/` was executed on

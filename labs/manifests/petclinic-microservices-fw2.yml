@@ -1,0 +1,623 @@
+# PetClinic microservices — end of FW #2 state.
+# Identical to petclinic-microservices.yml (FW #1's base file) except
+# customers-service now carries Tomcat access-log env vars — see FW2 §6.
+# AW #1 and AW #2 add their own env vars once those modules are migrated;
+# this file does not yet reflect them, and nothing here should be guessed at.
+# TESTED 2026-08-29 on an 8 vCPU / 32 GB instance. Render with:
+#   WS_USER=<you> envsubst < petclinic-microservices-fw2.yml > my-petclinic.yml
+#
+# Every image here is springcommunity/spring-petclinic-<service>:3.2.0 EXCEPT
+# customers-service, which this module builds by hand — see FW1 §4-5. That is
+# the one image pulled with `imagePullPolicy: Never`; the rest pull from
+# Docker Hub.
+#
+# WHY THESE SIX SERVICE NAMES ARE NOT ${WS_USER}-PREFIXED, UNLIKE EVERYTHING
+# ELSE IN THIS WORKSHOP: every other participant-facing name in this repo is
+# namespaced by WS_USER because Splunk indexes, dashboards, and locally-built
+# image tags are shared surfaces where two participants' names could collide.
+# These six Kubernetes Service names never leave your own single-node
+# minikube cluster, and — more importantly — the published images have
+# `http://discovery-server:8761/eureka/` and the config-server address baked
+# into their `docker` Spring profile (see the ConfigMap below). Renaming
+# these Services would mean overriding that wiring with per-service
+# environment variables for no real benefit, since nothing here is shared
+# between participants. WS_USER still namespaces the one thing that IS
+# participant-specific: the hand-built customers-service image tag.
+#
+# The ConfigMap below is copied byte-for-byte from
+# https://github.com/spring-petclinic/spring-petclinic-microservices-config
+# (the `main` branch, as of 2026-08-28) and baked in via Spring Cloud
+# Config Server's "native" profile — see FW1 §6, "Skim it before applying".
+# Without this, config-server defaults to fetching this same configuration
+# live from GitHub on every restart, an unpinned external dependency this
+# workshop otherwise never has. Re-copy these files if you bump
+# PETCLINIC_MICROSVC_TAG to a release with a materially different config
+# shape; check by diffing against the upstream repo first.
+#
+# Everything below lives in its own `petclinic` namespace, not `default` —
+# the whole application is one unit, worth being able to `kubectl get all -n
+# petclinic` or `kubectl delete namespace petclinic` as a single step, the
+# same way you'd want to tear down or inspect it in a real cluster shared
+# with other workloads. One `kubectl apply -f` creates the namespace and
+# everything in it together; nothing extra to run first.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: petclinic
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: petclinic-config
+  namespace: petclinic
+data:
+  application.yml: |
+    # COMMON APPLICATION PROPERTIES
+
+    server:
+      # start services on random port by default
+      port: 0
+      # The stop processing uses a timeout which provides a grace period during which existing requests will be allowed to complete but no new requests will be permitted
+      shutdown: graceful
+
+    # embedded database init, supports mysql too trough the 'mysql' spring profile
+    spring:
+      sql:
+        init:
+          schema-locations: classpath*:db/hsqldb/schema.sql
+          data-locations: classpath*:db/hsqldb/data.sql
+      sleuth:
+        sampler:
+          probability: 1.0
+      cloud:
+        config:
+          # Allow the microservices to override the remote properties with their own System properties or config file
+          allow-override: true
+          # Override configuration with any local property source
+          override-none: true
+      jpa:
+        open-in-view: false
+        hibernate:
+          ddl-auto: none
+
+    # Spring Boot 1.5 makes actuator secure by default
+    management.security.enabled: false
+    # Enable all Actuators and not only the two available by default /health and /info starting Spring Boot 2.0
+    management.endpoints.web.exposure.include: "*"
+
+    # Temporary hack required by the Spring Boot 2 / Spring Cloud Finchley branch
+    # Waiting issue https://github.com/spring-projects/spring-boot/issues/13042
+    spring.cloud.refresh.refreshable: false
+
+
+    # Logging
+    logging.level.org.springframework: INFO
+
+    # Metrics
+    management:
+      endpoint:
+        metrics:
+          enabled: true
+        prometheus:
+          enabled: true
+      endpoints:
+        web:
+          exposure:
+            include: '*'
+      metrics:
+        export:
+          prometheus:
+            enabled: true
+      tracing:
+        sampling:
+          probability: 1
+
+    eureka:
+      instance:
+        # Register IP address instead of hostname to avoid resolution failures on Windows
+        prefer-ip-address: true
+
+    # Chaos Engineering
+    ---
+    spring:
+      config:
+        activate:
+          on-profile: chaos-monkey
+    management.endpoint.chaosmonkey.enabled: true
+    chaos:
+      monkey:
+        enabled: true
+        watcher:
+          component: false
+          controller: false
+          repository: false
+          rest-controller: false
+          service: false
+
+    ---
+    spring:
+      config:
+        activate:
+          on-profile: docker
+    management:
+      tracing:
+        export:
+          zipkin:
+            endpoint: "http://tracing-server:9411/api/v2/spans"
+
+    ---
+    spring:
+      config:
+        activate:
+          on-profile: mysql
+      datasource:
+        url: jdbc:mysql://localhost:3306/petclinic?allowPublicKeyRetrieval=true&useSSL=false
+        username: root
+        password: petclinic
+      sql:
+        init:
+          schema-locations: classpath*:db/mysql/schema.sql
+          data-locations: classpath*:db/mysql/data.sql
+          mode: ALWAYS
+  customers-service.yml: |
+    spring:
+      config:
+        activate:
+          on-profile: default
+    eureka:
+      instance:
+        # enable to register multiple app instances with a random server port
+        instance-id: ${spring.application.name}:${random.uuid}
+
+    ---
+    spring:
+      config:
+        activate:
+          on-profile: docker
+    server:
+      port: 8081
+    eureka:
+      client:
+        serviceUrl:
+          defaultZone: http://discovery-server:8761/eureka/
+  discovery-server.yml: |
+    server:
+      port: 8761
+
+    eureka:
+      instance:
+        hostname: localhost
+      # standalone mode
+      client:
+        registerWithEureka: false
+        fetchRegistry: false
+        serviceUrl:
+          defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/
+  api-gateway.yml: |
+    spring:
+      reactor:
+        context-propagation: auto
+    server:
+      port: 8080
+      compression:
+        enabled: true
+        mime-types: application/json,text/css,application/javascript
+        min-response-size: 2048
+
+    # Internationalization
+    spring.messages.basename: messages/messages
+
+    ---
+    spring:
+      config:
+        activate:
+          on-profile: docker
+    eureka:
+      client:
+        serviceUrl:
+          defaultZone: http://discovery-server:8761/eureka/
+  visits-service.yml: |
+    spring:
+      config:
+        activate:
+          on-profile: default
+    eureka:
+      instance:
+        # enable to register multiple app instances with a random server port
+        instance-id: ${spring.application.name}:${random.uuid}
+
+    ---
+    spring:
+      config:
+        activate:
+          on-profile: docker
+    server:
+      port: 8082
+    eureka:
+      client:
+        serviceUrl:
+          defaultZone: http://discovery-server:8761/eureka/
+  vets-service.yml: |
+    vets:
+      cache:
+        ttl: 60
+        heap-size: 100
+
+    ---
+    spring:
+      config:
+        activate:
+          on-profile: default
+    eureka:
+      instance:
+        # enable to register multiple app instances with a random server port
+        instance-id: ${spring.application.name}:${random.uuid}
+
+    ---
+    spring:
+      config:
+        activate:
+          on-profile: docker
+    server:
+      port: 8083
+    eureka:
+      client:
+        serviceUrl:
+          defaultZone: http://discovery-server:8761/eureka/
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: config-server
+  namespace: petclinic
+spec:
+  selector:
+    app.kubernetes.io/name: config-server
+  ports:
+  - port: 8888
+    targetPort: 8888
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-server
+  namespace: petclinic
+  labels:
+    app.kubernetes.io/name: config-server
+    app.kubernetes.io/part-of: petclinic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: config-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: config-server
+        app.kubernetes.io/part-of: petclinic
+      annotations:
+        docker_image_author: "${WS_USER}"
+        splunk.com/index: "k8s_ws_petclinic_logs"
+    spec:
+      containers:
+      - name: config-server
+        image: springcommunity/spring-petclinic-config-server:3.2.0
+        imagePullPolicy: IfNotPresent
+        env:
+        # Overrides the image's baked-in git.uri, which otherwise pulls this
+        # exact config from GitHub's `main` branch on every restart — an
+        # unpinned network dependency this workshop otherwise never has.
+        # "native" backs the Config Server with local files instead; GIT_REPO
+        # is the placeholder the image's own application.yml already expects
+        # (see `native.searchLocations: file:///${GIT_REPO}`).
+        - name: SPRING_PROFILES_ACTIVE
+          value: "native"
+        - name: GIT_REPO
+          value: "/config"
+        ports:
+        - containerPort: 8888
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8888
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 40
+        volumeMounts:
+        - name: petclinic-config
+          mountPath: /config
+      volumes:
+      - name: petclinic-config
+        configMap:
+          name: petclinic-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: discovery-server
+  namespace: petclinic
+spec:
+  selector:
+    app.kubernetes.io/name: discovery-server
+  ports:
+  - port: 8761
+    targetPort: 8761
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: discovery-server
+  namespace: petclinic
+  labels:
+    app.kubernetes.io/name: discovery-server
+    app.kubernetes.io/part-of: petclinic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: discovery-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: discovery-server
+        app.kubernetes.io/part-of: petclinic
+      annotations:
+        docker_image_author: "${WS_USER}"
+        splunk.com/index: "k8s_ws_petclinic_logs"
+    spec:
+      # discovery-server is a Spring Cloud Config Client too — it fetches its
+      # own config from config-server at boot and fails fast if that isn't
+      # up yet. Every Deployment below carries this same init container for
+      # the same reason. See "Why every service waits" in FW1 §6.
+      initContainers:
+      - name: wait-for-config-server
+        image: curlimages/curl:8.21.0
+        command: ["sh", "-c", "until curl -sf http://config-server:8888/actuator/health; do echo waiting on config-server; sleep 2; done"]
+      containers:
+      - name: discovery-server
+        image: springcommunity/spring-petclinic-discovery-server:3.2.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8761
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8761
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 40
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customers-service
+  namespace: petclinic
+spec:
+  selector:
+    app.kubernetes.io/name: customers-service
+  ports:
+  - port: 8081
+    targetPort: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customers-service
+  namespace: petclinic
+  labels:
+    app.kubernetes.io/name: customers-service
+    app.kubernetes.io/part-of: petclinic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: customers-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: customers-service
+        app.kubernetes.io/part-of: petclinic
+      annotations:
+        docker_image_author: "${WS_USER}"
+        splunk.com/index: "k8s_ws_petclinic_logs"
+    spec:
+      initContainers:
+      - name: wait-for-config-server
+        image: curlimages/curl:8.21.0
+        command: ["sh", "-c", "until curl -sf http://config-server:8888/actuator/health; do echo waiting on config-server; sleep 2; done"]
+      containers:
+      - name: customers-service
+        # The one image you build yourself — see FW1 §4-5.
+        image: ${WS_USER}/petclinic-customers:v1
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8081
+        env:
+        # --- FW2: access logging -----------------------------------------------
+        # PetClinic logs nothing for successful requests — only startup and
+        # exceptions. One line per request is what makes the log exercises work.
+        # directory=/dev + prefix=stdout + empty suffix resolves to /dev/stdout.
+        # Only customers-service carries this — see FW2 §6 for why one service
+        # is enough to teach the lesson.
+        - name: SERVER_TOMCAT_ACCESSLOG_ENABLED
+          value: "true"
+        - name: SERVER_TOMCAT_ACCESSLOG_DIRECTORY
+          value: "/dev"
+        - name: SERVER_TOMCAT_ACCESSLOG_PREFIX
+          value: "stdout"
+        - name: SERVER_TOMCAT_ACCESSLOG_SUFFIX
+          value: ""
+        - name: SERVER_TOMCAT_ACCESSLOG_FILE_DATE_FORMAT
+          value: ""
+        - name: SERVER_TOMCAT_ACCESSLOG_BUFFERED
+          value: "false"
+        # Single quotes: the pattern contains double quotes.
+        - name: SERVER_TOMCAT_ACCESSLOG_PATTERN
+          value: '%h %l %u %t "%r" %s %b %D'
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8081
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 40
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: visits-service
+  namespace: petclinic
+spec:
+  selector:
+    app.kubernetes.io/name: visits-service
+  ports:
+  - port: 8082
+    targetPort: 8082
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: visits-service
+  namespace: petclinic
+  labels:
+    app.kubernetes.io/name: visits-service
+    app.kubernetes.io/part-of: petclinic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: visits-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: visits-service
+        app.kubernetes.io/part-of: petclinic
+      annotations:
+        docker_image_author: "${WS_USER}"
+        splunk.com/index: "k8s_ws_petclinic_logs"
+    spec:
+      initContainers:
+      - name: wait-for-config-server
+        image: curlimages/curl:8.21.0
+        command: ["sh", "-c", "until curl -sf http://config-server:8888/actuator/health; do echo waiting on config-server; sleep 2; done"]
+      containers:
+      - name: visits-service
+        image: springcommunity/spring-petclinic-visits-service:3.2.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8082
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8082
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 40
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vets-service
+  namespace: petclinic
+spec:
+  selector:
+    app.kubernetes.io/name: vets-service
+  ports:
+  - port: 8083
+    targetPort: 8083
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vets-service
+  namespace: petclinic
+  labels:
+    app.kubernetes.io/name: vets-service
+    app.kubernetes.io/part-of: petclinic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vets-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vets-service
+        app.kubernetes.io/part-of: petclinic
+      annotations:
+        docker_image_author: "${WS_USER}"
+        splunk.com/index: "k8s_ws_petclinic_logs"
+    spec:
+      initContainers:
+      - name: wait-for-config-server
+        image: curlimages/curl:8.21.0
+        command: ["sh", "-c", "until curl -sf http://config-server:8888/actuator/health; do echo waiting on config-server; sleep 2; done"]
+      containers:
+      - name: vets-service
+        image: springcommunity/spring-petclinic-vets-service:3.2.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8083
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8083
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 40
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${WS_USER}-petclinic-srv
+  namespace: petclinic
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: api-gateway
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+    nodePort: 30000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: petclinic
+  labels:
+    app.kubernetes.io/name: api-gateway
+    app.kubernetes.io/part-of: petclinic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api-gateway
+        app.kubernetes.io/part-of: petclinic
+      annotations:
+        docker_image_author: "${WS_USER}"
+        splunk.com/index: "k8s_ws_petclinic_logs"
+    spec:
+      initContainers:
+      - name: wait-for-config-server
+        image: curlimages/curl:8.21.0
+        command: ["sh", "-c", "until curl -sf http://config-server:8888/actuator/health; do echo waiting on config-server; sleep 2; done"]
+      containers:
+      - name: api-gateway
+        image: springcommunity/spring-petclinic-api-gateway:3.2.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /actuator/health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 40
